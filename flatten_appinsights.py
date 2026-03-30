@@ -2,37 +2,44 @@
 Flatten AppInsights pageViews export, join with HR snapshots, and produce
 a CDM-based star schema.
 
-Reads a CSV or XLSX file exported from Azure AppInsights, flattens the nested
+Reads CSV or XLSX files exported from Azure AppInsights, flattens the nested
 customDimensions JSON column, converts timestamps from UTC to CET, joins with
 HR snapshot data (hr_history.parquet) using temporal GPN matching, computes
 time-on-page and session-level engagement metrics, and persists everything in
-a DuckDB database for incremental loading and ad-hoc analysis.
+a DuckDB database with SHA-256-based delta loading and upsert semantics.
 
 Usage:
+    # Process a single file
     python flatten_appinsights.py input_file.csv
-    python flatten_appinsights.py input_file.xlsx
-    python flatten_appinsights.py input_file.csv -o ./my_output/
-    python flatten_appinsights.py input_file.csv --hr path/to/hr_history.parquet
-    python flatten_appinsights.py input_file.csv --db pageviews.duckdb
+
+    # Process all CSV/XLSX files in a directory (delta: only new/changed)
+    python flatten_appinsights.py ./data/
+
+    # Force reprocess everything
+    python flatten_appinsights.py ./data/ --full-refresh
+
+    # Custom output and HR paths
+    python flatten_appinsights.py ./data/ -o ./my_output/ --hr path/to/hr_history.parquet
 
 Output (written to <input_dir>/output/ by default, override with -o):
-    pageviews.duckdb          -- persistent DuckDB with all tables
+    pageviews.duckdb          -- persistent DuckDB with all tables + manifest
     fact_page_view.parquet    -- one row per page view
     agg_session.parquet       -- one row per session
     dim_page.parquet          -- page dimension (deduplicated)
     dim_date.parquet          -- date dimension
-    <input>_cdm.xlsx          -- all sheets in one Excel file for review
+    pageviews_cdm.xlsx        -- all sheets in one Excel file for review
 
-The script expects hr_history.parquet in ../SearchAnalytics/output/ by default
-(same convention as CampaignWe). Override with --hr flag.
-
-Incremental loading:
-    Running the script multiple times with different input files appends new
-    rows to the DuckDB (duplicates are skipped based on view_id).
+Delta loading:
+    Each input file is SHA-256 hashed. On re-run, only new or changed files
+    are processed. When a file changes (same name, different hash), its old
+    rows are replaced with the new data (upsert via source_file tracking).
+    Use --full-refresh to rebuild from scratch.
 """
 
 import argparse
+import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -73,7 +80,6 @@ DIM_PAGE_COLUMNS = {
     "cp_PublishingDate": "publishing_date",
 }
 
-# HR fields to bring in from hr_history.parquet (src -> alias)
 HR_FIELD_MAP = {
     "gcrs_division_desc": "hr_division",
     "gcrs_unit_desc": "hr_unit",
@@ -86,7 +92,6 @@ HR_FIELD_MAP = {
     "management_level": "hr_management_level",
 }
 
-# Columns to drop entirely (no analytical value)
 DROP_COLUMNS = [
     "appId", "iKey", "sdkVersion", "itemCount", "itemType",
     "operation_Id", "operation_ParentId", "operation_Name",
@@ -97,14 +102,97 @@ DROP_COLUMNS = [
 ]
 
 TIMEZONE = "Europe/Berlin"
-
-# Cap for time-on-page: deltas above this are treated as inactive (user left)
-TIME_ON_PAGE_CAP_SEC = 30 * 60  # 30 minutes
+TIME_ON_PAGE_CAP_SEC = 30 * 60
 
 
 def log(msg):
     print(msg)
 
+
+# ---------------------------------------------------------------------------
+# File hashing & manifest (delta load with upsert)
+# ---------------------------------------------------------------------------
+
+def compute_file_hash(filepath):
+    """SHA-256 hash of file contents for change detection."""
+    h = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def ensure_manifest_table(con):
+    """Create processed_files manifest table if it doesn't exist."""
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS processed_files (
+            filename     TEXT PRIMARY KEY,
+            file_hash    TEXT,
+            row_count    INTEGER,
+            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+
+def get_unprocessed_files(con, input_files):
+    """Return list of (filepath, hash, reason) for new or changed files."""
+    ensure_manifest_table(con)
+
+    to_process = []
+    skipped = []
+
+    for filepath in input_files:
+        file_hash = compute_file_hash(filepath)
+        filename = filepath.name
+
+        existing = con.execute(
+            "SELECT file_hash FROM processed_files WHERE filename = ?",
+            [filename],
+        ).fetchone()
+
+        if existing is None:
+            to_process.append((filepath, file_hash, "new"))
+        elif existing[0] != file_hash:
+            to_process.append((filepath, file_hash, "changed"))
+        else:
+            skipped.append(filename)
+
+    if skipped:
+        log(f"  Skipping {len(skipped)} unchanged file(s): {', '.join(skipped)}")
+    if to_process:
+        log(f"  Found {len(to_process)} file(s) to process")
+
+    return to_process
+
+
+def record_processed_file(con, filepath, file_hash, row_count):
+    """Record a successfully processed file in the manifest."""
+    filename = filepath.name
+    con.execute("DELETE FROM processed_files WHERE filename = ?", [filename])
+    con.execute("""
+        INSERT INTO processed_files (filename, file_hash, row_count, processed_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    """, [filename, file_hash, int(row_count)])
+
+
+def get_input_files(input_path: Path) -> list[Path]:
+    """Get all CSV/XLSX files from a path (file or directory)."""
+    if input_path.is_file():
+        return [input_path]
+
+    if input_path.is_dir():
+        files = []
+        for pattern in ["*.csv", "*.xlsx", "*.xls"]:
+            files.extend(input_path.glob(pattern))
+        files.sort(key=lambda f: os.path.getmtime(f))
+        return files
+
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Data transformation
+# ---------------------------------------------------------------------------
 
 def parse_custom_dimensions(value):
     """Parse a customDimensions JSON string into a flat dict."""
@@ -158,7 +246,7 @@ def flatten_appinsights(df: pd.DataFrame) -> pd.DataFrame:
             break
 
     if cd_col is None:
-        log("Warning: No 'customDimensions' column found. Returning data as-is.")
+        log("  Warning: No 'customDimensions' column found.")
         return df
 
     expanded = df[cd_col].apply(parse_custom_dimensions)
@@ -170,8 +258,7 @@ def flatten_appinsights(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_clean_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop noise columns, rename to CDM-friendly snake_case, parse dates,
-    convert UTC timestamps to CET."""
+    """Drop noise columns, rename, parse dates, convert UTC to CET."""
     flat = df.copy()
 
     cols_to_drop = [c for c in DROP_COLUMNS if c in flat.columns]
@@ -183,7 +270,6 @@ def build_clean_table(df: pd.DataFrame) -> pd.DataFrame:
     existing_renames = {k: v for k, v in rename_map.items() if k in flat.columns}
     flat = flat.rename(columns=existing_renames)
 
-    # Parse and convert timestamp from UTC to CET
     if "timestamp_utc" in flat.columns:
         flat["timestamp_utc"] = pd.to_datetime(flat["timestamp_utc"], errors="coerce")
         flat["timestamp_utc"] = flat["timestamp_utc"].dt.tz_localize("UTC")
@@ -191,18 +277,13 @@ def build_clean_table(df: pd.DataFrame) -> pd.DataFrame:
         flat = flat.drop(columns=["timestamp_utc"])
 
     if "publishing_date" in flat.columns:
-        flat["publishing_date"] = pd.to_datetime(
-            flat["publishing_date"], errors="coerce"
-        )
+        flat["publishing_date"] = pd.to_datetime(flat["publishing_date"], errors="coerce")
 
-    # Normalize GPN: strip .0 suffix from Excel floats, zero-pad to 8 digits
     if "gpn" in flat.columns:
         flat["gpn"] = (
-            flat["gpn"]
-            .astype(str)
+            flat["gpn"].astype(str)
             .str.replace(r"\.0$", "", regex=True)
-            .str.strip()
-            .str.zfill(8)
+            .str.strip().str.zfill(8)
         )
         flat.loc[flat["gpn"].isin(["", "nan", "None", "00000000"]), "gpn"] = None
 
@@ -210,123 +291,83 @@ def build_clean_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def join_hr_data(clean_df: pd.DataFrame, hr_path: Path) -> pd.DataFrame:
-    """Temporal join of pageViews with HR snapshots via GPN using DuckDB.
-
-    For each pageView, finds the most recent HR snapshot at or before the
-    event month. Falls back to the earliest snapshot after the event if
-    no prior snapshot exists.
-    """
-    log(f"Loading HR data: {hr_path}")
+    """Temporal join of pageViews with HR snapshots via GPN."""
     con = duckdb.connect()
 
     con.register("pageviews_df", clean_df)
     con.execute("CREATE TABLE pageviews AS SELECT * FROM pageviews_df")
-
-    con.execute(f"""
-        CREATE TABLE hr_history AS
-        SELECT * FROM read_parquet('{hr_path}')
-    """)
+    con.execute(f"CREATE TABLE hr_history AS SELECT * FROM read_parquet('{hr_path}')")
 
     row_count = con.execute("SELECT COUNT(*) FROM hr_history").fetchone()[0]
     gpn_count = con.execute("SELECT COUNT(DISTINCT gpn) FROM hr_history").fetchone()[0]
     snap_count = con.execute(
         "SELECT COUNT(DISTINCT (snapshot_year, snapshot_month)) FROM hr_history"
     ).fetchone()[0]
-    log(f"  Loaded hr_history: {row_count:,} rows, {gpn_count:,} GPNs, {snap_count} snapshot(s)")
+    log(f"  HR: {row_count:,} rows, {gpn_count:,} GPNs, {snap_count} snapshot(s)")
 
     hr_cols = con.execute("DESCRIBE hr_history").df()["column_name"].tolist()
     avail_hr = {src: alias for src, alias in HR_FIELD_MAP.items() if src in hr_cols}
-    log(f"  HR fields to join: {list(avail_hr.values())}")
 
     if not avail_hr:
-        log("  WARNING: No matching HR fields found. Skipping HR join.")
         con.close()
         return clean_df
 
-    hr_select_parts = [f"h.{src} as {alias}" for src, alias in avail_hr.items()]
-    hr_select_sql = ", ".join(hr_select_parts)
-
-    hr_coalesce_parts = [
-        f"COALESCE(hr_exact.{alias}, hr_fallback.{alias}) as {alias}"
-        for _, alias in avail_hr.items()
-    ]
-    hr_coalesce_sql = ", ".join(hr_coalesce_parts)
-
+    hr_sel = ", ".join(f"h.{s} as {a}" for s, a in avail_hr.items())
+    hr_coal = ", ".join(f"COALESCE(hr_exact.{a}, hr_fallback.{a}) as {a}"
+                        for _, a in avail_hr.items())
     gpn_expr = "LPAD(REGEXP_REPLACE(CAST(p.gpn AS VARCHAR), '\\.0$', ''), 8, '0')"
 
-    match_stats = con.execute(f"""
-        SELECT
-            COUNT(*) as total,
-            COUNT(CASE WHEN p.gpn IS NOT NULL THEN 1 END) as has_gpn,
-            COUNT(DISTINCT p.gpn) FILTER (WHERE p.gpn IS NOT NULL) as unique_gpns,
-            COUNT(DISTINCT p.gpn) FILTER (
-                WHERE p.gpn IS NOT NULL
-                AND CAST(p.gpn AS VARCHAR) IN (SELECT DISTINCT CAST(gpn AS VARCHAR) FROM hr_history)
-            ) as matched_gpns
-        FROM pageviews p
+    stats = con.execute(f"""
+        SELECT COUNT(*), COUNT(CASE WHEN gpn IS NOT NULL THEN 1 END),
+               COUNT(DISTINCT gpn) FILTER (WHERE gpn IS NOT NULL),
+               COUNT(DISTINCT gpn) FILTER (WHERE gpn IS NOT NULL
+                   AND CAST(gpn AS VARCHAR) IN (SELECT DISTINCT CAST(gpn AS VARCHAR) FROM hr_history))
+        FROM pageviews
     """).fetchone()
-    log(f"  Match stats: {match_stats[1]:,}/{match_stats[0]:,} rows have GPN, "
-        f"{match_stats[3]:,}/{match_stats[2]:,} unique GPNs found in HR data")
+    log(f"  GPN match: {stats[1]:,}/{stats[0]:,} have GPN, {stats[3]:,}/{stats[2]:,} in HR")
 
     result = con.execute(f"""
-        SELECT
-            p.*,
-            {hr_coalesce_sql}
+        SELECT p.*, {hr_coal}
         FROM pageviews p
         LEFT JOIN LATERAL (
-            SELECT {hr_select_sql}
-            FROM hr_history h
+            SELECT {hr_sel} FROM hr_history h
             WHERE CAST(h.gpn AS VARCHAR) = {gpn_expr}
               AND (h.snapshot_year * 100 + h.snapshot_month)
                   <= (YEAR(p.timestamp) * 100 + MONTH(p.timestamp))
-            ORDER BY h.snapshot_year DESC, h.snapshot_month DESC
-            LIMIT 1
+            ORDER BY h.snapshot_year DESC, h.snapshot_month DESC LIMIT 1
         ) hr_exact ON true
         LEFT JOIN LATERAL (
-            SELECT {hr_select_sql}
-            FROM hr_history h
+            SELECT {hr_sel} FROM hr_history h
             WHERE CAST(h.gpn AS VARCHAR) = {gpn_expr}
               AND (h.snapshot_year * 100 + h.snapshot_month)
                   > (YEAR(p.timestamp) * 100 + MONTH(p.timestamp))
-            ORDER BY h.snapshot_year ASC, h.snapshot_month ASC
-            LIMIT 1
+            ORDER BY h.snapshot_year ASC, h.snapshot_month ASC LIMIT 1
         ) hr_fallback ON true
     """).df()
 
-    hr_filled = result[list(avail_hr.values())].notna().any(axis=1).sum()
-    log(f"  HR enrichment: {hr_filled:,}/{len(result):,} rows matched with HR data")
+    matched = result[list(avail_hr.values())].notna().any(axis=1).sum()
+    log(f"  HR enriched: {matched:,}/{len(result):,} rows")
 
     con.close()
     return result
 
 
 def compute_time_on_page(fact: pd.DataFrame) -> pd.DataFrame:
-    """Compute time-on-page as delta to the next pageView within the same session.
-
-    - Sorted by session_id + timestamp
-    - time_on_page_sec = next view's timestamp - current view's timestamp
-    - Last page in session: time_on_page_sec = NULL (not measurable)
-    - Capped at 30 minutes (deltas above this indicate user was inactive)
-    - is_last_in_session flag marks rows where time_on_page is unknown
-    """
+    """Compute time-on-page as delta to next pageView within session."""
     if "session_id" not in fact.columns or "timestamp" not in fact.columns:
         return fact
 
     df = fact.sort_values(["session_id", "timestamp"]).reset_index(drop=True)
-
     df["_next_ts"] = df.groupby("session_id")["timestamp"].shift(-1)
     df["time_on_page_sec"] = (df["_next_ts"] - df["timestamp"]).dt.total_seconds()
     df["is_last_in_session"] = df["_next_ts"].isna()
-
-    cap = TIME_ON_PAGE_CAP_SEC
-    df.loc[df["time_on_page_sec"] > cap, "time_on_page_sec"] = None
-
+    df.loc[df["time_on_page_sec"] > TIME_ON_PAGE_CAP_SEC, "time_on_page_sec"] = None
     df = df.drop(columns=["_next_ts"])
     return df
 
 
-def build_fact_page_view(flat: pd.DataFrame) -> pd.DataFrame:
-    """Extract the fact table and compute time-on-page."""
+def build_fact_page_view(flat: pd.DataFrame, source_file: str) -> pd.DataFrame:
+    """Extract the fact table, compute time-on-page, tag with source file."""
     fact_cols = [
         "view_id", "timestamp", "page_id", "user_id", "session_id",
         "page_load_ms", "referrer_url", "client_os", "client_browser",
@@ -337,18 +378,16 @@ def build_fact_page_view(flat: pd.DataFrame) -> pd.DataFrame:
 
     available = [c for c in fact_cols if c in flat.columns]
     fact = flat[available].copy()
-
     fact = compute_time_on_page(fact)
+
+    # Tag each row with its source file for upsert tracking
+    fact["source_file"] = source_file
+
     return fact
 
 
 def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate pageViews into sessions.
-
-    Derives session-level metrics: page count, duration, entry/exit page,
-    bounce flag, engagement time. This is a CDM-compatible extension
-    (derived aggregation, not a standard CDM entity).
-    """
+    """Aggregate pageViews into sessions."""
     if "session_id" not in fact.columns or "timestamp" not in fact.columns:
         return pd.DataFrame()
 
@@ -371,29 +410,20 @@ def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
 
     agg["entry_page_id"] = entry["page_id"].values
     agg["exit_page_id"] = exit_["page_id"].values
-
     agg["duration_sec"] = (
         (agg["session_end"] - agg["session_start"]).dt.total_seconds().round(0)
     )
 
     if "time_on_page_sec" in sorted_df.columns:
-        engagement = (
-            sorted_df.groupby("session_id")["time_on_page_sec"]
-            .sum()
-            .reset_index()
-            .rename(columns={"time_on_page_sec": "engagement_time_sec"})
-        )
-        agg = agg.merge(engagement, on="session_id", how="left")
+        eng = (sorted_df.groupby("session_id")["time_on_page_sec"]
+               .sum().reset_index()
+               .rename(columns={"time_on_page_sec": "engagement_time_sec"}))
+        agg = agg.merge(eng, on="session_id", how="left")
 
-    if "time_on_page_sec" in sorted_df.columns:
-        avg_top = (
-            sorted_df[sorted_df["is_last_in_session"] == False]
-            .groupby("session_id")["time_on_page_sec"]
-            .mean()
-            .round(1)
-            .reset_index()
-            .rename(columns={"time_on_page_sec": "avg_time_on_page_sec"})
-        )
+        avg_top = (sorted_df[sorted_df["is_last_in_session"] == False]
+                   .groupby("session_id")["time_on_page_sec"]
+                   .mean().round(1).reset_index()
+                   .rename(columns={"time_on_page_sec": "avg_time_on_page_sec"}))
         agg = agg.merge(avg_top, on="session_id", how="left")
 
     agg["is_bounce"] = agg["page_view_count"] == 1
@@ -411,12 +441,10 @@ def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
         "page_view_count", "entry_page_id", "exit_page_id", "is_bounce",
         "client_country", "client_os", "client_browser",
     ] + hr_cols
-    available = [c for c in col_order if c in agg.columns]
-    return agg[available]
+    return agg[[c for c in col_order if c in agg.columns]]
 
 
 def build_dim_page(flat: pd.DataFrame) -> pd.DataFrame:
-    """Extract the page dimension (deduplicated)."""
     dim_cols = [
         "page_id", "page_name", "page_url", "site_id", "site_name",
         "content_owner", "content_type", "theme", "topic",
@@ -425,15 +453,12 @@ def build_dim_page(flat: pd.DataFrame) -> pd.DataFrame:
     available = [c for c in dim_cols if c in flat.columns]
     if not available or "page_id" not in flat.columns:
         return pd.DataFrame()
-
     return flat[available].drop_duplicates(subset=["page_id"]).reset_index(drop=True)
 
 
 def build_dim_date(flat: pd.DataFrame) -> pd.DataFrame:
-    """Build a date dimension from timestamps (CET-based)."""
     if "timestamp" not in flat.columns:
         return pd.DataFrame()
-
     dates = flat["timestamp"].dropna().dt.normalize().drop_duplicates().sort_values()
     dim = pd.DataFrame({"date": dates}).reset_index(drop=True)
     dim["date"] = dim["date"].dt.tz_localize(None)
@@ -444,217 +469,258 @@ def build_dim_date(flat: pd.DataFrame) -> pd.DataFrame:
     dim["week"] = dim["date"].dt.isocalendar().week.astype(int)
     dim["day_of_week"] = dim["date"].dt.strftime("%A")
     dim["quarter"] = dim["date"].dt.quarter
-
     return dim[["date_key", "date", "year", "quarter", "month", "month_name",
                 "week", "day_of_week"]]
 
 
 def strip_tz(df: pd.DataFrame) -> pd.DataFrame:
-    """Remove timezone info from datetime columns for Parquet/DuckDB storage."""
     for col in df.select_dtypes(include=["datetimetz"]).columns:
         df[col] = df[col].dt.tz_localize(None)
     return df
 
 
-def persist_to_duckdb(db_path: Path, fact: pd.DataFrame, agg_sess: pd.DataFrame,
-                      dim_page: pd.DataFrame, dim_date: pd.DataFrame):
-    """Persist all tables to a DuckDB database file.
+# ---------------------------------------------------------------------------
+# DuckDB persistence with upsert
+# ---------------------------------------------------------------------------
 
-    Uses INSERT OR IGNORE on view_id to support incremental loading:
-    re-running with new data appends only new rows.
+def upsert_fact(con, fact: pd.DataFrame, source_filename: str):
+    """Upsert fact rows: delete old rows from this source file, insert new ones.
+
+    This ensures that when a file is re-exported with updated data for the
+    same time period, the new data replaces the old.
     """
-    log(f"Persisting to DuckDB: {db_path}")
-    con = duckdb.connect(str(db_path))
-
-    # -- fact_page_view: append new rows, skip duplicates by view_id --
     con.register("fact_df", fact)
+
+    # Ensure table exists
     con.execute("""
         CREATE TABLE IF NOT EXISTS fact_page_view AS
         SELECT * FROM fact_df WHERE 1=0
     """)
-    before = con.execute("SELECT COUNT(*) FROM fact_page_view").fetchone()[0]
-    con.execute("""
-        INSERT INTO fact_page_view
-        SELECT f.* FROM fact_df f
-        WHERE f.view_id NOT IN (SELECT view_id FROM fact_page_view)
-    """)
-    after = con.execute("SELECT COUNT(*) FROM fact_page_view").fetchone()[0]
-    new_rows = after - before
-    log(f"  fact_page_view: {new_rows:,} new rows added ({after:,} total)")
 
-    # -- agg_session: rebuild from all fact data for consistency --
-    # Sessions may span multiple input files, so always recompute
-    con.execute("DROP TABLE IF EXISTS agg_session")
-    con.register("agg_df", agg_sess)
-    con.execute("CREATE TABLE agg_session AS SELECT * FROM agg_df")
-    # Re-aggregate from the full fact table in DuckDB
+    # Delete old rows from this source file (upsert)
+    deleted = con.execute(f"""
+        SELECT COUNT(*) FROM fact_page_view WHERE source_file = '{source_filename}'
+    """).fetchone()[0]
+
+    if deleted > 0:
+        con.execute(f"DELETE FROM fact_page_view WHERE source_file = '{source_filename}'")
+        log(f"  Upsert: removed {deleted:,} old rows from {source_filename}")
+
+    # Insert new rows
+    con.execute("INSERT INTO fact_page_view SELECT * FROM fact_df")
+    total = con.execute("SELECT COUNT(*) FROM fact_page_view").fetchone()[0]
+    log(f"  fact_page_view: +{len(fact):,} rows ({total:,} total)")
+
+
+def upsert_dims(con, dim_page: pd.DataFrame, dim_date: pd.DataFrame):
+    """Merge new dimension entries (insert only, dims are append-only)."""
+    if not dim_page.empty:
+        con.register("dim_page_df", dim_page)
+        con.execute("CREATE TABLE IF NOT EXISTS dim_page AS SELECT * FROM dim_page_df WHERE 1=0")
+        con.execute("""
+            INSERT INTO dim_page SELECT d.* FROM dim_page_df d
+            WHERE d.page_id NOT IN (SELECT page_id FROM dim_page)
+        """)
+
+    if not dim_date.empty:
+        con.register("dim_date_df", dim_date)
+        con.execute("CREATE TABLE IF NOT EXISTS dim_date AS SELECT * FROM dim_date_df WHERE 1=0")
+        con.execute("""
+            INSERT INTO dim_date SELECT d.* FROM dim_date_df d
+            WHERE d.date_key NOT IN (SELECT date_key FROM dim_date)
+        """)
+
+
+def rebuild_agg_session(con):
+    """Rebuild agg_session from the full fact_page_view in DuckDB."""
+    log("Rebuilding agg_session from all data...")
     full_fact = con.execute("SELECT * FROM fact_page_view").df()
-    if not full_fact.empty:
-        full_agg = build_agg_session(full_fact)
-        full_agg = strip_tz(full_agg)
-        con.execute("DROP TABLE IF EXISTS agg_session")
-        con.register("full_agg_df", full_agg)
-        con.execute("CREATE TABLE agg_session AS SELECT * FROM full_agg_df")
-        agg_count = con.execute("SELECT COUNT(*) FROM agg_session").fetchone()[0]
-        log(f"  agg_session:    {agg_count:,} sessions (rebuilt from all data)")
+    if full_fact.empty:
+        return pd.DataFrame()
 
-    # -- dim_page: merge new pages --
-    con.register("dim_page_df", dim_page)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS dim_page AS
-        SELECT * FROM dim_page_df WHERE 1=0
-    """)
-    con.execute("""
-        INSERT INTO dim_page
-        SELECT d.* FROM dim_page_df d
-        WHERE d.page_id NOT IN (SELECT page_id FROM dim_page)
-    """)
-    page_count = con.execute("SELECT COUNT(*) FROM dim_page").fetchone()[0]
-    log(f"  dim_page:       {page_count:,} pages")
+    agg = build_agg_session(full_fact)
+    agg = strip_tz(agg)
 
-    # -- dim_date: merge new dates --
-    con.register("dim_date_df", dim_date)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS dim_date AS
-        SELECT * FROM dim_date_df WHERE 1=0
-    """)
-    con.execute("""
-        INSERT INTO dim_date
-        SELECT d.* FROM dim_date_df d
-        WHERE d.date_key NOT IN (SELECT date_key FROM dim_date)
-    """)
-    date_count = con.execute("SELECT COUNT(*) FROM dim_date").fetchone()[0]
-    log(f"  dim_date:       {date_count:,} dates")
+    con.execute("DROP TABLE IF EXISTS agg_session")
+    con.register("full_agg_df", agg)
+    con.execute("CREATE TABLE agg_session AS SELECT * FROM full_agg_df")
 
-    con.close()
+    count = con.execute("SELECT COUNT(*) FROM agg_session").fetchone()[0]
+    log(f"  agg_session: {count:,} sessions")
+    return agg
 
+
+def print_summary(con):
+    """Print summary statistics from DuckDB."""
+    log("\n" + "=" * 60)
+    log("SUMMARY")
+    log("=" * 60)
+
+    tables = con.execute("SHOW TABLES").df()["name"].tolist()
+
+    for table in ["fact_page_view", "agg_session", "dim_page", "dim_date"]:
+        if table in tables:
+            count = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            log(f"  {table}: {count:,} rows")
+
+    if "processed_files" in tables:
+        manifest = con.execute("""
+            SELECT filename, row_count, processed_at
+            FROM processed_files ORDER BY processed_at
+        """).df()
+        if not manifest.empty:
+            log(f"\n  Processed files ({len(manifest)}):")
+            for _, row in manifest.iterrows():
+                log(f"    {row['filename']}: {row['row_count']:,} rows "
+                    f"({row['processed_at']})")
+
+    if "fact_page_view" in tables:
+        stats = con.execute("""
+            SELECT COUNT(*), COUNT(time_on_page_sec),
+                   ROUND(MEDIAN(time_on_page_sec), 0),
+                   ROUND(AVG(time_on_page_sec), 0)
+            FROM fact_page_view
+        """).fetchone()
+        if stats[0] > 0 and stats[1] > 0:
+            log(f"\n  Time-on-page: {stats[1]:,}/{stats[0]:,} measurable "
+                f"({stats[1]/stats[0]*100:.1f}%), "
+                f"median {stats[2]}s, mean {stats[3]}s")
+
+    if "agg_session" in tables:
+        sess = con.execute("""
+            SELECT COUNT(*),
+                   SUM(CASE WHEN is_bounce THEN 1 ELSE 0 END),
+                   ROUND(AVG(page_view_count), 1)
+            FROM agg_session
+        """).fetchone()
+        if sess[0] > 0:
+            log(f"  Sessions: {sess[0]:,}, {sess[1]:,} bounces "
+                f"({sess[1]/sess[0]*100:.1f}%), avg {sess[2]} pages/session")
+
+
+# ---------------------------------------------------------------------------
+# Pipeline: process one file
+# ---------------------------------------------------------------------------
+
+def process_file(filepath: Path, hr_path: Path) -> tuple:
+    """Process one input file end-to-end. Returns (fact, dim_page, dim_date)."""
+    raw_df = read_input(filepath)
+    log(f"  {len(raw_df):,} raw rows")
+
+    expanded = flatten_appinsights(raw_df)
+    clean = build_clean_table(expanded)
+    enriched = join_hr_data(clean, hr_path)
+
+    fact = build_fact_page_view(enriched, source_file=filepath.name)
+    dim_page = build_dim_page(enriched)
+    dim_date = build_dim_date(enriched)
+
+    fact = strip_tz(fact)
+
+    return fact, dim_page, dim_date
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
         description="Flatten AppInsights pageViews, join HR, produce star schema"
     )
-    parser.add_argument("input", help="Path to CSV or XLSX file from AppInsights")
-    parser.add_argument(
-        "-o", "--output-dir",
-        help="Output directory (default: <input_dir>/output/)",
-    )
-    parser.add_argument(
-        "--hr",
-        help="Path to hr_history.parquet (default: ../SearchAnalytics/output/hr_history.parquet)",
-    )
-    parser.add_argument(
-        "--db",
-        help="DuckDB file path (default: <output_dir>/pageviews.duckdb)",
-    )
+    parser.add_argument("input", help="CSV/XLSX file or directory with input files")
+    parser.add_argument("-o", "--output-dir", help="Output directory")
+    parser.add_argument("--hr", help="Path to hr_history.parquet")
+    parser.add_argument("--db", help="DuckDB file path")
+    parser.add_argument("--full-refresh", action="store_true",
+                        help="Reprocess all files, rebuild DB from scratch")
     args = parser.parse_args()
 
     input_path = Path(args.input)
     if not input_path.exists():
-        log(f"Error: File not found: {input_path}")
+        log(f"Error: Path not found: {input_path}")
         sys.exit(1)
 
-    # Output directory
-    output_dir = Path(args.output_dir) if args.output_dir else input_path.parent / "output"
+    input_dir = input_path if input_path.is_dir() else input_path.parent
+    output_dir = Path(args.output_dir) if args.output_dir else input_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # DuckDB path
     db_path = Path(args.db) if args.db else output_dir / "pageviews.duckdb"
 
-    # Resolve HR parquet path (same convention as CampaignWe)
-    if args.hr:
-        hr_path = Path(args.hr)
-    else:
-        hr_path = input_path.parent.parent / "SearchAnalytics" / "output" / "hr_history.parquet"
-
+    hr_path = Path(args.hr) if args.hr else (
+        input_dir.parent / "SearchAnalytics" / "output" / "hr_history.parquet"
+    )
     if not hr_path.exists():
-        log(f"Error: HR history file not found: {hr_path}")
-        log("  Run process_hr_history.py in SearchAnalytics first,")
-        log("  or specify the path with --hr /path/to/hr_history.parquet")
+        log(f"Error: HR history not found: {hr_path}")
+        log("  Run process_hr_history.py first, or use --hr /path/to/hr_history.parquet")
         sys.exit(1)
 
-    # Step 1: Read raw data
-    log(f"Reading: {input_path}")
-    raw_df = read_input(input_path)
-    log(f"  Raw: {len(raw_df)} rows, {len(raw_df.columns)} columns")
+    # Full refresh: delete existing DB
+    if args.full_refresh and db_path.exists():
+        log(f"Full refresh: deleting {db_path}")
+        db_path.unlink()
 
-    # Step 2: Flatten customDimensions JSON
-    log("Flattening customDimensions...")
-    expanded_df = flatten_appinsights(raw_df)
-    cp_cols = [c for c in expanded_df.columns if c.startswith("cp_")]
-    log(f"  Expanded: {len(expanded_df.columns)} columns ({len(cp_cols)} from CustomProps)")
+    # Get input files
+    all_files = get_input_files(input_path)
+    if not all_files:
+        log(f"No CSV/XLSX files found in {input_path}")
+        sys.exit(1)
+    log(f"Found {len(all_files)} input file(s)")
 
-    # Step 3: Clean up, convert UTC -> CET, normalize GPN
-    log(f"Building clean table (timestamps converted to {TIMEZONE})...")
-    clean = build_clean_table(expanded_df)
+    # Open persistent DuckDB
+    con = duckdb.connect(str(db_path))
+    ensure_manifest_table(con)
 
-    # Step 4: Join with HR snapshots (temporal GPN match)
-    log("Joining with HR data...")
-    enriched = join_hr_data(clean, hr_path)
+    # Delta detection via SHA-256 file hash
+    if args.full_refresh:
+        files_to_process = [(f, compute_file_hash(f), "full-refresh") for f in all_files]
+    else:
+        files_to_process = get_unprocessed_files(con, all_files)
 
-    # Step 5: Build star schema
-    log("Building star schema...")
-    fact = build_fact_page_view(enriched)
-    agg_sess = build_agg_session(fact)
-    dim_page = build_dim_page(enriched)
-    dim_date = build_dim_date(enriched)
+    if not files_to_process:
+        log("All files already processed. Nothing new to do.")
+        log("Use --full-refresh to reprocess everything.")
+        print_summary(con)
+        con.close()
+        return
 
-    log(f"  fact_page_view: {len(fact):,} rows x {len(fact.columns)} cols")
-    log(f"  agg_session:    {len(agg_sess):,} rows x {len(agg_sess.columns)} cols")
-    log(f"  dim_page:       {len(dim_page):,} rows x {len(dim_page.columns)} cols")
-    log(f"  dim_date:       {len(dim_date):,} rows x {len(dim_date.columns)} cols")
+    # Process each file
+    for filepath, file_hash, reason in files_to_process:
+        log(f"\nProcessing ({reason}): {filepath.name}")
 
-    # Summary statistics
-    if not fact.empty and "time_on_page_sec" in fact.columns:
-        measurable = fact["time_on_page_sec"].notna()
-        log(f"  Time-on-page: {measurable.sum():,}/{len(fact):,} views measurable "
-            f"({measurable.sum()/len(fact)*100:.1f}%), "
-            f"median {fact.loc[measurable, 'time_on_page_sec'].median():.0f}s, "
-            f"mean {fact.loc[measurable, 'time_on_page_sec'].mean():.0f}s")
+        fact, dim_page, dim_date = process_file(filepath, hr_path)
 
-    if not agg_sess.empty:
-        bounces = agg_sess["is_bounce"].sum()
-        log(f"  Sessions: {len(agg_sess):,} total, "
-            f"{bounces:,} bounces ({bounces/len(agg_sess)*100:.1f}%), "
-            f"avg {agg_sess['page_view_count'].mean():.1f} pages/session")
-        if "engagement_time_sec" in agg_sess.columns:
-            non_bounce = agg_sess[~agg_sess["is_bounce"]]
-            if not non_bounce.empty:
-                log(f"  Engagement (non-bounce): "
-                    f"median {non_bounce['engagement_time_sec'].median():.0f}s, "
-                    f"mean {non_bounce['engagement_time_sec'].mean():.0f}s")
+        upsert_fact(con, fact, filepath.name)
+        upsert_dims(con, dim_page, dim_date)
+        record_processed_file(con, filepath, file_hash, len(fact))
 
-    # Strip timezone for storage (all timestamps are already CET)
-    fact = strip_tz(fact)
-    agg_sess = strip_tz(agg_sess)
+    # Rebuild agg_session from full dataset
+    agg_sess = rebuild_agg_session(con)
 
-    # Step 6: Persist to DuckDB (incremental)
-    persist_to_duckdb(db_path, fact, agg_sess, dim_page, dim_date)
+    # Summary
+    print_summary(con)
 
-    # Step 7: Export Parquet files
-    log(f"Writing Parquet to: {output_dir}/")
-    fact.to_parquet(output_dir / "fact_page_view.parquet", index=False, engine="pyarrow")
-    if not agg_sess.empty:
-        agg_sess.to_parquet(output_dir / "agg_session.parquet", index=False, engine="pyarrow")
-    if not dim_page.empty:
-        dim_page.to_parquet(output_dir / "dim_page.parquet", index=False, engine="pyarrow")
-    if not dim_date.empty:
-        dim_date.to_parquet(output_dir / "dim_date.parquet", index=False, engine="pyarrow")
+    # Export Parquet from DuckDB
+    log(f"\nExporting Parquet to: {output_dir}/")
+    for table in ["fact_page_view", "agg_session", "dim_page", "dim_date"]:
+        tables = con.execute("SHOW TABLES").df()["name"].tolist()
+        if table in tables:
+            con.execute(f"COPY {table} TO '{output_dir / f'{table}.parquet'}' (FORMAT PARQUET)")
     log("  Parquet files written")
 
-    # Step 8: Excel summary for quick review
-    xlsx_path = output_dir / f"{input_path.stem}_cdm.xlsx"
-    log(f"Writing Excel to: {xlsx_path}")
+    # Excel summary
+    xlsx_path = output_dir / "pageviews_cdm.xlsx"
+    log(f"Writing Excel: {xlsx_path}")
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
-        enriched.to_excel(writer, sheet_name="flat_all", index=False)
-        fact.to_excel(writer, sheet_name="fact_page_view", index=False)
-        if not agg_sess.empty:
-            agg_sess.to_excel(writer, sheet_name="agg_session", index=False)
-        if not dim_page.empty:
-            dim_page.to_excel(writer, sheet_name="dim_page", index=False)
-        if not dim_date.empty:
-            dim_date.to_excel(writer, sheet_name="dim_date", index=False)
+        for table in ["fact_page_view", "agg_session", "dim_page", "dim_date"]:
+            tables = con.execute("SHOW TABLES").df()["name"].tolist()
+            if table in tables:
+                df = con.execute(f"SELECT * FROM {table}").df()
+                if not df.empty:
+                    df.to_excel(writer, sheet_name=table, index=False)
 
-    log(f"Done. Output in {output_dir}/")
+    con.close()
+
+    log(f"\nDone. Output in {output_dir}/")
     log(f"  DuckDB:  {db_path}")
     log(f"  Parquet: {output_dir}/*.parquet")
     log(f"  Excel:   {xlsx_path}")
