@@ -723,7 +723,7 @@ def main():
         for table in ["fact_page_view", "agg_session", "dim_page", "dim_date"]:
             tables = con.execute("SHOW TABLES").df()["name"].tolist()
             if table in tables:
-                df = con.execute(f"SELECT * FROM {table}").df()
+                df = strip_tz(con.execute(f"SELECT * FROM {table}").df())
                 if not df.empty:
                     df.to_excel(writer, sheet_name=table, index=False)
 
