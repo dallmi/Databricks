@@ -9,17 +9,18 @@ time-on-page and session-level engagement metrics, and persists everything in
 a DuckDB database with SHA-256-based delta loading and upsert semantics.
 
 Usage:
-    # Process a single file
-    python flatten_appinsights.py input_file.csv
+    # Process all files in input/ (default, no args needed)
+    python scripts/flatten_appinsights.py
 
-    # Process all CSV/XLSX files in a directory (delta: only new/changed)
-    python flatten_appinsights.py ./data/
+    # Process a specific file or directory
+    python scripts/flatten_appinsights.py input/pageviews_march.csv
+    python scripts/flatten_appinsights.py ./data/
 
     # Force reprocess everything
-    python flatten_appinsights.py ./data/ --full-refresh
+    python scripts/flatten_appinsights.py --full-refresh
 
-    # Custom output and HR paths
-    python flatten_appinsights.py ./data/ -o ./my_output/ --hr path/to/hr_history.parquet
+    # Custom HR path
+    python scripts/flatten_appinsights.py --hr path/to/hr_history.parquet
 
 Output (written to <input_dir>/output/ by default, override with -o):
     pageviews.duckdb          -- persistent DuckDB with all tables + manifest
@@ -628,7 +629,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Flatten AppInsights pageViews, join HR, produce star schema"
     )
-    parser.add_argument("input", help="CSV/XLSX file or directory with input files")
+    parser.add_argument("input", nargs="?", default=None,
+                        help="CSV/XLSX file or directory (default: input/ next to scripts/)")
     parser.add_argument("-o", "--output-dir", help="Output directory")
     parser.add_argument("--hr", help="Path to hr_history.parquet")
     parser.add_argument("--db", help="DuckDB file path")
@@ -636,18 +638,25 @@ def main():
                         help="Reprocess all files, rebuild DB from scratch")
     args = parser.parse_args()
 
-    input_path = Path(args.input)
+    # Default input: input/ directory next to scripts/
+    script_dir = Path(__file__).resolve().parent
+    if args.input:
+        input_path = Path(args.input)
+    else:
+        input_path = script_dir.parent / "input"
+
     if not input_path.exists():
         log(f"Error: Path not found: {input_path}")
         sys.exit(1)
 
+    project_root = script_dir.parent
     input_dir = input_path if input_path.is_dir() else input_path.parent
-    output_dir = Path(args.output_dir) if args.output_dir else input_dir / "output"
+    output_dir = Path(args.output_dir) if args.output_dir else project_root / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     db_path = Path(args.db) if args.db else output_dir / "pageviews.duckdb"
 
     hr_path = Path(args.hr) if args.hr else (
-        input_dir.parent / "SearchAnalytics" / "output" / "hr_history.parquet"
+        project_root.parent / "SearchAnalytics" / "output" / "hr_history.parquet"
     )
     if not hr_path.exists():
         log(f"Error: HR history not found: {hr_path}")
