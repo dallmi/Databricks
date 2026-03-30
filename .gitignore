@@ -8,10 +8,11 @@ input/*.csv
 input/*.xlsx
 input/*.xls
 
-# AppInsights screenshots (may contain sensitive data)
+# Screenshots and images (may contain sensitive data)
 AppInsightSchema/*.jpeg
 AppInsightSchema/*.jpg
 AppInsightSchema/*.png
+10. März 2026/
 
 # Python
 __pycache__/
