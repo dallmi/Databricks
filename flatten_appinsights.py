@@ -3,10 +3,10 @@ Flatten AppInsights pageViews export, join with HR snapshots, and produce
 a CDM-based star schema.
 
 Reads a CSV or XLSX file exported from Azure AppInsights, flattens the nested
-customDimensions JSON column, joins with HR snapshot data (hr_history.parquet)
-using temporal GPN matching, and produces:
+customDimensions JSON column, converts timestamps from UTC to CET, joins with
+HR snapshot data (hr_history.parquet) using temporal GPN matching, and produces:
   1. A flat denormalized table (all relevant fields + HR dimensions)
-  2. A star schema with fact_page_view, dim_page, dim_date, and dim_employee sheets
+  2. A star schema: fact_page_view, agg_session, dim_page, dim_date
 
 Usage:
     python flatten_appinsights.py input_file.csv
@@ -20,7 +20,6 @@ The script expects hr_history.parquet in ../SearchAnalytics/output/ by default
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -32,7 +31,7 @@ import pandas as pd
 
 FACT_COLUMNS = {
     "id": "view_id",
-    "timestamp [UTC]": "timestamp",
+    "timestamp [UTC]": "timestamp_utc",
     "user_Id": "user_id",
     "session_Id": "session_id",
     "duration": "duration_ms",
@@ -83,6 +82,8 @@ DROP_COLUMNS = [
     "client_City", "client_StateOrProvince",
     "cp_CommsTrackingID", "cp_NewsCategory",
 ]
+
+TIMEZONE = "Europe/Berlin"
 
 
 def log(msg):
@@ -153,7 +154,8 @@ def flatten_appinsights(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_clean_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop noise columns, rename to CDM-friendly snake_case, parse dates."""
+    """Drop noise columns, rename to CDM-friendly snake_case, parse dates,
+    convert UTC timestamps to CET."""
     flat = df.copy()
 
     cols_to_drop = [c for c in DROP_COLUMNS if c in flat.columns]
@@ -165,8 +167,14 @@ def build_clean_table(df: pd.DataFrame) -> pd.DataFrame:
     existing_renames = {k: v for k, v in rename_map.items() if k in flat.columns}
     flat = flat.rename(columns=existing_renames)
 
-    if "timestamp" in flat.columns:
-        flat["timestamp"] = pd.to_datetime(flat["timestamp"], errors="coerce")
+    # Parse and convert timestamp from UTC to CET
+    if "timestamp_utc" in flat.columns:
+        flat["timestamp_utc"] = pd.to_datetime(flat["timestamp_utc"], errors="coerce")
+        flat["timestamp_utc"] = flat["timestamp_utc"].dt.tz_localize("UTC")
+        flat["timestamp"] = flat["timestamp_utc"].dt.tz_convert(TIMEZONE)
+        # Drop UTC column, keep CET as the working timestamp
+        flat = flat.drop(columns=["timestamp_utc"])
+
     if "publishing_date" in flat.columns:
         flat["publishing_date"] = pd.to_datetime(
             flat["publishing_date"], errors="coerce"
@@ -291,12 +299,72 @@ def build_fact_page_view(flat: pd.DataFrame) -> pd.DataFrame:
         "duration_ms", "referrer_url", "client_os", "client_browser",
         "client_country", "email", "gpn",
     ]
-    # Add any HR columns that are present
     hr_cols = [c for c in flat.columns if c.startswith("hr_")]
     fact_cols.extend(hr_cols)
 
     available = [c for c in fact_cols if c in flat.columns]
     return flat[available].copy()
+
+
+def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate pageViews into sessions.
+
+    Derives session-level metrics: page count, duration, entry/exit page,
+    bounce flag. This is a CDM-compatible extension (derived aggregation,
+    not a standard CDM entity).
+    """
+    if "session_id" not in fact.columns or "timestamp" not in fact.columns:
+        return pd.DataFrame()
+
+    # Sort by session and time for entry/exit page detection
+    sorted_df = fact.sort_values(["session_id", "timestamp"])
+
+    # Entry page = first page_id per session, exit page = last
+    entry = sorted_df.groupby("session_id").first()
+    exit_ = sorted_df.groupby("session_id").last()
+
+    agg = sorted_df.groupby("session_id").agg(
+        user_id=("user_id", "first"),
+        gpn=("gpn", "first"),
+        email=("email", "first"),
+        session_start=("timestamp", "min"),
+        session_end=("timestamp", "max"),
+        page_view_count=("view_id", "count"),
+        client_country=("client_country", "first"),
+        client_os=("client_os", "first"),
+        client_browser=("client_browser", "first"),
+    ).reset_index()
+
+    # Entry and exit pages
+    agg["entry_page_id"] = entry["page_id"].values
+    agg["exit_page_id"] = exit_["page_id"].values
+
+    # Session duration in seconds
+    agg["duration_sec"] = (
+        (agg["session_end"] - agg["session_start"]).dt.total_seconds().round(0)
+    )
+
+    # Bounce = session with only 1 page view
+    agg["is_bounce"] = agg["page_view_count"] == 1
+
+    # Session date (date part of session_start, already in CET)
+    agg["session_date"] = agg["session_start"].dt.normalize()
+
+    # Bring in HR columns from the first pageView in the session
+    hr_cols = [c for c in fact.columns if c.startswith("hr_")]
+    if hr_cols:
+        hr_first = sorted_df.groupby("session_id")[hr_cols].first().reset_index()
+        agg = agg.merge(hr_first, on="session_id", how="left")
+
+    # Reorder columns
+    col_order = [
+        "session_id", "user_id", "gpn", "email",
+        "session_date", "session_start", "session_end", "duration_sec",
+        "page_view_count", "entry_page_id", "exit_page_id", "is_bounce",
+        "client_country", "client_os", "client_browser",
+    ] + hr_cols
+    available = [c for c in col_order if c in agg.columns]
+    return agg[available]
 
 
 def build_dim_page(flat: pd.DataFrame) -> pd.DataFrame:
@@ -314,12 +382,14 @@ def build_dim_page(flat: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_dim_date(flat: pd.DataFrame) -> pd.DataFrame:
-    """Build a date dimension from timestamps."""
+    """Build a date dimension from timestamps (CET-based)."""
     if "timestamp" not in flat.columns:
         return pd.DataFrame()
 
     dates = flat["timestamp"].dropna().dt.normalize().drop_duplicates().sort_values()
     dim = pd.DataFrame({"date": dates}).reset_index(drop=True)
+    # Remove timezone info for clean date dimension
+    dim["date"] = dim["date"].dt.tz_localize(None)
     dim["date_key"] = dim["date"].dt.strftime("%Y%m%d").astype(int)
     dim["year"] = dim["date"].dt.year
     dim["month"] = dim["date"].dt.month
@@ -379,8 +449,8 @@ def main():
     cp_cols = [c for c in expanded_df.columns if c.startswith("cp_")]
     log(f"  Expanded: {len(expanded_df.columns)} columns ({len(cp_cols)} from CustomProps)")
 
-    # Step 3: Clean up column names, parse dates, normalize GPN
-    log("Building clean table...")
+    # Step 3: Clean up, convert UTC -> CET, normalize GPN
+    log(f"Building clean table (timestamps converted to {TIMEZONE})...")
     clean = build_clean_table(expanded_df)
 
     # Step 4: Join with HR snapshots (temporal GPN match)
@@ -390,24 +460,34 @@ def main():
     # Step 5: Build star schema
     log("Building star schema...")
     fact = build_fact_page_view(enriched)
+    agg_sess = build_agg_session(fact)
     dim_page = build_dim_page(enriched)
     dim_date = build_dim_date(enriched)
 
-    log(f"  fact_page_view: {len(fact)} rows x {len(fact.columns)} cols")
-    log(f"  dim_page:       {len(dim_page)} rows x {len(dim_page.columns)} cols")
-    log(f"  dim_date:       {len(dim_date)} rows x {len(dim_date.columns)} cols")
+    log(f"  fact_page_view: {len(fact):,} rows x {len(fact.columns)} cols")
+    log(f"  agg_session:    {len(agg_sess):,} rows x {len(agg_sess.columns)} cols")
+    log(f"  dim_page:       {len(dim_page):,} rows x {len(dim_page.columns)} cols")
+    log(f"  dim_date:       {len(dim_date):,} rows x {len(dim_date.columns)} cols")
+
+    if not agg_sess.empty:
+        bounces = agg_sess["is_bounce"].sum()
+        log(f"  Session stats: {len(agg_sess):,} sessions, "
+            f"{bounces:,} bounces ({bounces/len(agg_sess)*100:.1f}%), "
+            f"avg {agg_sess['page_view_count'].mean():.1f} pages/session")
 
     # Step 6: Write Excel with multiple sheets
     log(f"Writing: {output_path}")
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         enriched.to_excel(writer, sheet_name="flat_all", index=False)
         fact.to_excel(writer, sheet_name="fact_page_view", index=False)
+        if not agg_sess.empty:
+            agg_sess.to_excel(writer, sheet_name="agg_session", index=False)
         if not dim_page.empty:
             dim_page.to_excel(writer, sheet_name="dim_page", index=False)
         if not dim_date.empty:
             dim_date.to_excel(writer, sheet_name="dim_date", index=False)
 
-    log(f"Done. Sheets: flat_all, fact_page_view, dim_page, dim_date")
+    log("Done. Sheets: flat_all, fact_page_view, agg_session, dim_page, dim_date")
 
 
 if __name__ == "__main__":
