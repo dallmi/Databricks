@@ -188,31 +188,27 @@ These columns already exist in the parquet files. Verify they are present:
 | `page_view_count` | Sessions | Pages per session | Yes |
 | `theme`, `topic`, `site_name` | Pages | Content classification | Yes |
 
-**Add in Power Query** (not in parquet):
+**Add in Power Query** via Add Column → Custom Column (not in parquet):
 
-```m
-// PageViews: view_date (Date only, for DateTable relationship)
-= Table.AddColumn(#"Previous Step", "view_date", each DateTime.Date([timestamp]), type date)
+All formulas below are entered in the **Custom Column** dialog (Add Column → Custom Column). Enter the **Name** and **Formula** as shown. After adding each column, right-click it to set the correct **Data Type**.
 
-// PageViews: view_hour (for heatmap visuals)
-= Table.AddColumn(#"Previous Step", "view_hour", each Time.Hour([timestamp]), Int64.Type)
+### PageViews Table
 
-// PageViews: Display-friendly division (replace nulls)
-= Table.AddColumn(#"Previous Step", "Division",
-    each if [hr_division] = null then "(Unknown)" else [hr_division], type text)
+| Step | Column Name | Custom Column Formula | Data Type |
+|------|-------------|----------------------|-----------|
+| 1 | `view_date` | `DateTime.Date([timestamp])` | Date |
+| 2 | `view_hour` | `Time.Hour([timestamp])` | Whole Number |
+| 3 | `Division` | `if [hr_division] = null then "(Unknown)" else [hr_division]` | Text |
+| 4 | `Region` | `if [hr_region] = null then "(Unknown)" else [hr_region]` | Text |
 
-// PageViews: Display-friendly region (replace nulls)
-= Table.AddColumn(#"Previous Step", "Region",
-    each if [hr_region] = null then "(Unknown)" else [hr_region], type text)
+### Sessions Table
 
-// Sessions: Display-friendly division (replace nulls)
-= Table.AddColumn(#"Previous Step", "Division",
-    each if [hr_division] = null then "(Unknown)" else [hr_division], type text)
+Switch to the Sessions query in the left panel, then add:
 
-// Sessions: Display-friendly region (replace nulls)
-= Table.AddColumn(#"Previous Step", "Region",
-    each if [hr_region] = null then "(Unknown)" else [hr_region], type text)
-```
+| Step | Column Name | Custom Column Formula | Data Type |
+|------|-------------|----------------------|-----------|
+| 1 | `Division` | `if [hr_division] = null then "(Unknown)" else [hr_division]` | Text |
+| 2 | `Region` | `if [hr_region] = null then "(Unknown)" else [hr_region]` | Text |
 
 ---
 
