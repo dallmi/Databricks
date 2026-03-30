@@ -4,7 +4,8 @@ a CDM-based star schema.
 
 Reads a CSV or XLSX file exported from Azure AppInsights, flattens the nested
 customDimensions JSON column, converts timestamps from UTC to CET, joins with
-HR snapshot data (hr_history.parquet) using temporal GPN matching, and produces:
+HR snapshot data (hr_history.parquet) using temporal GPN matching, computes
+time-on-page and session-level engagement metrics, and produces:
   1. A flat denormalized table (all relevant fields + HR dimensions)
   2. A star schema: fact_page_view, agg_session, dim_page, dim_date
 
@@ -34,7 +35,7 @@ FACT_COLUMNS = {
     "timestamp [UTC]": "timestamp_utc",
     "user_Id": "user_id",
     "session_Id": "session_id",
-    "duration": "duration_ms",
+    "duration": "page_load_ms",
     "cp_refUri": "referrer_url",
     "client_OS": "client_os",
     "client_Browser": "client_browser",
@@ -84,6 +85,9 @@ DROP_COLUMNS = [
 ]
 
 TIMEZONE = "Europe/Berlin"
+
+# Cap for time-on-page: deltas above this are treated as inactive (user left)
+TIME_ON_PAGE_CAP_SEC = 30 * 60  # 30 minutes
 
 
 def log(msg):
@@ -172,7 +176,6 @@ def build_clean_table(df: pd.DataFrame) -> pd.DataFrame:
         flat["timestamp_utc"] = pd.to_datetime(flat["timestamp_utc"], errors="coerce")
         flat["timestamp_utc"] = flat["timestamp_utc"].dt.tz_localize("UTC")
         flat["timestamp"] = flat["timestamp_utc"].dt.tz_convert(TIMEZONE)
-        # Drop UTC column, keep CET as the working timestamp
         flat = flat.drop(columns=["timestamp_utc"])
 
     if "publishing_date" in flat.columns:
@@ -204,11 +207,9 @@ def join_hr_data(clean_df: pd.DataFrame, hr_path: Path) -> pd.DataFrame:
     log(f"Loading HR data: {hr_path}")
     con = duckdb.connect()
 
-    # Register the pageViews dataframe
     con.register("pageviews_df", clean_df)
     con.execute("CREATE TABLE pageviews AS SELECT * FROM pageviews_df")
 
-    # Load HR history
     con.execute(f"""
         CREATE TABLE hr_history AS
         SELECT * FROM read_parquet('{hr_path}')
@@ -221,7 +222,6 @@ def join_hr_data(clean_df: pd.DataFrame, hr_path: Path) -> pd.DataFrame:
     ).fetchone()[0]
     log(f"  Loaded hr_history: {row_count:,} rows, {gpn_count:,} GPNs, {snap_count} snapshot(s)")
 
-    # Determine available HR fields
     hr_cols = con.execute("DESCRIBE hr_history").df()["column_name"].tolist()
     avail_hr = {src: alias for src, alias in HR_FIELD_MAP.items() if src in hr_cols}
     log(f"  HR fields to join: {list(avail_hr.values())}")
@@ -231,7 +231,6 @@ def join_hr_data(clean_df: pd.DataFrame, hr_path: Path) -> pd.DataFrame:
         con.close()
         return clean_df
 
-    # Build HR SELECT and COALESCE expressions
     hr_select_parts = [f"h.{src} as {alias}" for src, alias in avail_hr.items()]
     hr_select_sql = ", ".join(hr_select_parts)
 
@@ -241,10 +240,8 @@ def join_hr_data(clean_df: pd.DataFrame, hr_path: Path) -> pd.DataFrame:
     ]
     hr_coalesce_sql = ", ".join(hr_coalesce_parts)
 
-    # GPN expression: cast and normalize
     gpn_expr = "LPAD(REGEXP_REPLACE(CAST(p.gpn AS VARCHAR), '\\.0$', ''), 8, '0')"
 
-    # Match rate check
     match_stats = con.execute(f"""
         SELECT
             COUNT(*) as total,
@@ -259,7 +256,6 @@ def join_hr_data(clean_df: pd.DataFrame, hr_path: Path) -> pd.DataFrame:
     log(f"  Match stats: {match_stats[1]:,}/{match_stats[0]:,} rows have GPN, "
         f"{match_stats[3]:,}/{match_stats[2]:,} unique GPNs found in HR data")
 
-    # Temporal join via LEFT JOIN LATERAL
     result = con.execute(f"""
         SELECT
             p.*,
@@ -292,34 +288,69 @@ def join_hr_data(clean_df: pd.DataFrame, hr_path: Path) -> pd.DataFrame:
     return result
 
 
+def compute_time_on_page(fact: pd.DataFrame) -> pd.DataFrame:
+    """Compute time-on-page as delta to the next pageView within the same session.
+
+    - Sorted by session_id + timestamp
+    - time_on_page_sec = next view's timestamp - current view's timestamp
+    - Last page in session: time_on_page_sec = NULL (not measurable)
+    - Capped at 30 minutes (deltas above this indicate user was inactive)
+    - is_last_in_session flag marks rows where time_on_page is unknown
+    """
+    if "session_id" not in fact.columns or "timestamp" not in fact.columns:
+        return fact
+
+    df = fact.sort_values(["session_id", "timestamp"]).reset_index(drop=True)
+
+    # Next timestamp within the same session
+    df["_next_ts"] = df.groupby("session_id")["timestamp"].shift(-1)
+
+    # Time-on-page in seconds
+    df["time_on_page_sec"] = (df["_next_ts"] - df["timestamp"]).dt.total_seconds()
+
+    # Flag last page in session (no next view → not measurable)
+    df["is_last_in_session"] = df["_next_ts"].isna()
+
+    # Cap at 30 minutes: treat longer gaps as inactive
+    cap = TIME_ON_PAGE_CAP_SEC
+    df.loc[df["time_on_page_sec"] > cap, "time_on_page_sec"] = None
+
+    df = df.drop(columns=["_next_ts"])
+
+    return df
+
+
 def build_fact_page_view(flat: pd.DataFrame) -> pd.DataFrame:
-    """Extract the fact table from the enriched flat table."""
+    """Extract the fact table and compute time-on-page."""
     fact_cols = [
         "view_id", "timestamp", "page_id", "user_id", "session_id",
-        "duration_ms", "referrer_url", "client_os", "client_browser",
+        "page_load_ms", "referrer_url", "client_os", "client_browser",
         "client_country", "email", "gpn",
     ]
     hr_cols = [c for c in flat.columns if c.startswith("hr_")]
     fact_cols.extend(hr_cols)
 
     available = [c for c in fact_cols if c in flat.columns]
-    return flat[available].copy()
+    fact = flat[available].copy()
+
+    # Compute time-on-page (engagement metric)
+    fact = compute_time_on_page(fact)
+
+    return fact
 
 
 def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
     """Aggregate pageViews into sessions.
 
     Derives session-level metrics: page count, duration, entry/exit page,
-    bounce flag. This is a CDM-compatible extension (derived aggregation,
-    not a standard CDM entity).
+    bounce flag, engagement time. This is a CDM-compatible extension
+    (derived aggregation, not a standard CDM entity).
     """
     if "session_id" not in fact.columns or "timestamp" not in fact.columns:
         return pd.DataFrame()
 
-    # Sort by session and time for entry/exit page detection
     sorted_df = fact.sort_values(["session_id", "timestamp"])
 
-    # Entry page = first page_id per session, exit page = last
     entry = sorted_df.groupby("session_id").first()
     exit_ = sorted_df.groupby("session_id").last()
 
@@ -335,14 +366,36 @@ def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
         client_browser=("client_browser", "first"),
     ).reset_index()
 
-    # Entry and exit pages
     agg["entry_page_id"] = entry["page_id"].values
     agg["exit_page_id"] = exit_["page_id"].values
 
-    # Session duration in seconds
+    # Session duration: last view - first view (0 for bounces)
     agg["duration_sec"] = (
         (agg["session_end"] - agg["session_start"]).dt.total_seconds().round(0)
     )
+
+    # Engagement time: sum of measured time-on-page within the session
+    # (excludes last page and capped values — gives a conservative estimate)
+    if "time_on_page_sec" in sorted_df.columns:
+        engagement = (
+            sorted_df.groupby("session_id")["time_on_page_sec"]
+            .sum()
+            .reset_index()
+            .rename(columns={"time_on_page_sec": "engagement_time_sec"})
+        )
+        agg = agg.merge(engagement, on="session_id", how="left")
+
+    # Avg time on page within session (excluding last page)
+    if "time_on_page_sec" in sorted_df.columns:
+        avg_top = (
+            sorted_df[sorted_df["is_last_in_session"] == False]
+            .groupby("session_id")["time_on_page_sec"]
+            .mean()
+            .round(1)
+            .reset_index()
+            .rename(columns={"time_on_page_sec": "avg_time_on_page_sec"})
+        )
+        agg = agg.merge(avg_top, on="session_id", how="left")
 
     # Bounce = session with only 1 page view
     agg["is_bounce"] = agg["page_view_count"] == 1
@@ -350,16 +403,16 @@ def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
     # Session date (date part of session_start, already in CET)
     agg["session_date"] = agg["session_start"].dt.normalize()
 
-    # Bring in HR columns from the first pageView in the session
+    # HR columns from first pageView
     hr_cols = [c for c in fact.columns if c.startswith("hr_")]
     if hr_cols:
         hr_first = sorted_df.groupby("session_id")[hr_cols].first().reset_index()
         agg = agg.merge(hr_first, on="session_id", how="left")
 
-    # Reorder columns
     col_order = [
         "session_id", "user_id", "gpn", "email",
         "session_date", "session_start", "session_end", "duration_sec",
+        "engagement_time_sec", "avg_time_on_page_sec",
         "page_view_count", "entry_page_id", "exit_page_id", "is_bounce",
         "client_country", "client_os", "client_browser",
     ] + hr_cols
@@ -388,7 +441,6 @@ def build_dim_date(flat: pd.DataFrame) -> pd.DataFrame:
 
     dates = flat["timestamp"].dropna().dt.normalize().drop_duplicates().sort_values()
     dim = pd.DataFrame({"date": dates}).reset_index(drop=True)
-    # Remove timezone info for clean date dimension
     dim["date"] = dim["date"].dt.tz_localize(None)
     dim["date_key"] = dim["date"].dt.strftime("%Y%m%d").astype(int)
     dim["year"] = dim["date"].dt.year
@@ -469,11 +521,25 @@ def main():
     log(f"  dim_page:       {len(dim_page):,} rows x {len(dim_page.columns)} cols")
     log(f"  dim_date:       {len(dim_date):,} rows x {len(dim_date.columns)} cols")
 
+    # Summary statistics
+    if not fact.empty and "time_on_page_sec" in fact.columns:
+        measurable = fact["time_on_page_sec"].notna()
+        log(f"  Time-on-page: {measurable.sum():,}/{len(fact):,} views measurable "
+            f"({measurable.sum()/len(fact)*100:.1f}%), "
+            f"median {fact.loc[measurable, 'time_on_page_sec'].median():.0f}s, "
+            f"mean {fact.loc[measurable, 'time_on_page_sec'].mean():.0f}s")
+
     if not agg_sess.empty:
         bounces = agg_sess["is_bounce"].sum()
-        log(f"  Session stats: {len(agg_sess):,} sessions, "
+        log(f"  Sessions: {len(agg_sess):,} total, "
             f"{bounces:,} bounces ({bounces/len(agg_sess)*100:.1f}%), "
             f"avg {agg_sess['page_view_count'].mean():.1f} pages/session")
+        if "engagement_time_sec" in agg_sess.columns:
+            non_bounce = agg_sess[~agg_sess["is_bounce"]]
+            if not non_bounce.empty:
+                log(f"  Engagement (non-bounce): "
+                    f"median {non_bounce['engagement_time_sec'].median():.0f}s, "
+                    f"mean {non_bounce['engagement_time_sec'].mean():.0f}s")
 
     # Step 6: Write Excel with multiple sheets
     log(f"Writing: {output_path}")
