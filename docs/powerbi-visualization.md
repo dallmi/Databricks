@@ -382,23 +382,24 @@ CALCULATE(
 
 ```dax
 Page Bounce Rate =
-VAR CurrentPage = SELECTEDVALUE(Pages[page_id])
-VAR EntrySessions =
-    CALCULATE(
-        COUNTROWS(Sessions),
-        FILTER(Sessions, Sessions[entry_page_id] = CurrentPage),
-        USERELATIONSHIP(Sessions[session_date], DateTable[date])
-    )
-VAR BounceEntries =
+DIVIDE(
     CALCULATE(
         COUNTROWS(Sessions),
         FILTER(Sessions,
-            Sessions[entry_page_id] = CurrentPage
-            && Sessions[is_bounce] = TRUE
+            Sessions[entry_page_id] = SELECTEDVALUE(Pages[page_id])
+            && Sessions[is_bounce] = TRUE()
         ),
         USERELATIONSHIP(Sessions[session_date], DateTable[date])
-    )
-RETURN DIVIDE(BounceEntries, EntrySessions, 0)
+    ),
+    CALCULATE(
+        COUNTROWS(Sessions),
+        FILTER(Sessions,
+            Sessions[entry_page_id] = SELECTEDVALUE(Pages[page_id])
+        ),
+        USERELATIONSHIP(Sessions[session_date], DateTable[date])
+    ),
+    0
+)
 ```
 
 > **Note**: `Page Bounce Rate` uses `SELECTEDVALUE` — it only works in visuals where a single page_id is in context (e.g., table rows or bar chart axis). In a card or KPI without page context it returns BLANK.
@@ -553,20 +554,20 @@ Because Sessions → Pages is inactive, use explicit FILTER:
 
 ```dax
 Entry Page Sessions =
-VAR CurrentPage = SELECTEDVALUE(Pages[page_id])
-RETURN
 CALCULATE(
     COUNTROWS(Sessions),
-    FILTER(Sessions, Sessions[entry_page_id] = CurrentPage),
+    FILTER(Sessions,
+        Sessions[entry_page_id] = SELECTEDVALUE(Pages[page_id])
+    ),
     USERELATIONSHIP(Sessions[session_date], DateTable[date])
 )
 
 Exit Page Sessions =
-VAR CurrentPage = SELECTEDVALUE(Pages[page_id])
-RETURN
 CALCULATE(
     COUNTROWS(Sessions),
-    FILTER(Sessions, Sessions[exit_page_id] = CurrentPage),
+    FILTER(Sessions,
+        Sessions[exit_page_id] = SELECTEDVALUE(Pages[page_id])
+    ),
     USERELATIONSHIP(Sessions[session_date], DateTable[date])
 )
 ```
@@ -816,20 +817,20 @@ VAR BounceEntries =
 RETURN DIVIDE(BounceEntries, EntrySessions, 0)
 
 Entry Page Sessions =
-VAR CurrentPage = SELECTEDVALUE(Pages[page_id])
-RETURN
 CALCULATE(
     COUNTROWS(Sessions),
-    FILTER(Sessions, Sessions[entry_page_id] = CurrentPage),
+    FILTER(Sessions,
+        Sessions[entry_page_id] = SELECTEDVALUE(Pages[page_id])
+    ),
     USERELATIONSHIP(Sessions[session_date], DateTable[date])
 )
 
 Exit Page Sessions =
-VAR CurrentPage = SELECTEDVALUE(Pages[page_id])
-RETURN
 CALCULATE(
     COUNTROWS(Sessions),
-    FILTER(Sessions, Sessions[exit_page_id] = CurrentPage),
+    FILTER(Sessions,
+        Sessions[exit_page_id] = SELECTEDVALUE(Pages[page_id])
+    ),
     USERELATIONSHIP(Sessions[session_date], DateTable[date])
 )
 
