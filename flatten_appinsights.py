@@ -5,17 +5,18 @@ a CDM-based star schema.
 Reads a CSV or XLSX file exported from Azure AppInsights, flattens the nested
 customDimensions JSON column, converts timestamps from UTC to CET, joins with
 HR snapshot data (hr_history.parquet) using temporal GPN matching, computes
-time-on-page and session-level engagement metrics, and produces:
-  1. A flat denormalized table (all relevant fields + HR dimensions)
-  2. A star schema: fact_page_view, agg_session, dim_page, dim_date
+time-on-page and session-level engagement metrics, and persists everything in
+a DuckDB database for incremental loading and ad-hoc analysis.
 
 Usage:
     python flatten_appinsights.py input_file.csv
     python flatten_appinsights.py input_file.xlsx
     python flatten_appinsights.py input_file.csv -o ./my_output/
     python flatten_appinsights.py input_file.csv --hr path/to/hr_history.parquet
+    python flatten_appinsights.py input_file.csv --db pageviews.duckdb
 
 Output (written to <input_dir>/output/ by default, override with -o):
+    pageviews.duckdb          -- persistent DuckDB with all tables
     fact_page_view.parquet    -- one row per page view
     agg_session.parquet       -- one row per session
     dim_page.parquet          -- page dimension (deduplicated)
@@ -24,6 +25,10 @@ Output (written to <input_dir>/output/ by default, override with -o):
 
 The script expects hr_history.parquet in ../SearchAnalytics/output/ by default
 (same convention as CampaignWe). Override with --hr flag.
+
+Incremental loading:
+    Running the script multiple times with different input files appends new
+    rows to the DuckDB (duplicates are skipped based on view_id).
 """
 
 import argparse
@@ -309,21 +314,14 @@ def compute_time_on_page(fact: pd.DataFrame) -> pd.DataFrame:
 
     df = fact.sort_values(["session_id", "timestamp"]).reset_index(drop=True)
 
-    # Next timestamp within the same session
     df["_next_ts"] = df.groupby("session_id")["timestamp"].shift(-1)
-
-    # Time-on-page in seconds
     df["time_on_page_sec"] = (df["_next_ts"] - df["timestamp"]).dt.total_seconds()
-
-    # Flag last page in session (no next view → not measurable)
     df["is_last_in_session"] = df["_next_ts"].isna()
 
-    # Cap at 30 minutes: treat longer gaps as inactive
     cap = TIME_ON_PAGE_CAP_SEC
     df.loc[df["time_on_page_sec"] > cap, "time_on_page_sec"] = None
 
     df = df.drop(columns=["_next_ts"])
-
     return df
 
 
@@ -340,9 +338,7 @@ def build_fact_page_view(flat: pd.DataFrame) -> pd.DataFrame:
     available = [c for c in fact_cols if c in flat.columns]
     fact = flat[available].copy()
 
-    # Compute time-on-page (engagement metric)
     fact = compute_time_on_page(fact)
-
     return fact
 
 
@@ -376,13 +372,10 @@ def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
     agg["entry_page_id"] = entry["page_id"].values
     agg["exit_page_id"] = exit_["page_id"].values
 
-    # Session duration: last view - first view (0 for bounces)
     agg["duration_sec"] = (
         (agg["session_end"] - agg["session_start"]).dt.total_seconds().round(0)
     )
 
-    # Engagement time: sum of measured time-on-page within the session
-    # (excludes last page and capped values — gives a conservative estimate)
     if "time_on_page_sec" in sorted_df.columns:
         engagement = (
             sorted_df.groupby("session_id")["time_on_page_sec"]
@@ -392,7 +385,6 @@ def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
         )
         agg = agg.merge(engagement, on="session_id", how="left")
 
-    # Avg time on page within session (excluding last page)
     if "time_on_page_sec" in sorted_df.columns:
         avg_top = (
             sorted_df[sorted_df["is_last_in_session"] == False]
@@ -404,13 +396,9 @@ def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
         )
         agg = agg.merge(avg_top, on="session_id", how="left")
 
-    # Bounce = session with only 1 page view
     agg["is_bounce"] = agg["page_view_count"] == 1
-
-    # Session date (date part of session_start, already in CET)
     agg["session_date"] = agg["session_start"].dt.normalize()
 
-    # HR columns from first pageView
     hr_cols = [c for c in fact.columns if c.startswith("hr_")]
     if hr_cols:
         hr_first = sorted_df.groupby("session_id")[hr_cols].first().reset_index()
@@ -461,6 +449,86 @@ def build_dim_date(flat: pd.DataFrame) -> pd.DataFrame:
                 "week", "day_of_week"]]
 
 
+def strip_tz(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove timezone info from datetime columns for Parquet/DuckDB storage."""
+    for col in df.select_dtypes(include=["datetimetz"]).columns:
+        df[col] = df[col].dt.tz_localize(None)
+    return df
+
+
+def persist_to_duckdb(db_path: Path, fact: pd.DataFrame, agg_sess: pd.DataFrame,
+                      dim_page: pd.DataFrame, dim_date: pd.DataFrame):
+    """Persist all tables to a DuckDB database file.
+
+    Uses INSERT OR IGNORE on view_id to support incremental loading:
+    re-running with new data appends only new rows.
+    """
+    log(f"Persisting to DuckDB: {db_path}")
+    con = duckdb.connect(str(db_path))
+
+    # -- fact_page_view: append new rows, skip duplicates by view_id --
+    con.register("fact_df", fact)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS fact_page_view AS
+        SELECT * FROM fact_df WHERE 1=0
+    """)
+    before = con.execute("SELECT COUNT(*) FROM fact_page_view").fetchone()[0]
+    con.execute("""
+        INSERT INTO fact_page_view
+        SELECT f.* FROM fact_df f
+        WHERE f.view_id NOT IN (SELECT view_id FROM fact_page_view)
+    """)
+    after = con.execute("SELECT COUNT(*) FROM fact_page_view").fetchone()[0]
+    new_rows = after - before
+    log(f"  fact_page_view: {new_rows:,} new rows added ({after:,} total)")
+
+    # -- agg_session: rebuild from all fact data for consistency --
+    # Sessions may span multiple input files, so always recompute
+    con.execute("DROP TABLE IF EXISTS agg_session")
+    con.register("agg_df", agg_sess)
+    con.execute("CREATE TABLE agg_session AS SELECT * FROM agg_df")
+    # Re-aggregate from the full fact table in DuckDB
+    full_fact = con.execute("SELECT * FROM fact_page_view").df()
+    if not full_fact.empty:
+        full_agg = build_agg_session(full_fact)
+        full_agg = strip_tz(full_agg)
+        con.execute("DROP TABLE IF EXISTS agg_session")
+        con.register("full_agg_df", full_agg)
+        con.execute("CREATE TABLE agg_session AS SELECT * FROM full_agg_df")
+        agg_count = con.execute("SELECT COUNT(*) FROM agg_session").fetchone()[0]
+        log(f"  agg_session:    {agg_count:,} sessions (rebuilt from all data)")
+
+    # -- dim_page: merge new pages --
+    con.register("dim_page_df", dim_page)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS dim_page AS
+        SELECT * FROM dim_page_df WHERE 1=0
+    """)
+    con.execute("""
+        INSERT INTO dim_page
+        SELECT d.* FROM dim_page_df d
+        WHERE d.page_id NOT IN (SELECT page_id FROM dim_page)
+    """)
+    page_count = con.execute("SELECT COUNT(*) FROM dim_page").fetchone()[0]
+    log(f"  dim_page:       {page_count:,} pages")
+
+    # -- dim_date: merge new dates --
+    con.register("dim_date_df", dim_date)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS dim_date AS
+        SELECT * FROM dim_date_df WHERE 1=0
+    """)
+    con.execute("""
+        INSERT INTO dim_date
+        SELECT d.* FROM dim_date_df d
+        WHERE d.date_key NOT IN (SELECT date_key FROM dim_date)
+    """)
+    date_count = con.execute("SELECT COUNT(*) FROM dim_date").fetchone()[0]
+    log(f"  dim_date:       {date_count:,} dates")
+
+    con.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Flatten AppInsights pageViews, join HR, produce star schema"
@@ -474,6 +542,10 @@ def main():
         "--hr",
         help="Path to hr_history.parquet (default: ../SearchAnalytics/output/hr_history.parquet)",
     )
+    parser.add_argument(
+        "--db",
+        help="DuckDB file path (default: <output_dir>/pageviews.duckdb)",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -481,9 +553,12 @@ def main():
         log(f"Error: File not found: {input_path}")
         sys.exit(1)
 
-    # Output directory: Parquet files + one Excel summary
+    # Output directory
     output_dir = Path(args.output_dir) if args.output_dir else input_path.parent / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # DuckDB path
+    db_path = Path(args.db) if args.db else output_dir / "pageviews.duckdb"
 
     # Resolve HR parquet path (same convention as CampaignWe)
     if args.hr:
@@ -548,29 +623,25 @@ def main():
                     f"median {non_bounce['engagement_time_sec'].median():.0f}s, "
                     f"mean {non_bounce['engagement_time_sec'].mean():.0f}s")
 
-    # Step 6: Write Parquet files (primary output)
+    # Strip timezone for storage (all timestamps are already CET)
+    fact = strip_tz(fact)
+    agg_sess = strip_tz(agg_sess)
+
+    # Step 6: Persist to DuckDB (incremental)
+    persist_to_duckdb(db_path, fact, agg_sess, dim_page, dim_date)
+
+    # Step 7: Export Parquet files
     log(f"Writing Parquet to: {output_dir}/")
-    # Strip timezone for Parquet (pyarrow handles tz-aware inconsistently)
-    for df_name, df_obj in [("fact_page_view", fact), ("agg_session", agg_sess)]:
-        for col in df_obj.select_dtypes(include=["datetimetz"]).columns:
-            df_obj[col] = df_obj[col].dt.tz_localize(None)
-
     fact.to_parquet(output_dir / "fact_page_view.parquet", index=False, engine="pyarrow")
-    log(f"  fact_page_view.parquet: {len(fact):,} rows")
-
     if not agg_sess.empty:
         agg_sess.to_parquet(output_dir / "agg_session.parquet", index=False, engine="pyarrow")
-        log(f"  agg_session.parquet:    {len(agg_sess):,} rows")
-
     if not dim_page.empty:
         dim_page.to_parquet(output_dir / "dim_page.parquet", index=False, engine="pyarrow")
-        log(f"  dim_page.parquet:       {len(dim_page):,} rows")
-
     if not dim_date.empty:
         dim_date.to_parquet(output_dir / "dim_date.parquet", index=False, engine="pyarrow")
-        log(f"  dim_date.parquet:       {len(dim_date):,} rows")
+    log("  Parquet files written")
 
-    # Step 7: Write Excel summary (all sheets in one file, for quick review)
+    # Step 8: Excel summary for quick review
     xlsx_path = output_dir / f"{input_path.stem}_cdm.xlsx"
     log(f"Writing Excel to: {xlsx_path}")
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
@@ -584,6 +655,9 @@ def main():
             dim_date.to_excel(writer, sheet_name="dim_date", index=False)
 
     log(f"Done. Output in {output_dir}/")
+    log(f"  DuckDB:  {db_path}")
+    log(f"  Parquet: {output_dir}/*.parquet")
+    log(f"  Excel:   {xlsx_path}")
 
 
 if __name__ == "__main__":
