@@ -342,10 +342,10 @@ CALCULATE(
 )
 
 Views MoM Change % =
-VAR Current = [Total Views]
-VAR Previous = [Views Previous Month]
+VAR CurrentVal = [Total Views]
+VAR PreviousVal = [Views Previous Month]
 RETURN
-DIVIDE(Current - Previous, Previous, 0)
+DIVIDE(CurrentVal - PreviousVal, PreviousVal, 0)
 
 UV Previous Month =
 CALCULATE(
@@ -354,10 +354,10 @@ CALCULATE(
 )
 
 UV MoM Change % =
-VAR Current = [Unique Visitors]
-VAR Previous = [UV Previous Month]
+VAR CurrentVal = [Unique Visitors]
+VAR PreviousVal = [UV Previous Month]
 RETURN
-DIVIDE(Current - Previous, Previous, 0)
+DIVIDE(CurrentVal - PreviousVal, PreviousVal, 0)
 
 Views Previous Week =
 CALCULATE(
@@ -366,10 +366,10 @@ CALCULATE(
 )
 
 Views WoW Change % =
-VAR Current = [Total Views]
-VAR Previous = [Views Previous Week]
+VAR CurrentVal = [Total Views]
+VAR PreviousVal = [Views Previous Week]
 RETURN
-DIVIDE(Current - Previous, Previous, 0)
+DIVIDE(CurrentVal - PreviousVal, PreviousVal, 0)
 
 Running Total Views =
 CALCULATE(
@@ -769,25 +769,25 @@ Views Previous Month =
 CALCULATE([Total Views], DATEADD(DateTable[date], -1, MONTH))
 
 Views MoM Change % =
-VAR Current = [Total Views]
-VAR Previous = [Views Previous Month]
-RETURN DIVIDE(Current - Previous, Previous, 0)
+VAR CurrentVal = [Total Views]
+VAR PreviousVal = [Views Previous Month]
+RETURN DIVIDE(CurrentVal - PreviousVal, PreviousVal, 0)
 
 UV Previous Month =
 CALCULATE([Unique Visitors], DATEADD(DateTable[date], -1, MONTH))
 
 UV MoM Change % =
-VAR Current = [Unique Visitors]
-VAR Previous = [UV Previous Month]
-RETURN DIVIDE(Current - Previous, Previous, 0)
+VAR CurrentVal = [Unique Visitors]
+VAR PreviousVal = [UV Previous Month]
+RETURN DIVIDE(CurrentVal - PreviousVal, PreviousVal, 0)
 
 Views Previous Week =
 CALCULATE([Total Views], DATEADD(DateTable[date], -7, DAY))
 
 Views WoW Change % =
-VAR Current = [Total Views]
-VAR Previous = [Views Previous Week]
-RETURN DIVIDE(Current - Previous, Previous, 0)
+VAR CurrentVal = [Total Views]
+VAR PreviousVal = [Views Previous Week]
+RETURN DIVIDE(CurrentVal - PreviousVal, PreviousVal, 0)
 
 Running Total Views =
 CALCULATE([Total Views], DATESYTD(DateTable[date]))
