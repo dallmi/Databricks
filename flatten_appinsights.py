@@ -1,22 +1,30 @@
 """
-Flatten AppInsights pageViews export and transform to CDM-based star schema.
+Flatten AppInsights pageViews export, join with HR snapshots, and produce
+a CDM-based star schema.
 
-Reads a CSV or XLSX file exported from Azure AppInsights,
-flattens the nested customDimensions JSON column, and produces:
-  1. A flat denormalized table (all relevant fields)
-  2. A star schema with fact_page_view, dim_page, and dim_date sheets
+Reads a CSV or XLSX file exported from Azure AppInsights, flattens the nested
+customDimensions JSON column, joins with HR snapshot data (hr_history.parquet)
+using temporal GPN matching, and produces:
+  1. A flat denormalized table (all relevant fields + HR dimensions)
+  2. A star schema with fact_page_view, dim_page, dim_date, and dim_employee sheets
 
 Usage:
     python flatten_appinsights.py input_file.csv
     python flatten_appinsights.py input_file.xlsx
     python flatten_appinsights.py input_file.csv -o output.xlsx
+    python flatten_appinsights.py input_file.csv --hr path/to/hr_history.parquet
+
+The script expects hr_history.parquet in ../SearchAnalytics/output/ by default
+(same convention as CampaignWe). Override with --hr flag.
 """
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 
 
@@ -53,6 +61,19 @@ DIM_PAGE_COLUMNS = {
     "cp_PublishingDate": "publishing_date",
 }
 
+# HR fields to bring in from hr_history.parquet (src -> alias)
+HR_FIELD_MAP = {
+    "gcrs_division_desc": "hr_division",
+    "gcrs_unit_desc": "hr_unit",
+    "gcrs_area_desc": "hr_area",
+    "gcrs_sector_desc": "hr_sector",
+    "gcrs_segment_desc": "hr_segment",
+    "work_location_country": "hr_country",
+    "work_location_region": "hr_region",
+    "job_title": "hr_job_title",
+    "management_level": "hr_management_level",
+}
+
 # Columns to drop entirely (no analytical value)
 DROP_COLUMNS = [
     "appId", "iKey", "sdkVersion", "itemCount", "itemType",
@@ -64,12 +85,12 @@ DROP_COLUMNS = [
 ]
 
 
-def parse_custom_dimensions(value):
-    """Parse a customDimensions JSON string into a flat dict.
+def log(msg):
+    print(msg)
 
-    Handles the nested CustomProps structure found in AppInsights pageViews.
-    Returns an empty dict if parsing fails.
-    """
+
+def parse_custom_dimensions(value):
+    """Parse a customDimensions JSON string into a flat dict."""
     if pd.isna(value) or not isinstance(value, str) or not value.strip():
         return {}
 
@@ -82,7 +103,6 @@ def parse_custom_dimensions(value):
             return {}
 
     flat = {}
-
     if isinstance(parsed, dict):
         custom_props = parsed.pop("CustomProps", None)
         for key, val in parsed.items():
@@ -98,7 +118,6 @@ def parse_custom_dimensions(value):
                         flat[f"cp_{key}"] = val
             except json.JSONDecodeError:
                 flat["cp_raw"] = custom_props
-
     return flat
 
 
@@ -114,11 +133,7 @@ def read_input(file_path: Path) -> pd.DataFrame:
 
 
 def flatten_appinsights(df: pd.DataFrame) -> pd.DataFrame:
-    """Flatten an AppInsights pageViews DataFrame.
-
-    Expands the customDimensions JSON column into separate columns
-    prefixed with cp_ for CustomProps fields.
-    """
+    """Expand the customDimensions JSON column into separate cp_ columns."""
     cd_col = None
     for col in df.columns:
         if col.lower().replace(" ", "") == "customdimensions":
@@ -126,7 +141,7 @@ def flatten_appinsights(df: pd.DataFrame) -> pd.DataFrame:
             break
 
     if cd_col is None:
-        print("Warning: No 'customDimensions' column found. Returning data as-is.")
+        log("Warning: No 'customDimensions' column found. Returning data as-is.")
         return df
 
     expanded = df[cd_col].apply(parse_custom_dimensions)
@@ -134,54 +149,158 @@ def flatten_appinsights(df: pd.DataFrame) -> pd.DataFrame:
 
     result = df.drop(columns=[cd_col]).reset_index(drop=True)
     result = pd.concat([result, expanded_df.reset_index(drop=True)], axis=1)
-
     return result
 
 
-def build_flat_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Build a single denormalized table with CDM-friendly column names.
-
-    Keeps all relevant fields, drops noise columns, renames to snake_case.
-    """
+def build_clean_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop noise columns, rename to CDM-friendly snake_case, parse dates."""
     flat = df.copy()
 
-    # Drop columns that exist in the dataframe
     cols_to_drop = [c for c in DROP_COLUMNS if c in flat.columns]
     flat = flat.drop(columns=cols_to_drop)
 
-    # Rename columns that exist
     rename_map = {}
     rename_map.update(FACT_COLUMNS)
     rename_map.update(DIM_PAGE_COLUMNS)
     existing_renames = {k: v for k, v in rename_map.items() if k in flat.columns}
     flat = flat.rename(columns=existing_renames)
 
-    # Parse timestamp
     if "timestamp" in flat.columns:
         flat["timestamp"] = pd.to_datetime(flat["timestamp"], errors="coerce")
-
-    # Parse publishing_date
     if "publishing_date" in flat.columns:
         flat["publishing_date"] = pd.to_datetime(
             flat["publishing_date"], errors="coerce"
         )
 
+    # Normalize GPN: strip .0 suffix from Excel floats, zero-pad to 8 digits
+    if "gpn" in flat.columns:
+        flat["gpn"] = (
+            flat["gpn"]
+            .astype(str)
+            .str.replace(r"\.0$", "", regex=True)
+            .str.strip()
+            .str.zfill(8)
+        )
+        flat.loc[flat["gpn"].isin(["", "nan", "None", "00000000"]), "gpn"] = None
+
     return flat
 
 
+def join_hr_data(clean_df: pd.DataFrame, hr_path: Path) -> pd.DataFrame:
+    """Temporal join of pageViews with HR snapshots via GPN using DuckDB.
+
+    For each pageView, finds the most recent HR snapshot at or before the
+    event month. Falls back to the earliest snapshot after the event if
+    no prior snapshot exists.
+    """
+    log(f"Loading HR data: {hr_path}")
+    con = duckdb.connect()
+
+    # Register the pageViews dataframe
+    con.register("pageviews_df", clean_df)
+    con.execute("CREATE TABLE pageviews AS SELECT * FROM pageviews_df")
+
+    # Load HR history
+    con.execute(f"""
+        CREATE TABLE hr_history AS
+        SELECT * FROM read_parquet('{hr_path}')
+    """)
+
+    row_count = con.execute("SELECT COUNT(*) FROM hr_history").fetchone()[0]
+    gpn_count = con.execute("SELECT COUNT(DISTINCT gpn) FROM hr_history").fetchone()[0]
+    snap_count = con.execute(
+        "SELECT COUNT(DISTINCT (snapshot_year, snapshot_month)) FROM hr_history"
+    ).fetchone()[0]
+    log(f"  Loaded hr_history: {row_count:,} rows, {gpn_count:,} GPNs, {snap_count} snapshot(s)")
+
+    # Determine available HR fields
+    hr_cols = con.execute("DESCRIBE hr_history").df()["column_name"].tolist()
+    avail_hr = {src: alias for src, alias in HR_FIELD_MAP.items() if src in hr_cols}
+    log(f"  HR fields to join: {list(avail_hr.values())}")
+
+    if not avail_hr:
+        log("  WARNING: No matching HR fields found. Skipping HR join.")
+        con.close()
+        return clean_df
+
+    # Build HR SELECT and COALESCE expressions
+    hr_select_parts = [f"h.{src} as {alias}" for src, alias in avail_hr.items()]
+    hr_select_sql = ", ".join(hr_select_parts)
+
+    hr_coalesce_parts = [
+        f"COALESCE(hr_exact.{alias}, hr_fallback.{alias}) as {alias}"
+        for _, alias in avail_hr.items()
+    ]
+    hr_coalesce_sql = ", ".join(hr_coalesce_parts)
+
+    # GPN expression: cast and normalize
+    gpn_expr = "LPAD(REGEXP_REPLACE(CAST(p.gpn AS VARCHAR), '\\.0$', ''), 8, '0')"
+
+    # Match rate check
+    match_stats = con.execute(f"""
+        SELECT
+            COUNT(*) as total,
+            COUNT(CASE WHEN p.gpn IS NOT NULL THEN 1 END) as has_gpn,
+            COUNT(DISTINCT p.gpn) FILTER (WHERE p.gpn IS NOT NULL) as unique_gpns,
+            COUNT(DISTINCT p.gpn) FILTER (
+                WHERE p.gpn IS NOT NULL
+                AND CAST(p.gpn AS VARCHAR) IN (SELECT DISTINCT CAST(gpn AS VARCHAR) FROM hr_history)
+            ) as matched_gpns
+        FROM pageviews p
+    """).fetchone()
+    log(f"  Match stats: {match_stats[1]:,}/{match_stats[0]:,} rows have GPN, "
+        f"{match_stats[3]:,}/{match_stats[2]:,} unique GPNs found in HR data")
+
+    # Temporal join via LEFT JOIN LATERAL
+    result = con.execute(f"""
+        SELECT
+            p.*,
+            {hr_coalesce_sql}
+        FROM pageviews p
+        LEFT JOIN LATERAL (
+            SELECT {hr_select_sql}
+            FROM hr_history h
+            WHERE CAST(h.gpn AS VARCHAR) = {gpn_expr}
+              AND (h.snapshot_year * 100 + h.snapshot_month)
+                  <= (YEAR(p.timestamp) * 100 + MONTH(p.timestamp))
+            ORDER BY h.snapshot_year DESC, h.snapshot_month DESC
+            LIMIT 1
+        ) hr_exact ON true
+        LEFT JOIN LATERAL (
+            SELECT {hr_select_sql}
+            FROM hr_history h
+            WHERE CAST(h.gpn AS VARCHAR) = {gpn_expr}
+              AND (h.snapshot_year * 100 + h.snapshot_month)
+                  > (YEAR(p.timestamp) * 100 + MONTH(p.timestamp))
+            ORDER BY h.snapshot_year ASC, h.snapshot_month ASC
+            LIMIT 1
+        ) hr_fallback ON true
+    """).df()
+
+    hr_filled = result[list(avail_hr.values())].notna().any(axis=1).sum()
+    log(f"  HR enrichment: {hr_filled:,}/{len(result):,} rows matched with HR data")
+
+    con.close()
+    return result
+
+
 def build_fact_page_view(flat: pd.DataFrame) -> pd.DataFrame:
-    """Extract the fact table from the flat denormalized table."""
+    """Extract the fact table from the enriched flat table."""
     fact_cols = [
         "view_id", "timestamp", "page_id", "user_id", "session_id",
         "duration_ms", "referrer_url", "client_os", "client_browser",
         "client_country", "email", "gpn",
     ]
+    # Add any HR columns that are present
+    hr_cols = [c for c in flat.columns if c.startswith("hr_")]
+    fact_cols.extend(hr_cols)
+
     available = [c for c in fact_cols if c in flat.columns]
     return flat[available].copy()
 
 
 def build_dim_page(flat: pd.DataFrame) -> pd.DataFrame:
-    """Extract the page dimension from the flat table (deduplicated)."""
+    """Extract the page dimension (deduplicated)."""
     dim_cols = [
         "page_id", "page_name", "page_url", "site_id", "site_name",
         "content_owner", "content_type", "theme", "topic",
@@ -191,12 +310,11 @@ def build_dim_page(flat: pd.DataFrame) -> pd.DataFrame:
     if not available or "page_id" not in flat.columns:
         return pd.DataFrame()
 
-    dim = flat[available].drop_duplicates(subset=["page_id"]).reset_index(drop=True)
-    return dim
+    return flat[available].drop_duplicates(subset=["page_id"]).reset_index(drop=True)
 
 
 def build_dim_date(flat: pd.DataFrame) -> pd.DataFrame:
-    """Build a date dimension from the timestamps in the fact data."""
+    """Build a date dimension from timestamps."""
     if "timestamp" not in flat.columns:
         return pd.DataFrame()
 
@@ -216,60 +334,80 @@ def build_dim_date(flat: pd.DataFrame) -> pd.DataFrame:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Flatten AppInsights pageViews export to CDM star schema"
+        description="Flatten AppInsights pageViews, join HR, produce star schema"
     )
     parser.add_argument("input", help="Path to CSV or XLSX file from AppInsights")
     parser.add_argument(
         "-o", "--output",
         help="Output Excel file path (default: <input>_cdm.xlsx)",
     )
+    parser.add_argument(
+        "--hr",
+        help="Path to hr_history.parquet (default: ../SearchAnalytics/output/hr_history.parquet)",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
     if not input_path.exists():
-        print(f"Error: File not found: {input_path}")
+        log(f"Error: File not found: {input_path}")
         sys.exit(1)
 
     output_path = Path(args.output) if args.output else input_path.with_name(
         f"{input_path.stem}_cdm.xlsx"
     )
 
+    # Resolve HR parquet path (same convention as CampaignWe)
+    if args.hr:
+        hr_path = Path(args.hr)
+    else:
+        hr_path = input_path.parent.parent / "SearchAnalytics" / "output" / "hr_history.parquet"
+
+    if not hr_path.exists():
+        log(f"Error: HR history file not found: {hr_path}")
+        log("  Run process_hr_history.py in SearchAnalytics first,")
+        log("  or specify the path with --hr /path/to/hr_history.parquet")
+        sys.exit(1)
+
     # Step 1: Read raw data
-    print(f"Reading: {input_path}")
+    log(f"Reading: {input_path}")
     raw_df = read_input(input_path)
-    print(f"  Raw: {len(raw_df)} rows, {len(raw_df.columns)} columns")
+    log(f"  Raw: {len(raw_df)} rows, {len(raw_df.columns)} columns")
 
     # Step 2: Flatten customDimensions JSON
-    print("Flattening customDimensions...")
+    log("Flattening customDimensions...")
     expanded_df = flatten_appinsights(raw_df)
     cp_cols = [c for c in expanded_df.columns if c.startswith("cp_")]
-    print(f"  Expanded: {len(expanded_df.columns)} columns ({len(cp_cols)} from CustomProps)")
+    log(f"  Expanded: {len(expanded_df.columns)} columns ({len(cp_cols)} from CustomProps)")
 
-    # Step 3: Build CDM-friendly flat table
-    print("Building CDM flat table...")
-    flat = build_flat_table(expanded_df)
+    # Step 3: Clean up column names, parse dates, normalize GPN
+    log("Building clean table...")
+    clean = build_clean_table(expanded_df)
 
-    # Step 4: Build star schema
-    print("Building star schema...")
-    fact = build_fact_page_view(flat)
-    dim_page = build_dim_page(flat)
-    dim_date = build_dim_date(flat)
+    # Step 4: Join with HR snapshots (temporal GPN match)
+    log("Joining with HR data...")
+    enriched = join_hr_data(clean, hr_path)
 
-    print(f"  fact_page_view: {len(fact)} rows x {len(fact.columns)} cols")
-    print(f"  dim_page:       {len(dim_page)} rows x {len(dim_page.columns)} cols")
-    print(f"  dim_date:       {len(dim_date)} rows x {len(dim_date.columns)} cols")
+    # Step 5: Build star schema
+    log("Building star schema...")
+    fact = build_fact_page_view(enriched)
+    dim_page = build_dim_page(enriched)
+    dim_date = build_dim_date(enriched)
 
-    # Step 5: Write Excel with multiple sheets
-    print(f"Writing: {output_path}")
+    log(f"  fact_page_view: {len(fact)} rows x {len(fact.columns)} cols")
+    log(f"  dim_page:       {len(dim_page)} rows x {len(dim_page.columns)} cols")
+    log(f"  dim_date:       {len(dim_date)} rows x {len(dim_date.columns)} cols")
+
+    # Step 6: Write Excel with multiple sheets
+    log(f"Writing: {output_path}")
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        flat.to_excel(writer, sheet_name="flat_all", index=False)
+        enriched.to_excel(writer, sheet_name="flat_all", index=False)
         fact.to_excel(writer, sheet_name="fact_page_view", index=False)
         if not dim_page.empty:
             dim_page.to_excel(writer, sheet_name="dim_page", index=False)
         if not dim_date.empty:
             dim_date.to_excel(writer, sheet_name="dim_date", index=False)
 
-    print("Done. Sheets: flat_all, fact_page_view, dim_page, dim_date")
+    log(f"Done. Sheets: flat_all, fact_page_view, dim_page, dim_date")
 
 
 if __name__ == "__main__":
