@@ -12,8 +12,15 @@ time-on-page and session-level engagement metrics, and produces:
 Usage:
     python flatten_appinsights.py input_file.csv
     python flatten_appinsights.py input_file.xlsx
-    python flatten_appinsights.py input_file.csv -o output.xlsx
+    python flatten_appinsights.py input_file.csv -o ./my_output/
     python flatten_appinsights.py input_file.csv --hr path/to/hr_history.parquet
+
+Output (written to <input_dir>/output/ by default, override with -o):
+    fact_page_view.parquet    -- one row per page view
+    agg_session.parquet       -- one row per session
+    dim_page.parquet          -- page dimension (deduplicated)
+    dim_date.parquet          -- date dimension
+    <input>_cdm.xlsx          -- all sheets in one Excel file for review
 
 The script expects hr_history.parquet in ../SearchAnalytics/output/ by default
 (same convention as CampaignWe). Override with --hr flag.
@@ -460,8 +467,8 @@ def main():
     )
     parser.add_argument("input", help="Path to CSV or XLSX file from AppInsights")
     parser.add_argument(
-        "-o", "--output",
-        help="Output Excel file path (default: <input>_cdm.xlsx)",
+        "-o", "--output-dir",
+        help="Output directory (default: <input_dir>/output/)",
     )
     parser.add_argument(
         "--hr",
@@ -474,9 +481,9 @@ def main():
         log(f"Error: File not found: {input_path}")
         sys.exit(1)
 
-    output_path = Path(args.output) if args.output else input_path.with_name(
-        f"{input_path.stem}_cdm.xlsx"
-    )
+    # Output directory: Parquet files + one Excel summary
+    output_dir = Path(args.output_dir) if args.output_dir else input_path.parent / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Resolve HR parquet path (same convention as CampaignWe)
     if args.hr:
@@ -541,9 +548,32 @@ def main():
                     f"median {non_bounce['engagement_time_sec'].median():.0f}s, "
                     f"mean {non_bounce['engagement_time_sec'].mean():.0f}s")
 
-    # Step 6: Write Excel with multiple sheets
-    log(f"Writing: {output_path}")
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+    # Step 6: Write Parquet files (primary output)
+    log(f"Writing Parquet to: {output_dir}/")
+    # Strip timezone for Parquet (pyarrow handles tz-aware inconsistently)
+    for df_name, df_obj in [("fact_page_view", fact), ("agg_session", agg_sess)]:
+        for col in df_obj.select_dtypes(include=["datetimetz"]).columns:
+            df_obj[col] = df_obj[col].dt.tz_localize(None)
+
+    fact.to_parquet(output_dir / "fact_page_view.parquet", index=False, engine="pyarrow")
+    log(f"  fact_page_view.parquet: {len(fact):,} rows")
+
+    if not agg_sess.empty:
+        agg_sess.to_parquet(output_dir / "agg_session.parquet", index=False, engine="pyarrow")
+        log(f"  agg_session.parquet:    {len(agg_sess):,} rows")
+
+    if not dim_page.empty:
+        dim_page.to_parquet(output_dir / "dim_page.parquet", index=False, engine="pyarrow")
+        log(f"  dim_page.parquet:       {len(dim_page):,} rows")
+
+    if not dim_date.empty:
+        dim_date.to_parquet(output_dir / "dim_date.parquet", index=False, engine="pyarrow")
+        log(f"  dim_date.parquet:       {len(dim_date):,} rows")
+
+    # Step 7: Write Excel summary (all sheets in one file, for quick review)
+    xlsx_path = output_dir / f"{input_path.stem}_cdm.xlsx"
+    log(f"Writing Excel to: {xlsx_path}")
+    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
         enriched.to_excel(writer, sheet_name="flat_all", index=False)
         fact.to_excel(writer, sheet_name="fact_page_view", index=False)
         if not agg_sess.empty:
@@ -553,7 +583,7 @@ def main():
         if not dim_date.empty:
             dim_date.to_excel(writer, sheet_name="dim_date", index=False)
 
-    log("Done. Sheets: flat_all, fact_page_view, agg_session, dim_page, dim_date")
+    log(f"Done. Output in {output_dir}/")
 
 
 if __name__ == "__main__":
