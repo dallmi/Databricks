@@ -1,0 +1,42 @@
+// EXPORT-Query für flatten_appinsights.py
+// Gibt customDimensions als JSON-String unverändert zurück, damit die Python-
+// Pipeline ihre eigene Flatten-Logik anwenden kann.
+//
+// Vorgehen:
+// 1. Zeitfenster anpassen (max. ~30 Tage / 65k rows pro Export-Lauf).
+// 2. Im Azure Portal "Export -> CSV (all columns)" wählen.
+// 3. CSV in Databricks/input/ ablegen.
+// 4. python scripts/flatten_appinsights.py
+
+let StartTime = datetime(2026-03-01);
+let EndTime   = datetime(2026-04-01);
+
+pageViews
+| where timestamp between (StartTime .. EndTime)
+| project
+    timestamp,
+    id,
+    name,
+    url,
+    duration,
+    performanceBucket,
+    itemType,
+    customDimensions,         // <-- als JSON-String belassen
+    operation_Name,
+    operation_Id,
+    operation_ParentId,
+    session_Id,
+    user_Id,
+    client_Type,
+    client_Model,
+    client_OS,
+    client_IP,
+    client_City,
+    client_StateOrProvince,
+    client_CountryOrRegion,
+    client_Browser,
+    appId,
+    iKey,
+    sdkVersion,
+    itemCount
+| order by timestamp asc

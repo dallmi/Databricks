@@ -1,0 +1,27 @@
+// Views einer Site, gefiltert per SiteID oder SiteName.
+// Aggregation: Total Views, Unique Users, Unique Sessions, Tracking-ID-Coverage.
+
+let TargetSiteName = "Home";   // oder leer lassen und SiteID nutzen
+let TargetSiteID   = "";       // z.B. "b96c5556-dc25-4f9a-a547-fec7418a7850"
+let StartTime = ago(30d);
+let EndTime   = now();
+
+pageViews
+| where timestamp between (StartTime .. EndTime)
+| extend cp = parse_json(tostring(parse_json(tostring(customDimensions)).CustomProps))
+| extend SiteID   = tostring(cp.SiteID),
+         SiteName = tostring(cp.SiteName),
+         PageName = tostring(cp.PageName),
+         PageURL  = tostring(cp.PageURL),
+         CammsTrackingID = tostring(cp.CammsTrackingID)
+| where (isempty(TargetSiteName) or SiteName =~ TargetSiteName)
+    and (isempty(TargetSiteID)   or SiteID   =~ TargetSiteID)
+| summarize
+    views          = count(),
+    unique_users   = dcount(user_Id),
+    unique_sessions= dcount(session_Id),
+    with_tracking  = countif(isnotempty(CammsTrackingID)),
+    pct_tracking   = round(100.0 * countif(isnotempty(CammsTrackingID)) / count(), 1),
+    distinct_pages = dcount(PageURL)
+    by SiteName, SiteID
+| order by views desc

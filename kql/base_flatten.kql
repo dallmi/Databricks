@@ -1,0 +1,42 @@
+// Base flatten — pageViews mit allen CustomProps als eigene Spalten.
+// Zeitfilter und ggf. PageURL-Filter vor dem Export anpassen.
+
+pageViews
+| where timestamp between (datetime(2026-03-01) .. datetime(2026-04-01))
+| extend _cd = parse_json(tostring(customDimensions))
+| extend cp  = parse_json(tostring(_cd.CustomProps))
+| project
+    timestamp,
+    view_id           = id,
+    name,
+    url,
+    duration,
+    performanceBucket,
+    session_Id,
+    user_Id,
+    operation_Name,
+    client_Type,
+    client_OS,
+    client_Browser,
+    client_CountryOrRegion,
+    client_StateOrProvince,
+    client_City,
+    SiteID            = tostring(cp.SiteID),
+    SiteName          = tostring(cp.SiteName),
+    PageId            = tostring(cp.PageId),
+    PageName          = tostring(cp.PageName),
+    PageStatus        = tostring(cp.PageStatus),
+    PageURL           = tostring(cp.PageURL),
+    PublishingDate    = tostring(cp.PublishingDate),
+    CammsTrackingID   = tostring(cp.CammsTrackingID),
+    ContentOwner      = tostring(cp.ContentOwner),
+    ContentType       = tostring(cp.ContentType),
+    NewsCategory      = tostring(cp.NewsCategory),
+    Theme             = tostring(cp.Theme),
+    Topic             = tostring(cp.Topic),
+    TargetOrganisation = tostring(cp.TargetOrganisation),
+    TargetRegion      = tostring(cp.TargetRegion),
+    GPN               = tostring(cp.GPN),
+    Email             = tostring(cp.Email),
+    refUri            = tostring(cp.refUri)
+| order by timestamp desc

@@ -1,0 +1,38 @@
+// Views per CammsTrackingID — split in CPLAN-Komponenten:
+// CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL  (z.B. QRREP-0000058-240709-0000060-EMI)
+
+let StartTime = ago(90d);
+let EndTime   = now();
+// Filter optional setzen, leer = alle:
+let FilterTrackingID = "";          // exakte ID
+let FilterPackID     = "";          // z.B. "QRREP-0000058"
+let FilterCluster    = "";          // z.B. "QRREP"
+let FilterChannel    = "";          // z.B. "EMI" (Email)
+
+pageViews
+| where timestamp between (StartTime .. EndTime)
+| extend cp = parse_json(tostring(parse_json(tostring(customDimensions)).CustomProps))
+| extend CammsTrackingID = tostring(cp.CammsTrackingID)
+| where isnotempty(CammsTrackingID)
+| extend parts = split(CammsTrackingID, "-")
+| extend
+    tracking_cluster_id      = tostring(parts[0]),
+    tracking_pack_number     = tostring(parts[1]),
+    tracking_pub_date        = tostring(parts[2]),
+    tracking_activity_number = tostring(parts[3]),
+    tracking_channel_abbr    = tostring(parts[4])
+| extend tracking_pack_id = strcat(tracking_cluster_id, "-", tracking_pack_number)
+| where (isempty(FilterTrackingID) or CammsTrackingID    =~ FilterTrackingID)
+    and (isempty(FilterPackID)     or tracking_pack_id   =~ FilterPackID)
+    and (isempty(FilterCluster)    or tracking_cluster_id=~ FilterCluster)
+    and (isempty(FilterChannel)    or tracking_channel_abbr =~ FilterChannel)
+| project
+    timestamp, view_id = id, session_Id, user_Id,
+    PageName = tostring(cp.PageName),
+    SiteName = tostring(cp.SiteName),
+    PageURL  = tostring(cp.PageURL),
+    CammsTrackingID,
+    tracking_pack_id,
+    tracking_cluster_id, tracking_pack_number, tracking_pub_date,
+    tracking_activity_number, tracking_channel_abbr
+| order by timestamp desc

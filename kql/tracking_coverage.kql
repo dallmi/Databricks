@@ -1,0 +1,21 @@
+// Wieviel % der PageViews tragen eine CammsTrackingID, aufgeschlüsselt nach Site.
+// Hilft zu identifizieren, welche Sites/Pages das Tracking sauber befüllen.
+
+let StartTime = ago(30d);
+let EndTime   = now();
+
+pageViews
+| where timestamp between (StartTime .. EndTime)
+| extend cp = parse_json(tostring(parse_json(tostring(customDimensions)).CustomProps))
+| extend SiteName        = tostring(cp.SiteName),
+         CammsTrackingID = tostring(cp.CammsTrackingID),
+         tracking_channel_abbr = tostring(split(tostring(cp.CammsTrackingID), "-")[4])
+| summarize
+    views         = count(),
+    with_tid      = countif(isnotempty(CammsTrackingID)),
+    distinct_tids = dcount(CammsTrackingID),
+    channels      = make_set(tracking_channel_abbr, 20)
+    by SiteName
+| extend pct_with_tid = round(100.0 * with_tid / views, 1)
+| project SiteName, views, with_tid, pct_with_tid, distinct_tids, channels
+| order by views desc
