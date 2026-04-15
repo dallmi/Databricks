@@ -99,8 +99,13 @@ DROP_COLUMNS = [
     "client_IP", "client_Type", "client_Model",
     "performanceBucket", "name", "url",
     "client_City", "client_StateOrProvince",
-    "cp_CommsTrackingID", "cp_NewsCategory",
+    "cp_NewsCategory",
 ]
+
+# CammsTrackingID join key — links page views with CPLAN packs/clusters/channels
+# and with the iMEP email channel. See CPLAN/pipeline/docs/tracking-id.md.
+# Source CSV may spell the field "CammsTrackingID" or "CommsTrackingID".
+TRACKING_ID_SOURCE_COLS = ["cp_CammsTrackingID", "cp_CommsTrackingID"]
 
 TIMEZONE = "Europe/Berlin"
 TIME_ON_PAGE_CAP_SEC = 30 * 60
@@ -288,6 +293,52 @@ def build_clean_table(df: pd.DataFrame) -> pd.DataFrame:
         )
         flat.loc[flat["gpn"].isin(["", "nan", "None", "00000000"]), "gpn"] = None
 
+    flat = parse_tracking_id(flat)
+
+    return flat
+
+
+def parse_tracking_id(flat: pd.DataFrame) -> pd.DataFrame:
+    """Consolidate CammsTrackingID/CommsTrackingID and split into components.
+
+    Format: <cluster>-<pack_number>-<YYMMDD>-<activity_number>-<channel_abbr>
+    Example: QRREP-0000058-240709-0000060-EMI
+
+    Adds columns: tracking_id, tracking_cluster_id, tracking_pack_number,
+    tracking_pub_date, tracking_activity_number, tracking_channel_abbr,
+    tracking_pack_id (cluster + pack_number).
+    """
+    sources = [c for c in TRACKING_ID_SOURCE_COLS if c in flat.columns]
+    if not sources:
+        return flat
+
+    raw = flat[sources[0]].astype("string")
+    for extra in sources[1:]:
+        raw = raw.fillna(flat[extra].astype("string"))
+
+    raw = raw.str.strip()
+    raw = raw.where(~raw.isin(["", "nan", "None", "null"]), other=pd.NA)
+
+    flat["tracking_id"] = raw
+
+    parts = raw.str.split("-", n=4, expand=True)
+    expected = ["tracking_cluster_id", "tracking_pack_number", "tracking_pub_date",
+                "tracking_activity_number", "tracking_channel_abbr"]
+    for i, name in enumerate(expected):
+        flat[name] = parts[i] if i in parts.columns else pd.NA
+
+    flat["tracking_pack_id"] = (
+        flat["tracking_cluster_id"].astype("string")
+        + "-" + flat["tracking_pack_number"].astype("string")
+    )
+    flat.loc[flat["tracking_cluster_id"].isna() | flat["tracking_pack_number"].isna(),
+             "tracking_pack_id"] = pd.NA
+
+    flat = flat.drop(columns=sources)
+
+    matched = flat["tracking_id"].notna().sum()
+    log(f"  CammsTrackingID: {matched:,}/{len(flat):,} rows have a tracking_id")
+
     return flat
 
 
@@ -373,6 +424,9 @@ def build_fact_page_view(flat: pd.DataFrame, source_file: str) -> pd.DataFrame:
         "view_id", "timestamp", "page_id", "user_id", "session_id",
         "page_load_ms", "referrer_url", "client_os", "client_browser",
         "client_country", "email", "gpn",
+        "tracking_id", "tracking_pack_id", "tracking_cluster_id",
+        "tracking_pack_number", "tracking_pub_date",
+        "tracking_activity_number", "tracking_channel_abbr",
     ]
     hr_cols = [c for c in flat.columns if c.startswith("hr_")]
     fact_cols.extend(hr_cols)
@@ -597,6 +651,83 @@ def print_summary(con):
         if sess[0] > 0:
             log(f"  Sessions: {sess[0]:,}, {sess[1]:,} bounces "
                 f"({sess[1]/sess[0]*100:.1f}%), avg {sess[2]} pages/session")
+
+    if "fact_page_view" in tables:
+        fact_cols = con.execute("DESCRIBE fact_page_view").df()["column_name"].tolist()
+        if "tracking_id" in fact_cols:
+            tot, with_tid, with_pack = con.execute("""
+                SELECT COUNT(*),
+                       COUNT(tracking_id),
+                       COUNT(DISTINCT tracking_pack_id)
+                FROM fact_page_view
+            """).fetchone()
+            pct = (with_tid / tot * 100) if tot else 0
+            log(f"\n  Tracking ID coverage: {with_tid:,}/{tot:,} views ({pct:.1f}%), "
+                f"{with_pack:,} distinct packs")
+
+            channels = con.execute("""
+                SELECT COALESCE(tracking_channel_abbr, '(none)') AS channel,
+                       COUNT(*) AS views,
+                       COUNT(DISTINCT tracking_pack_id) AS packs
+                FROM fact_page_view
+                GROUP BY 1 ORDER BY views DESC
+            """).fetchall()
+            log("  Views by tracking_channel_abbr:")
+            for ch, views, packs in channels:
+                log(f"    {ch:10s}  views={views:>10,}  packs={packs:>6,}")
+
+            if "dim_page" in tables:
+                log("\n  Tracking ID coverage by site (top 20 by views):")
+                site_cov = con.execute("""
+                    SELECT COALESCE(p.site_name, '(unknown)') AS site,
+                           COUNT(*) AS views,
+                           COUNT(f.tracking_id) AS with_tid,
+                           ROUND(COUNT(f.tracking_id) * 100.0 / COUNT(*), 1) AS pct
+                    FROM fact_page_view f
+                    LEFT JOIN dim_page p ON f.page_id = p.page_id
+                    GROUP BY 1
+                    ORDER BY views DESC
+                    LIMIT 20
+                """).fetchall()
+                log(f"    {'site':40s} {'views':>10s} {'with_tid':>10s} {'cov%':>7s}")
+                for site, views, with_tid, pct in site_cov:
+                    site_disp = (site[:37] + "...") if len(site) > 40 else site
+                    log(f"    {site_disp:40s} {views:>10,} {with_tid:>10,} {pct:>6.1f}%")
+
+                log("\n  Top 15 pages WITHOUT tracking_id (by views):")
+                pages_missing = con.execute("""
+                    SELECT COALESCE(p.site_name, '(unknown)') AS site,
+                           COALESCE(p.page_name, f.page_id, '(unknown)') AS page,
+                           COUNT(*) AS views
+                    FROM fact_page_view f
+                    LEFT JOIN dim_page p ON f.page_id = p.page_id
+                    WHERE f.tracking_id IS NULL
+                    GROUP BY 1, 2
+                    ORDER BY views DESC
+                    LIMIT 15
+                """).fetchall()
+                for site, page, views in pages_missing:
+                    site_disp = (site[:25] + "...") if len(site) > 28 else site
+                    page_disp = (page[:47] + "...") if len(page) > 50 else page
+                    log(f"    {site_disp:28s} | {page_disp:50s} {views:>8,}")
+
+                log("\n  Top 15 pages WITH tracking_id (by views):")
+                pages_with = con.execute("""
+                    SELECT COALESCE(p.site_name, '(unknown)') AS site,
+                           COALESCE(p.page_name, f.page_id, '(unknown)') AS page,
+                           COUNT(*) AS views,
+                           COUNT(DISTINCT f.tracking_id) AS distinct_tids
+                    FROM fact_page_view f
+                    LEFT JOIN dim_page p ON f.page_id = p.page_id
+                    WHERE f.tracking_id IS NOT NULL
+                    GROUP BY 1, 2
+                    ORDER BY views DESC
+                    LIMIT 15
+                """).fetchall()
+                for site, page, views, n_tids in pages_with:
+                    site_disp = (site[:25] + "...") if len(site) > 28 else site
+                    page_disp = (page[:47] + "...") if len(page) > 50 else page
+                    log(f"    {site_disp:28s} | {page_disp:50s} {views:>8,}  tids={n_tids}")
 
 
 # ---------------------------------------------------------------------------
