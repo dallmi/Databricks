@@ -1,112 +1,146 @@
 -- ============================================================================
--- iMEP Schema Discovery — SQL snippets
+-- iMEP Schema Discovery — SQL snippets (Hive Metastore version)
+--
+-- Use this file when your cluster runs against Hive Metastore (no Unity
+-- Catalog). system.information_schema is NOT available; discovery happens
+-- via SHOW DATABASES / SHOW TABLES / DESCRIBE.
 --
 -- Copy any block below (everything between two `-- ---` separators) into a
--- new cell of your Databricks notebook. Each block starts with `%sql` so it
--- runs as a SQL cell even inside a Python notebook. Blocks are independent.
+-- new cell of your Databricks notebook. Each block starts with `%sql` or
+-- `%python` so it runs correctly regardless of the notebook's default lang.
 -- ============================================================================
 
 
 -- ----------------------------------------------------------------------------
--- BLOCK 1 — Main discovery: every candidate table + its columns
--- Filter the result grid on `has_tracking_col = true` to spot join keys.
+-- BLOCK 1 — List all databases / schemas
 -- ----------------------------------------------------------------------------
 %sql
-WITH name_hits AS (
-  SELECT table_catalog, table_schema, table_name
-  FROM system.information_schema.tables
-  WHERE lower(table_name) RLIKE
-        '(imep|email|e_mail|mail|campaign|newsletter|comms?|send|recipient|open|click|bounce|unsubscribe)'
-     OR lower(table_schema) RLIKE
-        '(imep|email|mail|campaign|comms?)'
-),
-column_hits AS (
-  SELECT DISTINCT table_catalog, table_schema, table_name
-  FROM system.information_schema.columns
-  WHERE lower(column_name) RLIKE
-        '(camms.*tracking|tracking.*id|tracking_pack|tracking_cluster)'
-),
-candidates AS (
-  SELECT * FROM name_hits
-  UNION
-  SELECT * FROM column_hits
-)
-SELECT
-  cand.table_catalog,
-  cand.table_schema,
-  cand.table_name,
-  c.column_name,
-  c.data_type,
-  c.ordinal_position,
-  (lower(c.column_name) RLIKE
-      '(camms.*tracking|tracking.*id|tracking_pack|tracking_cluster)') AS has_tracking_col
-FROM candidates cand
-JOIN system.information_schema.columns c
-  ON c.table_catalog = cand.table_catalog
- AND c.table_schema  = cand.table_schema
- AND c.table_name    = cand.table_name
-ORDER BY cand.table_catalog, cand.table_schema, cand.table_name, c.ordinal_position;
+SHOW DATABASES;
 
 
 -- ----------------------------------------------------------------------------
--- BLOCK 2 — Just the tables that match iMEP / email-channel name patterns
+-- BLOCK 2 — List tables in one database
+-- Replace <db> with a schema name from BLOCK 1.
 -- ----------------------------------------------------------------------------
 %sql
-SELECT
-  table_catalog,
-  table_schema,
-  table_name,
-  table_type,
-  created,
-  last_altered
-FROM system.information_schema.tables
-WHERE lower(table_name) RLIKE
-      '(imep|email|e_mail|mail|campaign|newsletter|comms?|send|recipient|open|click|bounce|unsubscribe)'
-   OR lower(table_schema) RLIKE
-      '(imep|email|mail|campaign|comms?)'
-ORDER BY table_catalog, table_schema, table_name;
+SHOW TABLES IN `<db>`;
 
 
 -- ----------------------------------------------------------------------------
--- BLOCK 3 — Any column that looks like a tracking-id, across ALL tables
+-- BLOCK 3 — Find tables whose name matches an iMEP/email pattern in one db
+-- Replace <db>. Use SQL wildcards: * = any chars.
 -- ----------------------------------------------------------------------------
 %sql
-SELECT
-  table_catalog,
-  table_schema,
-  table_name,
-  column_name,
-  data_type,
-  ordinal_position
-FROM system.information_schema.columns
-WHERE lower(column_name) RLIKE
-      '(camms.*tracking|tracking.*id|tracking_pack|tracking_cluster)'
-ORDER BY table_catalog, table_schema, table_name, ordinal_position;
+SHOW TABLES IN `<db>` LIKE '*imep*';
+
+-- Other patterns to try, one at a time:
+-- SHOW TABLES IN `<db>` LIKE '*email*';
+-- SHOW TABLES IN `<db>` LIKE '*mail*';
+-- SHOW TABLES IN `<db>` LIKE '*campaign*';
+-- SHOW TABLES IN `<db>` LIKE '*comms*';
+-- SHOW TABLES IN `<db>` LIKE '*send*';
+-- SHOW TABLES IN `<db>` LIKE '*track*';
 
 
 -- ----------------------------------------------------------------------------
--- BLOCK 4 — Catalogs & schemas visible to you (sanity check)
--- ----------------------------------------------------------------------------
-%sql
-SELECT DISTINCT table_catalog, table_schema
-FROM system.information_schema.tables
-ORDER BY table_catalog, table_schema;
-
-
--- ----------------------------------------------------------------------------
--- BLOCK 5 — Row count for one specific candidate
--- Replace <catalog>.<schema>.<table> before running.
+-- BLOCK 4 — Describe a candidate table (columns + types)
+-- Replace <db>.<table>.
 -- ----------------------------------------------------------------------------
 %sql
-SELECT COUNT(*) AS row_count
-FROM `<catalog>`.`<schema>`.`<table>`;
+DESCRIBE TABLE `<db>`.`<table>`;
 
 
 -- ----------------------------------------------------------------------------
--- BLOCK 6 — Sample rows from one specific candidate
--- Replace <catalog>.<schema>.<table> before running. Keep LIMIT small.
+-- BLOCK 5 — Extended describe (partitions, location, owner)
 -- ----------------------------------------------------------------------------
 %sql
-SELECT *
-FROM `<catalog>`.`<schema>`.`<table>`
-LIMIT 20;
+DESCRIBE TABLE EXTENDED `<db>`.`<table>`;
+
+
+-- ----------------------------------------------------------------------------
+-- BLOCK 6 — Row count
+-- ----------------------------------------------------------------------------
+%sql
+SELECT COUNT(*) AS row_count FROM `<db>`.`<table>`;
+
+
+-- ----------------------------------------------------------------------------
+-- BLOCK 7 — Sample rows
+-- ----------------------------------------------------------------------------
+%sql
+SELECT * FROM `<db>`.`<table>` LIMIT 20;
+
+
+-- ----------------------------------------------------------------------------
+-- BLOCK 8 — Cross-database discovery (needs %python; pure SQL can't loop)
+-- Scans every database, collects matching tables, and columns that look
+-- like a tracking-id. Paste into a Python cell.
+-- ----------------------------------------------------------------------------
+%python
+import re
+from pyspark.sql import Row
+
+NAME_RE  = re.compile(r"(imep|email|e_mail|mail|campaign|newsletter|comms?|send|recipient|open|click|bounce|unsubscribe|track)", re.IGNORECASE)
+TRACK_RE = re.compile(r"(camms.*tracking|tracking.*id|tracking_pack|tracking_cluster)", re.IGNORECASE)
+
+dbs = [r.databaseName for r in spark.sql("SHOW DATABASES").collect()]
+print(f"Scanning {len(dbs)} databases")
+
+hits = []
+for db in dbs:
+    try:
+        tables = [r.tableName for r in spark.sql(f"SHOW TABLES IN `{db}`").collect()]
+    except Exception as e:
+        print(f"  skip {db}: {e}")
+        continue
+    for t in tables:
+        name_match = bool(NAME_RE.search(t) or NAME_RE.search(db))
+        try:
+            cols = [r.col_name for r in spark.sql(f"DESCRIBE TABLE `{db}`.`{t}`").collect()
+                    if r.col_name and not r.col_name.startswith("#")]
+        except Exception:
+            cols = []
+        tracking_cols = [c for c in cols if TRACK_RE.search(c)]
+        if name_match or tracking_cols:
+            hits.append(Row(
+                database=db, table=t,
+                name_match=name_match,
+                tracking_cols=",".join(tracking_cols) if tracking_cols else None,
+                n_columns=len(cols),
+            ))
+
+result = spark.createDataFrame(hits) if hits else None
+if result is not None:
+    display(result.orderBy("database", "table"))
+else:
+    print("No candidates found.")
+
+
+-- ----------------------------------------------------------------------------
+-- BLOCK 9 — Full column inventory for all candidates from BLOCK 8
+-- Run BLOCK 8 first so `hits` is in memory, then paste this.
+-- ----------------------------------------------------------------------------
+%python
+from pyspark.sql import Row
+
+inventory = []
+for h in hits:
+    try:
+        cols = spark.sql(f"DESCRIBE TABLE `{h.database}`.`{h.table}`").collect()
+    except Exception as e:
+        inventory.append(Row(database=h.database, table=h.table,
+                             column=None, data_type=None,
+                             has_tracking_col=False, error=str(e)))
+        continue
+    for r in cols:
+        if not r.col_name or r.col_name.startswith("#"):
+            continue
+        inventory.append(Row(
+            database=h.database, table=h.table,
+            column=r.col_name, data_type=r.data_type,
+            has_tracking_col=bool(TRACK_RE.search(r.col_name)),
+            error=None,
+        ))
+
+inv_df = spark.createDataFrame(inventory)
+display(inv_df.orderBy("database", "table", "column"))
