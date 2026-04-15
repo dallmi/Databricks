@@ -58,7 +58,7 @@ expects this shape:
   "page_views": [
     { "timestamp": "2026-03-05T11:00:00Z", "page_id": "...", "page_name": "...",
       "site_id": "...", "site_name": "News", "time_on_page_sec": 98.3,
-      "hr_division": "Division A", "hr_region": "EMEA",
+      "hr_division": "Investment Bank", "hr_region": "EMEA",
       "tracking_pack_id": "QRREP-0000058", "tracking_cluster_id": "QRREP",
       "tracking_channel_abbr": "INT", "channel": "INT", "weight": 1 }
   ],

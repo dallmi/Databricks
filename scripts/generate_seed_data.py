@@ -77,15 +77,15 @@ SITES = [
 ]
 
 DIVISIONS = [
-    ("Division A",          "Americas"),
-    ("Division A",          "EMEA"),
-    ("Division A",          "APAC"),
-    ("Division B",          "EMEA"),
-    ("Division B",          "APAC"),
-    ("Division C",          "Global"),
+    ("Investment Bank",     "Americas"),
+    ("Investment Bank",     "EMEA"),
+    ("Investment Bank",     "APAC"),
+    ("Wealth Management",   "EMEA"),
+    ("Wealth Management",   "APAC"),
+    ("Asset Management",    "Global"),
     ("Group Functions",     "Global"),
     ("Technology",          "Global"),
-    ("Division D",          "EMEA"),
+    ("Retail Banking",      "EMEA"),
 ]
 
 BROWSERS = ["Chrome 145.0", "Edge 145.0", "Safari 18.0", "Firefox 124.0"]
