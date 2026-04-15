@@ -17,3 +17,6 @@ AppInsightSchema/*.png
 # Python
 __pycache__/
 *.pyc
+
+# Seed data is regeneratable — keep out of git
+dashboard/seed.json
