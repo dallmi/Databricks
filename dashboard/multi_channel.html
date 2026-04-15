@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Multi-Channel Communications Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<!-- xlsx-js-style: styled XLSX export (same library used across corporate dashboards) -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <style>
 :root {
   --primary: #E60000;
@@ -806,62 +807,104 @@ function buildDailyRows() {
   return rows.sort((a,b) => (a.Date+a.Channel).localeCompare(b.Date+b.Channel));
 }
 
-async function exportTable(which) {
-  const wb = new ExcelJS.Workbook();
-  wb.creator = 'Multi-Channel Dashboard';
-  wb.created = new Date();
-  if (which === 'packs')  addSheet(wb, 'Packs',  buildPacksRows());
-  if (which === 'funnel') addSheet(wb, 'Funnel', buildFunnelRows());
-  await downloadWorkbook(wb, `multi_channel_${which}_${stamp()}.xlsx`);
+// Corporate XLSX styling — mirrors the CPLAN dashboard export pattern
+// so every corporate dashboard produces Excel files that look identical.
+
+const XLSX_HEADER_STYLE = {
+  font:      { bold: true, color: { rgb: 'FFFFFF' }, sz: 11, name: 'Calibri' },
+  fill:      { fgColor: { rgb: '404040' } },
+  border:    {
+    bottom: { style: 'medium', color: { rgb: 'E60000' } },
+    top:    { style: 'thin',   color: { rgb: '404040' } },
+    left:   { style: 'thin',   color: { rgb: '404040' } },
+    right:  { style: 'thin',   color: { rgb: '404040' } },
+  },
+  alignment: { vertical: 'center', wrapText: false },
+};
+const XLSX_THIN_BORDER = {
+  top:    { style: 'thin', color: { rgb: 'CCCABC' } },
+  bottom: { style: 'thin', color: { rgb: 'CCCABC' } },
+  left:   { style: 'thin', color: { rgb: 'CCCABC' } },
+  right:  { style: 'thin', color: { rgb: 'CCCABC' } },
+};
+const XLSX_ROW_EVEN = { font: { sz: 10, name: 'Calibri', color: { rgb: '000000' } }, fill: { fgColor: { rgb: 'FFFFFF' } }, border: XLSX_THIN_BORDER, alignment: { vertical: 'center' } };
+const XLSX_ROW_ODD  = { font: { sz: 10, name: 'Calibri', color: { rgb: '000000' } }, fill: { fgColor: { rgb: 'F8F7F2' } }, border: XLSX_THIN_BORDER, alignment: { vertical: 'center' } };
+
+// Numeric / percentage number-format strings
+const PCT_KEY_RE = /(\s%|% |\%$|pct|rate)/i;
+
+function colWidth(label, key, rows) {
+  let max = String(label).length;
+  for (const r of rows) {
+    const v = r[key];
+    if (v != null) max = Math.max(max, String(v).length);
+  }
+  return Math.min(Math.max(max + 2, 10), 36);
 }
 
-async function exportAll() {
-  const wb = new ExcelJS.Workbook();
-  wb.creator = 'Multi-Channel Dashboard';
-  wb.created = new Date();
-  addSheet(wb, 'Packs',      buildPacksRows());
-  addSheet(wb, 'Funnel',     buildFunnelRows());
-  addSheet(wb, 'Daily',      buildDailyRows());
-  addSheet(wb, 'Pack Meta',  seed.packs.map(p => ({ ...p, channels: p.channels.join(', ') })));
-  await downloadWorkbook(wb, `multi_channel_${stamp()}.xlsx`);
-}
-
-function addSheet(wb, name, rows) {
-  const ws = wb.addWorksheet(name, { views: [{ state: 'frozen', ySplit: 1 }] });
-  if (!rows.length) return;
+function appendStyledSheet(wb, name, rows) {
+  if (!rows.length) {
+    const ws = XLSX.utils.aoa_to_sheet([['(no data)']]);
+    XLSX.utils.book_append_sheet(wb, ws, name);
+    return;
+  }
   const cols = Object.keys(rows[0]);
-  ws.columns = cols.map(c => ({ header: c, key: c, width: Math.max(12, Math.min(40, c.length + 4)) }));
-  rows.forEach(r => ws.addRow(r));
-  // Header style — corporate red accent
-  const header = ws.getRow(1);
-  header.font = { bold: true, color: { argb: 'FF404040' }, size: 11 };
-  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFECEBE4' } };
-  header.border = { bottom: { style: 'thin', color: { argb: 'FFCCCABC' } } };
-  header.alignment = { vertical: 'middle' };
-  // Autofilter + zebra
-  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
-  for (let i = 2; i <= rows.length + 1; i++) {
-    if (i % 2 === 0) {
-      ws.getRow(i).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8F7F2' } };
+  const headerRow = cols;
+  const wsData = [headerRow];
+  rows.forEach(r => wsData.push(cols.map(c => r[c] == null ? '' : r[c])));
+
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  ws['!cols'] = cols.map(c => ({ wch: colWidth(c, c, rows) }));
+  ws['!rows'] = [{ hpt: 28 }];
+  ws['!autofilter'] = {
+    ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: wsData.length - 1, c: cols.length - 1 } }),
+  };
+  ws['!freeze'] = { xSplit: 0, ySplit: 1 };
+
+  // Header
+  for (let c = 0; c < cols.length; c++) {
+    const ref = XLSX.utils.encode_cell({ r: 0, c });
+    if (ws[ref]) ws[ref].s = XLSX_HEADER_STYLE;
+  }
+  // Body with zebra striping + numeric / percent formatting
+  for (let r = 1; r < wsData.length; r++) {
+    const baseStyle = r % 2 === 1 ? XLSX_ROW_ODD : XLSX_ROW_EVEN;
+    for (let c = 0; c < cols.length; c++) {
+      const ref = XLSX.utils.encode_cell({ r, c });
+      if (!ws[ref]) ws[ref] = { v: '', t: 's' };
+      const key = cols[c];
+      const val = wsData[r][c];
+      const style = { ...baseStyle };
+      if (typeof val === 'number') {
+        if (PCT_KEY_RE.test(key)) {
+          style.numFmt = '0.0%';
+          style.alignment = { ...style.alignment, horizontal: 'right' };
+        } else {
+          style.numFmt = Number.isInteger(val) ? '#,##0' : '#,##0.0';
+          style.alignment = { ...style.alignment, horizontal: 'right' };
+        }
+      }
+      ws[ref].s = style;
     }
   }
-  // Format percentage columns as %
-  cols.forEach((c, idx) => {
-    if (c.includes('%') || c.endsWith(' %')) {
-      ws.getColumn(idx + 1).numFmt = '0.0%';
-    } else if (typeof rows[0][c] === 'number' && !c.toLowerCase().includes('date')) {
-      ws.getColumn(idx + 1).numFmt = '#,##0';
-    }
-  });
+  XLSX.utils.book_append_sheet(wb, ws, name);
 }
 
-async function downloadWorkbook(wb, filename) {
-  const buf = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+function exportTable(which) {
+  const wb = XLSX.utils.book_new();
+  if (which === 'packs')  appendStyledSheet(wb, 'Packs',  buildPacksRows());
+  if (which === 'funnel') appendStyledSheet(wb, 'Funnel', buildFunnelRows());
+  XLSX.writeFile(wb, `MultiChannel_${which}_${stamp()}.xlsx`);
+}
+
+function exportAll() {
+  const wb = XLSX.utils.book_new();
+  appendStyledSheet(wb, 'Packs',     buildPacksRows());
+  appendStyledSheet(wb, 'Funnel',    buildFunnelRows());
+  appendStyledSheet(wb, 'Daily',     buildDailyRows());
+  appendStyledSheet(wb, 'Pack Meta', seed.packs.map(p => ({ ...p, channels: p.channels.join(', ') })));
+  XLSX.writeFile(wb, `MultiChannel_${stamp()}.xlsx`);
 }
 
 function stamp() {
