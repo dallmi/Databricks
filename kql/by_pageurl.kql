@@ -1,17 +1,18 @@
-// Views for a specific PageURL.
-// Filter either on cp.PageURL (the business URL) or on url (the URL actually requested).
+// Views for PageURLs matching a pattern (LIKE-style).
+// KQL has no LIKE operator; `contains` is case-insensitive substring match
+// and behaves like SQL `LIKE '%pattern%'`. Use `matches regex` for full regex.
 
-let TargetUrl = "https://<tenant>.sharepoint.com/sites/<site>/sitepages/<page>.aspx";
+let TargetUrlPattern = "sitepages/home";   // substring, case-insensitive
 let StartTime = datetime(2026-03-01);
 let EndTime   = datetime(2026-04-01);
 
 pageViews
 | where timestamp between (StartTime .. EndTime)
 // Top-level URL filter first (indexed, fast):
-| where url =~ TargetUrl
+| where url contains TargetUrlPattern
 | extend cp = parse_json(tostring(parse_json(tostring(customDimensions)).CustomProps))
-// Optionally also check the business URL:
-//| where tostring(cp.PageURL) =~ TargetUrl
+// Optionally also match the business URL:
+//| where tostring(cp.PageURL) contains TargetUrlPattern
 | project
     timestamp,
     view_id          = id,
