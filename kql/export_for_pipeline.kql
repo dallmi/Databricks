@@ -1,12 +1,12 @@
-// EXPORT-Query für flatten_appinsights.py
-// Gibt customDimensions als JSON-String unverändert zurück, damit die Python-
-// Pipeline ihre eigene Flatten-Logik anwenden kann.
+// EXPORT query for flatten_appinsights.py
+// Returns customDimensions as an unmodified JSON string so the Python
+// pipeline can apply its own flatten logic.
 //
-// Vorgehen:
-// 1. Zeitfenster anpassen (max. ~30 Tage / 65k rows pro Export-Lauf).
-// 2. Im Azure Portal "Export -> CSV (all columns)" wählen.
-// 3. CSV in Databricks/input/ ablegen.
-// 4. python scripts/flatten_appinsights.py
+// Procedure:
+// 1. Adjust the time window (max ~30 days / 65k rows per export run).
+// 2. In the Azure Portal click "Export -> CSV (all columns)".
+// 3. Drop the CSV into Databricks/input/.
+// 4. Run: python scripts/flatten_appinsights.py
 
 let StartTime = datetime(2026-03-01);
 let EndTime   = datetime(2026-04-01);
@@ -21,7 +21,7 @@ pageViews
     duration,
     performanceBucket,
     itemType,
-    customDimensions,         // <-- als JSON-String belassen
+    customDimensions,         // <-- keep as JSON string
     operation_Name,
     operation_Id,
     operation_ParentId,

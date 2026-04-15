@@ -1,13 +1,13 @@
-// Views per CammsTrackingID — split in CPLAN-Komponenten:
-// CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL  (z.B. QRREP-0000058-240709-0000060-EMI)
+// Views by CammsTrackingID — split into the CPLAN components:
+// CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL  (e.g. QRREP-0000058-240709-0000060-EMI)
 
 let StartTime = ago(90d);
 let EndTime   = now();
-// Filter optional setzen, leer = alle:
-let FilterTrackingID = "";          // exakte ID
-let FilterPackID     = "";          // z.B. "QRREP-0000058"
-let FilterCluster    = "";          // z.B. "QRREP"
-let FilterChannel    = "";          // z.B. "EMI" (Email)
+// Optional filters; leave empty to match everything:
+let FilterTrackingID = "";          // exact id
+let FilterPackID     = "";          // e.g. "QRREP-0000058"
+let FilterCluster    = "";          // e.g. "QRREP"
+let FilterChannel    = "";          // e.g. "EMI" (Email)
 
 pageViews
 | where timestamp between (StartTime .. EndTime)

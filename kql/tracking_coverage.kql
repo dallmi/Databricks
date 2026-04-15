@@ -1,5 +1,5 @@
-// Wieviel % der PageViews tragen eine CammsTrackingID, aufgeschlüsselt nach Site.
-// Hilft zu identifizieren, welche Sites/Pages das Tracking sauber befüllen.
+// Share of pageViews that carry a CammsTrackingID, broken down by site.
+// Helps identify which sites/pages populate tracking properly.
 
 let StartTime = ago(30d);
 let EndTime   = now();

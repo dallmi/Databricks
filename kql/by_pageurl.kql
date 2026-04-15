@@ -1,5 +1,5 @@
-// Views für eine bestimmte PageURL.
-// Filter wahlweise auf cp.PageURL (Business-URL) oder url (tatsächlicher Aufruf).
+// Views for a specific PageURL.
+// Filter either on cp.PageURL (the business URL) or on url (the URL actually requested).
 
 let TargetUrl = "https://<tenant>.sharepoint.com/sites/<site>/sitepages/<page>.aspx";
 let StartTime = datetime(2026-03-01);
@@ -7,10 +7,10 @@ let EndTime   = datetime(2026-04-01);
 
 pageViews
 | where timestamp between (StartTime .. EndTime)
-// Top-Level URL-Filter zuerst (indiziert, schnell):
+// Top-level URL filter first (indexed, fast):
 | where url =~ TargetUrl
 | extend cp = parse_json(tostring(parse_json(tostring(customDimensions)).CustomProps))
-// Optional zusätzlich Business-URL prüfen:
+// Optionally also check the business URL:
 //| where tostring(cp.PageURL) =~ TargetUrl
 | project
     timestamp,

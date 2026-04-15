@@ -1,7 +1,7 @@
 # KQL Queries — AppInsights pageViews
 
-Standard-Queries für den AppInsights `pageViews`-Stream im Azure Portal
-(Application Insights → Logs).
+Standard queries against the AppInsights `pageViews` stream in the Azure
+Portal (Application Insights → Logs).
 
 ## Workspace
 
@@ -10,28 +10,32 @@ Standard-Queries für den AppInsights `pageViews`-Stream im Azure Portal
 
 ## Conventions
 
-- `customDimensions` ist eine String-Spalte mit JSON. `CustomProps` darin ist
-  selbst nochmal ein String → daher `parse_json(tostring(parse_json(...)))`.
-- Zeitfilter IMMER zuerst (Performance + Cost).
-- `CammsTrackingID` ist der Cross-Channel-Join-Key (siehe CPLAN
-  `pipeline/docs/tracking-id.md`). Format: `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL`.
+- `customDimensions` is a string column containing JSON. `CustomProps`
+  inside it is itself a string, so use
+  `parse_json(tostring(parse_json(...)))`.
+- Always filter on `timestamp` first (performance + cost).
+- `CammsTrackingID` is the cross-channel join key (see CPLAN
+  `pipeline/docs/tracking-id.md`). Format:
+  `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL`.
 
 ## Query Files
 
-| File | Zweck |
+| File | Purpose |
 |---|---|
-| [`base_flatten.kql`](base_flatten.kql) | Basis-Flatten: alle Top-Level + alle CustomProps als eigene Spalten |
-| [`by_pageurl.kql`](by_pageurl.kql) | Views einer bestimmten PageURL |
-| [`by_site.kql`](by_site.kql) | Views einer Site (SiteID oder SiteName) |
-| [`by_tracking_id.kql`](by_tracking_id.kql) | Views per CammsTrackingID / Pack / Cluster / Channel |
-| [`tracking_coverage.kql`](tracking_coverage.kql) | Wieviel % der PageViews tragen tracking_id, aufgeschlüsselt nach Site |
-| [`export_for_pipeline.kql`](export_for_pipeline.kql) | Vollständiger Export für `flatten_appinsights.py` |
+| [`base_flatten.kql`](base_flatten.kql) | Base flatten: all top-level fields plus all CustomProps as own columns |
+| [`by_pageurl.kql`](by_pageurl.kql) | Views for a single PageURL |
+| [`by_site.kql`](by_site.kql) | Views for a site (SiteID or SiteName) |
+| [`by_tracking_id.kql`](by_tracking_id.kql) | Views by CammsTrackingID / pack / cluster / channel |
+| [`tracking_coverage.kql`](tracking_coverage.kql) | Share of pageViews carrying a tracking_id, broken down by site |
+| [`export_for_pipeline.kql`](export_for_pipeline.kql) | Full export feeding `flatten_appinsights.py` |
 
-## Export für die lokale Pipeline
+## Export to the local pipeline
 
-In Application Insights Logs:
-1. Query laufen lassen (Zeitraum max. ~30 Tage / 65k rows pro Run).
-2. **"Export → CSV (all columns)"** rechts oben.
-3. CSV in `Databricks/input/` ablegen → `python scripts/flatten_appinsights.py`.
+In Application Insights → Logs:
+1. Run the query (max ~30 days / 65k rows per export).
+2. Click **"Export → CSV (all columns)"** in the top right.
+3. Drop the CSV into `Databricks/input/` and run
+   `python scripts/flatten_appinsights.py`.
 
-Für größere Volumina: per Continuous Export oder Workbook-Trigger nach Storage.
+For larger volumes use Continuous Export or a Workbook trigger that
+writes to Storage.

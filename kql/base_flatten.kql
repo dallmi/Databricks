@@ -1,5 +1,5 @@
-// Base flatten — pageViews mit allen CustomProps als eigene Spalten.
-// Zeitfilter und ggf. PageURL-Filter vor dem Export anpassen.
+// Base flatten — pageViews with all CustomProps exposed as own columns.
+// Adjust the time window and add a PageURL filter before exporting.
 
 pageViews
 | where timestamp between (datetime(2026-03-01) .. datetime(2026-04-01))

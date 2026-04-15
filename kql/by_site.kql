@@ -1,8 +1,8 @@
-// Views einer Site, gefiltert per SiteID oder SiteName.
-// Aggregation: Total Views, Unique Users, Unique Sessions, Tracking-ID-Coverage.
+// Views for a site, filtered by SiteID or SiteName.
+// Aggregates: total views, unique users, unique sessions, tracking-id coverage.
 
-let TargetSiteName = "Home";   // oder leer lassen und SiteID nutzen
-let TargetSiteID   = "";       // z.B. "b96c5556-dc25-4f9a-a547-fec7418a7850"
+let TargetSiteName = "Home";   // or leave empty and use SiteID
+let TargetSiteID   = "";       // e.g. "b96c5556-dc25-4f9a-a547-fec7418a7850"
 let StartTime = ago(30d);
 let EndTime   = now();
 
