@@ -91,16 +91,26 @@ pbi_db_website_*  ──►  silver.dim_page
 
 ### 4.3 Silver Facts — Schemas
 
-**`silver.fact_email`** (1 Row pro Email-Empfänger-Event)
+**`silver.fact_email`** (1 Row pro Link-Interaktion / Send-Event — folgt iMEP Genie-Pattern 2, siehe Anhang A)
 
 | Column | Type | Quelle |
 |---|---|---|
-| email_event_id | STRING PK | iMEP |
-| tracking_id, tracking_pack_id, … | STRING | Split aus iMEP tracking ID |
-| gpn | STRING | iMEP receiver |
-| event | STRING (`sent` / `opened` / `clicked`) | iMEP status |
-| event_ts | TIMESTAMP | iMEP |
+| email_event_id | STRING PK | `TBL_ANALYTICS_LINK.Id` bzw. `TBL_EMAIL_RECEIVER_STATUS.Id` (Send-Branch) |
+| mailing_id | STRING | `TBL_EMAIL.Id` |
+| mailing_title | STRING | `TBL_EMAIL.Title` |
+| tracking_id, tracking_pack_id, … | STRING | Split aus `CammsTrackingID` (Spalte tbd, siehe OP-04) |
+| t_number | STRING (`t######`) | `TBL_ANALYTICS_LINK.TNumber` / `TBL_EMAIL_RECEIVER_STATUS.TNumber` — **Recipient-ID in iMEP** |
+| gpn | STRING (`########` 8-digit) | aus HR-Bridge resolved (TNumber → GPN) — Cross-Source-Schlüssel gegen PageView |
+| event | STRING (`sent` / `opened` / `clicked` / `bounced` / …) | abgeleitet aus `TBL_EMAIL_RECEIVER_STATUS` + `TBL_ANALYTICS_LINK.linkTypeenum` |
+| event_ts | TIMESTAMP | `CreationDate` (Send: STATUS, Click/Open: ANALYTICS_LINK) |
+| device_type | STRING | `Agent` + Multi-Device-CTE → `Desktop & Mobile` / `Desktop Only` / `Mobile Only` |
+| current_language | STRING | `TBL_ANALYTICS_LINK.CurrentLanguage` |
+| timespan_h | INT | `(bigint(link.CreationDate) - bigint(status.CreationDate)) / 3600` |
+| hr_org_unit, hr_division, hr_area, hr_region, hr_country, hr_town | STRING | `TBL_HR_EMPLOYEE` / `TBL_HR_COSTCENTER` / `TBL_HR_USER` |
+| created_by | STRING | `TBL_EMAIL.CreatedBy` (resolved via `TBL_HR_EMPLOYEE.T_NUMBER`) |
 | source_file | STRING | ETL |
+
+**Wichtig**: `IsActive = 1` als Pflicht-Filter überall. Open vs Click ist `linkTypeenum`, nicht eigener Status.
 
 **`silver.fact_page_view`** — bestehend, siehe [README.md §Data Model](../README.md).
 
@@ -222,13 +232,18 @@ Die folgenden Punkte sind **vor** dem Start der Implementierung mit den jeweilig
 
 ### 9.1 iMEP (Email Channel)
 
-- **OP-01** Exaktes Schema von `imep_bronze.tbl_email_receiver_status` — Spalten­namen für Tracking-ID, Receiver-GPN, Status, Timestamp, Bounce-Reason?
-- **OP-02** Welche Status-Werte existieren? (`sent`, `delivered`, `opened`, `clicked`, `bounced`, `unsubscribed`?) — Mapping auf unser Funnel-Modell.
-- **OP-03** Unique-Open vs. Total-Open: Wird pro Empfänger mehrfach gezählt? Dedup-Regel festlegen.
-- **OP-04** Click-Tracking: Welche URL-Parameter / Redirect-Logik? Trägt jeder Klick-Event die gleiche `CammsTrackingID` wie der Send-Event?
+> **Update 2026-04-16**: OP-01, OP-03, OP-07 weitgehend geklärt durch Genie-Code (siehe Anhang A & [memory/imep_data_model.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_data_model.md)). Resterklärung verbleibt unten.
+
+- ~~**OP-01**~~ ✅ Schema bekannt — `TBL_EMAIL_RECEIVER_STATUS` (Empfänger-Status), `TBL_ANALYTICS_LINK` (Open/Click), `TBL_EMAIL` (Mailing-Master). Siehe Anhang A.
+- **OP-02** Vollständige Liste der Werte in `TBL_EMAIL_RECEIVER_STATUS` (Send/Bounce/Unsubscribe) und `TBL_ANALYTICS_LINK.linkTypeenum` (`OPEN`, `CLICK`, …) — Bestätigung mit BA.
+- ~~**OP-03**~~ ✅ Unique-Dedup: `RecipientID + EmailId`. Multi-Device via CTE `HAVING COUNT(DISTINCT Agent) > 1`.
+- **OP-04** **Wo lebt die `CammsTrackingID` in iMEP?** — auf `TBL_EMAIL` (1× pro Mailing) oder pro Link in `TBL_EMAIL_LINKS`? Genie-Code zeigt sie nicht. **Kritisch für Cross-Channel-Join.**
 - **OP-05** Audience-Size pro Pack: Kommt diese aus iMEP (Distribution List Size) oder CPLAN (`pack.target_audience_size`)?
 - **OP-06** Historisierung: Wie weit zurück reichen iMEP-Daten? Retention Policy?
-- **OP-07** Liefert iMEP auch GPN oder nur Email-Adresse? Einfluss auf HR-Join.
+- ~~**OP-07**~~ ✅ Recipient läuft über `TNumber` (Format `t100200`) — HR-Join in iMEP via `TBL_HR_EMPLOYEE.T_NUMBER`.
+- **OP-07b** (neu) `TBL_HR_COSTCENTER.ORGANIZATIONAL_UNIT`-Join: Eindeutigkeit (1:1) und Historisierung (Org-Wechsel)?
+- **OP-07c** (neu) `TBL_EMAIL.CreatedBy` — wird das im Dashboard als Filter / Dimension benötigt (Creator-Reporting)?
+- **OP-07d** (neu) **TNumber ↔ GPN Bridge**: TNumber (`t100200`, iMEP) und GPN (`00100200`, AppInsights) sind unterschiedliche Identifier. In welcher HR-Tabelle / Spalte liegt das Mapping? `TBL_HR_EMPLOYEE` muss beide Spalten führen oder es braucht eine separate Bridge. **Voraussetzung für jede Cross-Source-Aggregation auf Empfänger-Ebene** (z.B. "wer hat Mail X erhalten und Page Y besucht").
 
 ### 9.2 CammsTrackingID
 
@@ -280,3 +295,100 @@ Die folgenden Punkte sind **vor** dem Start der Implementierung mit den jeweilig
 ---
 
 **Nächster Schritt:** Durchgehen der Open Points OP-01 bis OP-33 in einem Kickoff mit BA, Data Engineer und Dashboard Dev. Danach Re-Issue als BRD v1.0.
+
+---
+
+## Anhang A — iMEP Genie-Code Referenz-Patterns
+
+Quelle: Databricks Genie Notebook (Cells 6/7/24/25). Screenshots: `Bilder/16. April 2026/IMG_7331..7334.jpeg`.
+
+### Tabellen-Übersicht
+
+| Tabelle | Inhalt | Grain |
+|---|---|---|
+| `TBL_EMAIL_RECEIVER_STATUS` | Empfänger-Status pro Email | 1 Row pro Empfänger pro Mailing |
+| `TBL_EMAIL` | Mailing-Master (Title, Status, CreatedBy) | 1 Row pro Mailing |
+| `TBL_ANALYTICS_LINK` | Runtime Click/Open Events (Agent, linkTypeenum, CurrentLanguage) | 1 Row pro Interaktion |
+| `TBL_EMAIL_LINKS` | Template-Links (Design-Time) | 1 Row pro Link im Template |
+| `TBL_EMAIL_COMPONENTS` | Top-Level-Komponenten (Name, Order) | |
+| `TBL_EMAIL_COMPONENT_ELEMENTS` | Elemente (KeyName, Name) | |
+| `TBL_ELEMENT_VALUES` | Bindeglied Link ↔ Element | |
+| `TBL_HR_EMPLOYEE` | HR-Stammdaten via T_NUMBER | |
+| `TBL_HR_COSTCENTER` | Org-Unit → Division/Area/Region/Country | |
+| `TBL_HR_USER` | Town | |
+
+### Pattern 1 — KPI Summary (Cells 6, 24)
+
+Aggregiert Empfängerzahlen pro Mailing nach Delivery-Status, Sprache, Creator.
+
+```sql
+SELECT ...
+FROM TBL_EMAIL_RECEIVER_STATUS a
+LEFT JOIN TBL_ANALYTICS_LINK c ON a.Id = c.EmailReceiverStatusId   -- CurrentLanguage
+LEFT JOIN TBL_EMAIL b          ON a.EmailId = b.Id                 -- Title, Status
+LEFT JOIN TBL_HR_EMPLOYEE hr   ON b.CreatedBy = hr.T_NUMBER        -- Creator
+WHERE a.IsActive = 1
+```
+
+### Pattern 2 — Final Fact Table (Cell 7)
+
+Denormalisierte Fact-Tabelle mit Geo, Org, Device, Timespan. **Vorlage für `silver.fact_email`.**
+
+```sql
+WITH mdclicks AS (
+  SELECT Id, Agent, EmailId, TNumber AS RecipientID,
+         'Desktop & Mobile' AS NewDeviceType,
+         CASE WHEN linkTypeenum = 'OPEN' THEN 'Unique Opens'
+              ELSE 'Unique Clicks' END AS Engagementtype
+  FROM TBL_ANALYTICS_LINK
+  WHERE IsActive = 1 AND Agent IN ('desktop','mobile') AND linkTypeenum != 'OPEN'
+),
+mdlinks AS (
+  SELECT Id, RecipientID, EmailId, NewDeviceType, Engagementtype
+  FROM mdclicks
+  WHERE RecipientID IN (
+    SELECT RecipientID FROM mdclicks
+    GROUP BY EmailId, RecipientID
+    HAVING COUNT(DISTINCT Agent) > 1
+  )
+)
+SELECT ...
+FROM TBL_ANALYTICS_LINK a
+LEFT JOIN TBL_EMAIL_RECEIVER_STATUS c ON a.EmailReceiverStatusId = c.Id      -- SentDateTime
+LEFT JOIN TBL_HR_EMPLOYEE hr          ON a.TNumber = hr.T_NUMBER             -- Org-Unit
+LEFT JOIN TBL_HR_COSTCENTER cc        ON hr.ORGANIZATIONAL_UNIT = cc.ORGANIZATIONAL_UNIT
+LEFT JOIN TBL_HR_USER u               ON hr.T_NUMBER = u.UbsId               -- Town
+LEFT JOIN mdlinks hh                  ON a.Id = hh.Id                        -- Multi-Device
+WHERE c.EmailId IS NOT NULL AND a.EmailId IS NOT NULL AND a.IsActive = 1
+```
+
+- **Timespan-Bucket**: `(bigint(a.CreationDate) - bigint(c.CreationDate)) / 3600` (Stunden Send → Click).
+- **FinalDeviceType**: COALESCE des CTE-Resultats mit raw `Agent`, Suffix `" Only"` für Single-Device.
+
+### Pattern 3 — Engagement Detail (Cell 25)
+
+UNION mit Template-Metadata, damit Links mit 0 Klicks im Reporting auftauchen.
+
+```sql
+SELECT x.Url, b.EmailId AS MailingId,
+       x.linkLabel,
+       b.KeyName AS SourceComponent,
+       b.Name    AS SourceComponentName,
+       a.KeyName AS SourceElement,
+       a.Name    AS SourceElementName,
+       b.Order   AS ComponentOrder
+FROM TBL_EMAIL_LINKS x
+LEFT JOIN TBL_ELEMENT_VALUES y           ON y.Id = x.ElementValueId
+LEFT JOIN TBL_EMAIL_COMPONENT_ELEMENTS a ON a.Id = y.ElementId
+LEFT JOIN TBL_EMAIL_COMPONENTS b         ON b.Id = a.ComponentId
+```
+
+### Konsequenzen für unser Modell
+
+- `silver.fact_email` baut auf **Pattern 2** auf — Grain = 1 Row pro Link-Interaktion (+ separater Send-Branch aus `TBL_EMAIL_RECEIVER_STATUS` für `event=sent`).
+- `event` wird **nicht** aus einem einzigen Status-Feld gelesen, sondern aus zwei Quellen kombiniert:
+  - `TBL_EMAIL_RECEIVER_STATUS` → `sent`, `bounced`, `unsubscribed`
+  - `TBL_ANALYTICS_LINK.linkTypeenum` → `opened` (`OPEN`) vs `clicked` (alles andere)
+- HR-Join in iMEP über `TNumber` (Format `t100200`). **TNumber ≠ GPN** — GPN (`00100200`) wird in AppInsights/PageView verwendet. Für Cross-Source-Joins auf Empfänger-Ebene wird eine HR-Bridge benötigt (siehe OP-07d).
+- Multi-Device-Detection (CTE) mitnehmen — relevant für Engagement-Analyse.
+- `CurrentLanguage` ist verfügbar — Sprach-Dimension im Dashboard möglich.
