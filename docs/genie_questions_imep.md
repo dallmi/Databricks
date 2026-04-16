@@ -11,23 +11,45 @@ Konvention:
 
 ## A — Schema & Tracking-ID-Lokation (höchste Priorität)
 
-### Q1 — Wo lebt `CammsTrackingID` in iMEP? **(OP-04, kritisch)**
+> **Status 2026-04-16**: Q1, Q2, Q3 beantwortet — siehe [memory/imep_genie_findings_q1_q2_q3.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_genie_findings_q1_q2_q3.md). Follow-ups Q1b und Q3a sind neu hinzugekommen.
+
+### ~~Q1~~ ✅ Wo lebt `CammsTrackingID` in iMEP? **(OP-04 — gelöst)**
 
 > *Show me all columns in `TBL_EMAIL`, `TBL_EMAIL_LINKS`, `TBL_ANALYTICS_LINK` and `TBL_EMAIL_RECEIVER_STATUS` whose name contains "tracking", "camms", "cpid" or "cplan" (case-insensitive). Include the data type and a non-null sample value for each column.*
 
-→ Erwartet: klarer Treffer in **einer** der vier Tabellen. Ohne diese Antwort kann keine Join-Logik gebaut werden.
+→ **Antwort**: Spalte heisst `TrackingId` (nicht `CammsTrackingID`), liegt auf `imep_bronze.tbl_email` (Mailing-Ebene), Beispiel `QRREP-0000058-240709-0000060-EMI`. Cross-Channel-Join via `tbl_analytics_link.EmailId → tbl_email.Id → tbl_email.TrackingId`. SharePoint nutzt `GICTrackingID` (mit Case-Varianten), CPLAN nutzt `tracking_id`.
 
-### Q2 — Vollständiges Schema der Kern-Tabellen **(OP-01)**
+### Q1b — iMEP Gold-Layer evaluieren **(OP-07f, neu)**
+
+> *Show full schema and a 5-row sample of `imep_gold.tbl_pbi_platform_mailings` and `imep_gold.tbl_pbi_platform_events`. For each table, list which iMEP bronze tables / events / aggregations they appear to combine. Are these tables refreshed regularly (check max CreationDate / load timestamp)?*
+
+→ Wenn Gold bereits eine pro-Mailing-Aggregation mit Counts (sent/opened/clicked) hat, sparen wir den ganzen Bronze→Silver-Build und bauen `silver.fact_email` direkt darauf auf.
+
+### ~~Q2~~ ✅ Vollständiges Schema der Kern-Tabellen **(OP-01 — gelöst)**
 
 > *List every column with data type and nullability for these four tables: `TBL_EMAIL`, `TBL_EMAIL_RECEIVER_STATUS`, `TBL_ANALYTICS_LINK`, `TBL_EMAIL_LINKS`. For each column, also show one non-null sample value.*
 
-→ Bestätigt unser Annahme-Set und deckt unbekannte Felder auf (z.B. BounceReason, Unsubscribe-Flag).
+→ **Antwort**: 111 Spalten gesamt, alle nullable. `tbl_email` 54 cols (inkl. `TrackingId`, `CreatedBy`, `Subject`, `EmailSendingStatus`); `tbl_email_receiver_status` mit `Receiver`, `TNumber`, `Status`, `LogStatus`, `EmailLanguage`; `tbl_analytics_link` 22 cols mit `Agent`, `LinkTypeEnum`, `CurrentLanguage`, `EmailReceiverStatusId`; `tbl_email_links` 10 cols (lean, Template-Definitionen).
 
-### Q3 — HR-Bridge zwischen TNumber und GPN **(OP-07d, blocker für Empfänger-Level-Join)**
+### ~~Q3~~ ❌ HR-Bridge zwischen TNumber und GPN **(OP-07d — Hypothese widerlegt)**
 
-> *Inspect `TBL_HR_EMPLOYEE` and `TBL_HR_USER`: list all columns that look like employee identifiers (names containing `t_number`, `tnumber`, `gpn`, `ubs`, `personnel`, `staff`, `emp_id`). For each, show data type, sample value, and whether nulls exist. Also check whether any single table contains BOTH a T-number column and a GPN column.*
+> *Inspect `TBL_HR_EMPLOYEE` and `TBL_HR_USER`: list all columns that look like employee identifiers (names containing `t_number`, `tnumber`, `gpn`, `personnel`, `staff`, `emp_id`, `worker`, `abacus`, `websso`, `id`). For each, show data type, sample value, and whether nulls exist. Also check whether any single table contains BOTH a T-number column and a GPN column.*
 
-→ Findet die Tabelle, die TNumber ↔ GPN auflöst (Voraussetzung für Empfänger-Level Cross-Channel-Aggregation).
+→ **Antwort**: **GPN-Spalte existiert nicht in HR.** `tbl_hr_employees.T_NUMBER` (Lowercase `t001108`) und `tbl_hr_user.UbsId` (Uppercase `T594687`) sind beide T-Numbers. Andere Identifier in HR: `WORKER_ID`, `ABACUS_ID`, `ALTERNATE_WORKER_ID`, `WEBSSO`, `UUNAME`, `PersonalNumber`. Keine Bridge zu GPN. → Neue Frage Q3a.
+
+### Q3a — Was IST die GPN in AppInsights? **(OP-07e, neu kritisch)**
+
+Hypothese A: GPN ist eine String-Transformation des T-Numbers (`t001108` → `00001108`). Hypothese B: GPN kommt aus einem anderen System (Active Directory, WebSSO).
+
+> *Take 10 distinct non-null `customDimensions.GPN` values from our AppInsights `pageViews` (or `fact_page_view` if exposed). For each: try to find a matching employee in `tbl_hr_employees` by:
+> a) replacing leading zeros with 't' (e.g. `00001108` → `t001108`)
+> b) matching against `WORKER_ID`
+> c) matching against `ABACUS_ID`
+> d) matching against `ALTERNATE_WORKER_ID`
+> e) matching against `WEBSSO`
+> Report which strategy yields a hit (and how many of the 10 match).*
+
+→ Entscheidet, ob wir eine reine String-Transformation brauchen (billig) oder eine externe Bridge-Quelle erschliessen müssen (teuer).
 
 ---
 

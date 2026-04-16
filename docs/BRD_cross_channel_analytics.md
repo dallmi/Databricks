@@ -99,8 +99,8 @@ pbi_db_website_*  ──►  silver.dim_page
 | mailing_id | STRING | `TBL_EMAIL.Id` |
 | mailing_title | STRING | `TBL_EMAIL.Title` |
 | tracking_id, tracking_pack_id, … | STRING | Split aus `CammsTrackingID` (Spalte tbd, siehe OP-04) |
-| t_number | STRING (`t######`) | `TBL_ANALYTICS_LINK.TNumber` / `TBL_EMAIL_RECEIVER_STATUS.TNumber` — **Recipient-ID in iMEP** |
-| gpn | STRING (`########` 8-digit) | aus HR-Bridge resolved (TNumber → GPN) — Cross-Source-Schlüssel gegen PageView |
+| t_number | STRING (`t######`) | `TBL_ANALYTICS_LINK.TNumber` / `TBL_EMAIL_RECEIVER_STATUS.TNumber` — **Recipient-ID in iMEP** (Lowercase) |
+| gpn | STRING (`########` 8-digit) | abgeleitet aus T-Number (Hypothese OP-07e) bzw. via externer Bridge — Cross-Source-Schlüssel gegen PageView |
 | event | STRING (`sent` / `opened` / `clicked` / `bounced` / …) | abgeleitet aus `TBL_EMAIL_RECEIVER_STATUS` + `TBL_ANALYTICS_LINK.linkTypeenum` |
 | event_ts | TIMESTAMP | `CreationDate` (Send: STATUS, Click/Open: ANALYTICS_LINK) |
 | device_type | STRING | `Agent` + Multi-Device-CTE → `Desktop & Mobile` / `Desktop Only` / `Mobile Only` |
@@ -184,7 +184,7 @@ Single-File HTML (DuckDB-WASM + Chart.js), siehe Corporate Branding Guidelines i
 |---|---|
 | NFR-01 | Refresh: Nightly Batch, Ziel < 30 Min End-to-End. |
 | NFR-02 | Dashboard-Ladezeit < 3s bei Datenmenge von 12 Monaten. |
-| NFR-03 | Keine Brand-Namen im Code (`--corp-*`, nicht `--ubs-*`). |
+| NFR-03 | Keine Brand- oder Firmen­kürzel im Code (Prefix `--corp-*` o.ä., keine konzern­spezifischen Abkürzungen). |
 | NFR-04 | Corporate Color Palette verbindlich (siehe [CLAUDE.md](../../CLAUDE.md)). |
 | NFR-05 | PII (GPN, Email) wird in Gold nicht exponiert — nur `user_id` und HR-Dimensionen (siehe [pii_cleanup_pending](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/pii_cleanup_pending.md)). |
 | NFR-06 | Alle Timestamps in CET; UTC-Konvertierung im ETL. |
@@ -232,24 +232,26 @@ Die folgenden Punkte sind **vor** dem Start der Implementierung mit den jeweilig
 
 ### 9.1 iMEP (Email Channel)
 
-> **Update 2026-04-16**: OP-01, OP-03, OP-07 weitgehend geklärt durch Genie-Code (siehe Anhang A & [memory/imep_data_model.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_data_model.md)). Resterklärung verbleibt unten.
+> **Update 2026-04-16 (v2)**: Genie-Q1/Q2/Q3 beantwortet — siehe [memory/imep_genie_findings_q1_q2_q3.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_genie_findings_q1_q2_q3.md). **Spalte heisst `TrackingId` (nicht `CammsTrackingID`)** und lebt auf `tbl_email` (Mailing-Ebene). **GPN existiert NICHT in den HR-Tabellen** — neuer kritischer OP-07e.
 
-- ~~**OP-01**~~ ✅ Schema bekannt — `TBL_EMAIL_RECEIVER_STATUS` (Empfänger-Status), `TBL_ANALYTICS_LINK` (Open/Click), `TBL_EMAIL` (Mailing-Master). Siehe Anhang A.
+- ~~**OP-01**~~ ✅ Schema bekannt — `TBL_EMAIL_RECEIVER_STATUS` (Empfänger-Status), `TBL_ANALYTICS_LINK` (Open/Click), `TBL_EMAIL` (Mailing-Master, **inkl. `TrackingId`**), `TBL_EMAIL_LINKS` (Template). Siehe Anhang A und Genie-Findings.
 - **OP-02** Vollständige Liste der Werte in `TBL_EMAIL_RECEIVER_STATUS` (Send/Bounce/Unsubscribe) und `TBL_ANALYTICS_LINK.linkTypeenum` (`OPEN`, `CLICK`, …) — Bestätigung mit BA.
 - ~~**OP-03**~~ ✅ Unique-Dedup: `RecipientID + EmailId`. Multi-Device via CTE `HAVING COUNT(DISTINCT Agent) > 1`.
-- **OP-04** **Wo lebt die `CammsTrackingID` in iMEP?** — auf `TBL_EMAIL` (1× pro Mailing) oder pro Link in `TBL_EMAIL_LINKS`? Genie-Code zeigt sie nicht. **Kritisch für Cross-Channel-Join.**
+- ~~**OP-04**~~ ✅ Tracking-ID lebt auf `imep_bronze.tbl_email.TrackingId` (Mailing-Ebene). Cross-Channel-Join via `tbl_analytics_link.EmailId → tbl_email.Id → tbl_email.TrackingId`. Naming-Mapping: `TrackingId` (iMEP) ↔ `GICTrackingID` (SharePoint, mit Case-Varianten) ↔ `tracking_id` (CPLAN).
 - **OP-05** Audience-Size pro Pack: Kommt diese aus iMEP (Distribution List Size) oder CPLAN (`pack.target_audience_size`)?
 - **OP-06** Historisierung: Wie weit zurück reichen iMEP-Daten? Retention Policy?
-- ~~**OP-07**~~ ✅ Recipient läuft über `TNumber` (Format `t100200`) — HR-Join in iMEP via `TBL_HR_EMPLOYEE.T_NUMBER`.
-- **OP-07b** (neu) `TBL_HR_COSTCENTER.ORGANIZATIONAL_UNIT`-Join: Eindeutigkeit (1:1) und Historisierung (Org-Wechsel)?
-- **OP-07c** (neu) `TBL_EMAIL.CreatedBy` — wird das im Dashboard als Filter / Dimension benötigt (Creator-Reporting)?
-- **OP-07d** (neu) **TNumber ↔ GPN Bridge**: TNumber (`t100200`, iMEP) und GPN (`00100200`, AppInsights) sind unterschiedliche Identifier. In welcher HR-Tabelle / Spalte liegt das Mapping? `TBL_HR_EMPLOYEE` muss beide Spalten führen oder es braucht eine separate Bridge. **Voraussetzung für jede Cross-Source-Aggregation auf Empfänger-Ebene** (z.B. "wer hat Mail X erhalten und Page Y besucht").
+- ~~**OP-07**~~ ✅ Recipient läuft über `TNumber` (Format `t100200`) — HR-Join in iMEP via `TBL_HR_EMPLOYEES.T_NUMBER` (**Achtung Case**: `tbl_hr_user.UbsId` ist Uppercase `T594687`, `T_NUMBER` ist Lowercase — Normalisierung Pflicht).
+- **OP-07b** `TBL_HR_COSTCENTER.ORGANIZATIONAL_UNIT`-Join: Eindeutigkeit (1:1) und Historisierung (Org-Wechsel)?
+- **OP-07c** `TBL_EMAIL.CreatedBy` — wird das im Dashboard als Filter / Dimension benötigt (Creator-Reporting)?
+- ~~**OP-07d**~~ ❌ **Hypothese widerlegt**: Es gibt **keine HR-Tabelle, die TNumber UND GPN führt**. GPN existiert in den geprüften HR-Tabellen (`tbl_hr_employees`, `tbl_hr_user`) nicht. → siehe **OP-07e**.
+- **OP-07e** (neu, **kritisch**) **Was ist die "GPN" in AppInsights wirklich?** Hypothese A: Die GPN ist eine String-Transformation des T-Numbers (`t001108` → `00001108`). Verifikation: 10 Beispiel-User aus AppInsights nehmen, T-Number-Variante ableiten, gegen `tbl_hr_employees.T_NUMBER` prüfen. Hypothese B: GPN kommt aus Active Directory / WebSSO und ist nicht in HR — dann brauchen wir eine externe Bridge-Quelle.
+- **OP-07f** (neu) **iMEP Gold-Layer evaluieren**: `imep_gold.tbl_pbi_platform_mailings` und `imep_gold.tbl_pbi_platform_events` existieren bereits. Was enthalten sie? Können sie unsere Bronze-Build-Aufwände ersetzen / abkürzen?
 
-### 9.2 CammsTrackingID
+### 9.2 TrackingId (vormals CammsTrackingID)
 
-- **OP-08** Werden in iMEP jemals Emails *ohne* `CammsTrackingID` versendet (Transactional)? Filter-Regel?
-- **OP-09** Sind `CammsTrackingID` case-sensitive? Normalisierungs­regel.
-- **OP-10** Gibt es historische Packs, die das 5-Segment-Schema noch nicht erfüllen? Backward-Compatibility-Strategie.
+- **OP-08** Werden in iMEP jemals Emails *ohne* `TrackingId` versendet (Transactional)? Filter-Regel? (`SELECT COUNT(*) WHERE TrackingId IS NULL`).
+- **OP-09** Case-Sensitivity: SharePoint-Spaltennamen liegen in mehreren Präfix- und Case-Varianten von `GICTrackingID` vor — sind auch die *Werte* case-mixed? Normalisierungs­regel beim Join.
+- **OP-10** Gibt es historische Packs, die das 5-Segment-32-Char-Schema nicht erfüllen? SharePoint-Sample `12345-12345123-12345-12345-1` deutet auf abweichende Formate in alten Daten hin. Backward-Compatibility-Strategie.
 
 ### 9.3 CPLAN Integration
 
