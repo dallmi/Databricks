@@ -99,8 +99,7 @@ pbi_db_website_*  ──►  silver.dim_page
 | mailing_id | STRING | `TBL_EMAIL.Id` |
 | mailing_title | STRING | `TBL_EMAIL.Title` |
 | tracking_id, tracking_pack_id, … | STRING | Split aus `CammsTrackingID` (Spalte tbd, siehe OP-04) |
-| t_number | STRING (`t######`) | `TBL_ANALYTICS_LINK.TNumber` / `TBL_EMAIL_RECEIVER_STATUS.TNumber` — **Recipient-ID in iMEP** (Lowercase) |
-| gpn | STRING (`########` 8-digit) | abgeleitet aus T-Number (Hypothese OP-07e) bzw. via externer Bridge — Cross-Source-Schlüssel gegen PageView |
+| t_number | STRING (`t######`, lowercase) | `TBL_ANALYTICS_LINK.TNumber` / `TBL_EMAIL_RECEIVER_STATUS.TNumber` — **einziger Empfänger-Schlüssel im gesamten Silver/Gold-Layer**. PageView-Seite löst GPN via `imep_bronze.tbl_hr_employee.WORKER_ID → T_NUMBER` auf, GPN wird nach Silver-Build nicht mehr geführt. |
 | event | STRING (`sent` / `opened` / `clicked` / `bounced` / …) | abgeleitet aus `TBL_EMAIL_RECEIVER_STATUS` + `TBL_ANALYTICS_LINK.linkTypeenum` |
 | event_ts | TIMESTAMP | `CreationDate` (Send: STATUS, Click/Open: ANALYTICS_LINK) |
 | device_type | STRING | `Agent` + Multi-Device-CTE → `Desktop & Mobile` / `Desktop Only` / `Mobile Only` |
@@ -243,8 +242,8 @@ Die folgenden Punkte sind **vor** dem Start der Implementierung mit den jeweilig
 - ~~**OP-07**~~ ✅ Recipient läuft über `TNumber` (Format `t100200`) — HR-Join in iMEP via `TBL_HR_EMPLOYEES.T_NUMBER` (**Achtung Case**: `tbl_hr_user.UbsId` ist Uppercase `T594687`, `T_NUMBER` ist Lowercase — Normalisierung Pflicht).
 - **OP-07b** `TBL_HR_COSTCENTER.ORGANIZATIONAL_UNIT`-Join: Eindeutigkeit (1:1) und Historisierung (Org-Wechsel)?
 - **OP-07c** `TBL_EMAIL.CreatedBy` — wird das im Dashboard als Filter / Dimension benötigt (Creator-Reporting)?
-- ~~**OP-07d**~~ ⚠️ **Teil-Befund**: In den ersten geprüften HR-Tabellen (`tbl_hr_employees`, `tbl_hr_user`) wurde keine GPN-Spalte gefunden. **Aber: laut User existiert in HR eine bestätigte 1:1-Beziehung GPN ↔ TNumber.** Die Spalte muss daher unter einem nicht offensichtlichen Namen oder in einer noch nicht inspizierten HR-Tabelle existieren. → siehe **OP-07e**.
-- **OP-07e** (neu, **kritisch**) **Wo lebt die GPN in HR?** Erweiterte Suche nötig (siehe Genie Q3b): (a) alle HR-Tabellen vollständig listen; (b) alle 114 Spalten von `tbl_hr_employees` dumpen und nach 8-stelligen Werten filtern; (c) erweitertes Keyword-Set (`gpn`, `global`, `pid`, `wmid`, `master_id`, `corp_id`, `emp_global`, `enterprise_id`, `personnel_no`). Erst wenn das ergebnislos bleibt, ist eine externe Bridge-Quelle (AD/WebSSO) zu erschliessen.
+- ~~**OP-07d**~~ ✅ **Bridge gefunden**: `imep_bronze.tbl_hr_employee` enthält **sowohl** `T_NUMBER` (Lowercase, `t######`) **als auch** `WORKER_ID` (= GPN, 8-digit). Reiner LEFT JOIN, keine String-Transformation nötig.
+- ~~**OP-07e**~~ ✅ Erledigt durch OP-07d-Auflösung. **Konsequenz**: Im Silver-ETL für `fact_page_view` die GPN sofort via `WORKER_ID` zu `T_NUMBER` auflösen. Danach ist `t_number` der einzige Empfänger-Schlüssel im gesamten Silver/Gold-Layer.
 - **OP-07f** (neu) **iMEP Gold-Layer evaluieren**: `imep_gold.tbl_pbi_platform_mailings` und `imep_gold.tbl_pbi_platform_events` existieren bereits. Was enthalten sie? Können sie unsere Bronze-Build-Aufwände ersetzen / abkürzen?
 
 ### 9.2 TrackingId (vormals CammsTrackingID)

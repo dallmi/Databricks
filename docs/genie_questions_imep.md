@@ -37,7 +37,7 @@ Konvention:
 
 → **Antwort**: **GPN-Spalte existiert nicht in HR.** `tbl_hr_employees.T_NUMBER` (Lowercase `t001108`) und `tbl_hr_user.UbsId` (Uppercase `T594687`) sind beide T-Numbers. Andere Identifier in HR: `WORKER_ID`, `ABACUS_ID`, `ALTERNATE_WORKER_ID`, `WEBSSO`, `UUNAME`, `PersonalNumber`. Keine Bridge zu GPN. → Neue Frage Q3a.
 
-### Q3a — Was IST die GPN in AppInsights? **(OP-07e, neu kritisch)**
+### ~~Q3a~~ ✅ Was IST die GPN in AppInsights? **(OP-07e — gelöst durch Q3b-Befund)**
 
 Hypothese A: GPN ist eine String-Transformation des T-Numbers (`t001108` → `00001108`). Hypothese B: GPN kommt aus einem anderen System (Active Directory, WebSSO).
 
@@ -51,7 +51,11 @@ Hypothese A: GPN ist eine String-Transformation des T-Numbers (`t001108` → `00
 
 → Entscheidet, ob wir eine reine String-Transformation brauchen (billig) oder eine externe Bridge-Quelle erschliessen müssen (teuer).
 
-### Q3b — Erweiterte HR-Suche nach GPN-Spalte **(OP-07e, ergänzend)**
+### ~~Q3b~~ ✅ Erweiterte HR-Suche nach GPN-Spalte **(OP-07e — gelöst)**
+
+> **Antwort**: `imep_bronze.tbl_hr_employee.WORKER_ID` ist die GPN. Dieselbe Tabelle führt auch `T_NUMBER`. Bridge ist ein einfacher LEFT JOIN, keine externe Quelle nötig. Genie-initiale Suche hatte `WORKER_ID` als "Primary worker identifier" sogar gelistet — Verbindung zur GPN aber nicht hergestellt.
+
+**Original-Frage (zur Doku):**
 
 > **Domänen-Wissen**: GPN und TNumber haben in HR eine bestätigte 1:1-Beziehung. Wenn unsere ersten Q3-Treffer keine GPN-Spalte gezeigt haben, war die Suche zu eng.
 
