@@ -35,13 +35,9 @@ Drei Datenquellen, verbunden über `CammsTrackingID`:
    Source: `imep_bronze.tbl_email_receiver_status` (Databricks / Unity Catalog).
    Channel-Abbr: `EMI`.
 
-2. **AppInsights PageViews (Intranet)** — Bereits geflattened durch
-   [`scripts/flatten_appinsights.py`](../scripts/flatten_appinsights.py) →
-   `fact_page_view` / `agg_session`.
-   Channel-Abbr: `INT`.
+2. **SharePoint PageViews (Intranet Interactions)** — `sharepoint_bronze.pageviews` (Views, Visits, Engagement; Spalte `GICTrackingID`). Komplementär dazu die historische Pipeline aus AppInsights `pageViews` Telemetrie via [`scripts/flatten_appinsights.py`](../scripts/flatten_appinsights.py) → `fact_page_view` / `agg_session`. Zu klären, welche der beiden die kanonische Quelle wird. Channel-Abbr: `INT`.
 
-3. **CPLAN Pages / Activity-Metadaten** — Page-Inventory und Activity-Planung
-   (`pbi_db_website_page_inventory`, `pbi_db_website_webpage_inventory`, CPLAN packs/clusters/activities).
+3. **SharePoint Pages / Page-Inventory** — `sharepoint_bronze.pages` (Page-Master + Article-Metadaten + `UBSGICTrackingID` + `UBSArticleDate`). Plus CPLAN für übergeordnete Pack/Cluster/Activity-Planung.
 
 Flankierend:
 - **HR Snapshot Join** (GPN → Division / Region / Management Level) — bereits im PageView-Pipeline integriert.
@@ -238,13 +234,18 @@ Die folgenden Punkte sind **vor** dem Start der Implementierung mit den jeweilig
 - ~~**OP-03**~~ ✅ Unique-Dedup: `RecipientID + EmailId`. Multi-Device via CTE `HAVING COUNT(DISTINCT Agent) > 1`.
 - ~~**OP-04**~~ ✅ Tracking-ID lebt auf `imep_bronze.tbl_email.TrackingId` (Mailing-Ebene). Cross-Channel-Join via `tbl_analytics_link.EmailId → tbl_email.Id → tbl_email.TrackingId`. Naming-Mapping: `TrackingId` (iMEP) ↔ `GICTrackingID` (SharePoint, mit Case-Varianten) ↔ `tracking_id` (CPLAN).
 - **OP-05** Audience-Size pro Pack: Kommt diese aus iMEP (Distribution List Size) oder CPLAN (`pack.target_audience_size`)?
-- **OP-06** Historisierung: Wie weit zurück reichen iMEP-Daten? Retention Policy?
+- ~~**OP-06**~~ ✅ Historisierung: `tbl_pbi_platform_mailings` ab 2020-11-18 (5+ Jahre, 73.8k Rows), `tbl_pbi_platform_events` ab 2013-10-10 (12+ Jahre, 84k Rows). Beide täglich aktualisiert. Bronze-Tabellen separat zu prüfen, aber Gold-Coverage zeigt: ausreichend lange Historie.
 - ~~**OP-07**~~ ✅ Recipient läuft über `TNumber` (Format `t100200`) — HR-Join in iMEP via `TBL_HR_EMPLOYEES.T_NUMBER` (**Achtung Case**: `tbl_hr_user.UbsId` ist Uppercase `T594687`, `T_NUMBER` ist Lowercase — Normalisierung Pflicht).
 - **OP-07b** `TBL_HR_COSTCENTER.ORGANIZATIONAL_UNIT`-Join: Eindeutigkeit (1:1) und Historisierung (Org-Wechsel)?
 - **OP-07c** `TBL_EMAIL.CreatedBy` — wird das im Dashboard als Filter / Dimension benötigt (Creator-Reporting)?
 - ~~**OP-07d**~~ ✅ **Bridge gefunden**: `imep_bronze.tbl_hr_employee` enthält **sowohl** `T_NUMBER` (Lowercase, `t######`) **als auch** `WORKER_ID` (= GPN, 8-digit). Reiner LEFT JOIN, keine String-Transformation nötig.
 - ~~**OP-07e**~~ ✅ Erledigt durch OP-07d-Auflösung. **Konsequenz**: Im Silver-ETL für `fact_page_view` die GPN sofort via `WORKER_ID` zu `T_NUMBER` auflösen. Danach ist `t_number` der einzige Empfänger-Schlüssel im gesamten Silver/Gold-Layer.
-- **OP-07f** (neu) **iMEP Gold-Layer evaluieren**: `imep_gold.tbl_pbi_platform_mailings` und `imep_gold.tbl_pbi_platform_events` existieren bereits. Was enthalten sie? Können sie unsere Bronze-Build-Aufwände ersetzen / abkürzen?
+- ~~**OP-07f**~~ ✅ **iMEP Gold-Layer ausgewertet** (Q1b-Befund, siehe [memory/imep_gold_layer_analysis.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_gold_layer_analysis.md)):
+  - Gold ist **Master + Content-Metriken**, **kein** Send/Open/Click-Aggregat → `silver.fact_email` weiterhin aus Bronze (Pattern 2).
+  - Gold ist **ideal als `silver.dim_pack`-Quelle** → Pack-Metadaten ohne Bronze-JOIN, ohne CPLAN-Abhängigkeit.
+  - **Phase 2 (Events) kann vorgezogen werden** — `tbl_pbi_platform_events.registration` ist die Attended-Metrik.
+  - Historisierung: Mailings 2020-11→heute, Events 2013-10→heute, täglich refreshed.
+  - **Sentinel-Wert `2124` für `EventFrom`** bei open-ended Events → Filter-Logik.
 
 ### 9.2 TrackingId (vormals CammsTrackingID)
 
@@ -261,7 +262,7 @@ Die folgenden Punkte sind **vor** dem Start der Implementierung mit den jeweilig
 
 ### 9.4 AppInsights / PageViews
 
-- **OP-15** `CammsTrackingID` in `customDimensions.CustomProps` — wird sie konsequent für *alle* Intranet-Pages gesetzt, oder nur bei verlinkten Campaign-Pages?
+- **OP-15** **Geklärt im Prinzip, Coverage-Analyse offen**: Laut User wird `UBSGICTrackingID` in `sharepoint_bronze.pages` **nur für News- und Event-Pages (Articles)** abgefüllt — nicht universell. `UBSArticleDate` als temporaler Anker. Konsequenz: Cross-Channel-Funnel ist auf **Article-Views begrenzt**, nicht auf alle Intranet-Pages. **Quantitative Coverage-Analyse (Genie Q15/Q15b) erforderlich**, um Default-Zeitraum und Dashboard-Scope zu setzen.
 - **OP-16** Attribution-Window: Wie lange nach Email-Send darf ein PageView noch der Kampagne zugerechnet werden, wenn `CammsTrackingID` fehlt (Orphan)?
 - **OP-17** Banner (`BAN`): Wie werden Banner-Impressions in AppInsights geliefert? Eigener EventType?
 

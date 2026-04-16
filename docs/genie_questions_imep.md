@@ -19,11 +19,11 @@ Konvention:
 
 → **Antwort**: Spalte heisst `TrackingId` (nicht `CammsTrackingID`), liegt auf `imep_bronze.tbl_email` (Mailing-Ebene), Beispiel `QRREP-0000058-240709-0000060-EMI`. Cross-Channel-Join via `tbl_analytics_link.EmailId → tbl_email.Id → tbl_email.TrackingId`. SharePoint nutzt `GICTrackingID` (mit Case-Varianten), CPLAN nutzt `tracking_id`.
 
-### Q1b — iMEP Gold-Layer evaluieren **(OP-07f, neu)**
+### ~~Q1b~~ ✅ iMEP Gold-Layer evaluieren **(OP-07f — gelöst)**
 
 > *Show full schema and a 5-row sample of `imep_gold.tbl_pbi_platform_mailings` and `imep_gold.tbl_pbi_platform_events`. For each table, list which iMEP bronze tables / events / aggregations they appear to combine. Are these tables refreshed regularly (check max CreationDate / load timestamp)?*
 
-→ Wenn Gold bereits eine pro-Mailing-Aggregation mit Counts (sent/opened/clicked) hat, sparen wir den ganzen Bronze→Silver-Build und bauen `silver.fact_email` direkt darauf auf.
+→ **Antwort**: Gold ist **Mailing-/Event-Master mit Content- & Registration-Metriken**, **kein** Send/Open/Click-Aggregat. Konsequenz: `silver.fact_email` weiterhin aus Bronze, aber `silver.dim_pack` direkt aus Gold (`tbl_pbi_platform_mailings` + `tbl_pbi_platform_events` UNION). Event-Phase kann vorgezogen werden (Registration-Count vorhanden). Beide Tabellen täglich refreshed. Sentinel-Wert `2124` für open-ended Events. Siehe [memory/imep_gold_layer_analysis.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_gold_layer_analysis.md).
 
 ### ~~Q2~~ ✅ Vollständiges Schema der Kern-Tabellen **(OP-01 — gelöst)**
 
@@ -169,13 +169,30 @@ Hypothese A: GPN ist eine String-Transformation des T-Numbers (`t001108` → `00
 
 ## F — Integration mit PageView (AppInsights)
 
-### Q15 — CammsTrackingID-Coverage in PageView **(OP-15)**
+### Q15 — TrackingID-Coverage in SharePoint Pages Inventory **(OP-15, verfeinert)**
 
-> *In our `fact_page_view` table: what percentage of rows have a non-null `tracking_pack_id`? Show the distribution by month for the last 12 months. Also: what's the percentage of rows where `tracking_channel_abbr = 'INT'` specifically?*
+> **Domänen-Kontext**: `sharepoint_bronze.pages` ist die Page-Inventory-Tabelle. `UBSGICTrackingID` wird **nur für News- und Event-Pages (Articles)** abgefüllt. `UBSArticleDate` ist der temporale Anker.
 
-> *Hinweis: falls `fact_page_view` noch nicht als Tabelle existiert, stattdessen gegen `pbi_db_website_page_view` und die `customDimensions`-JSON-Spalte direkt abfragen.*
+> *Two-step coverage analysis on `sharepoint_bronze.pages`:*
+>
+> *1. **Overall coverage**: Show total row count, count where `UBSGICTrackingID IS NOT NULL`, count where `UBSArticleDate IS NOT NULL`, and count where both are populated. Express each as percentage of total.*
+>
+> *2. **Coverage trend over time**: Group rows by `DATE_TRUNC('month', UBSArticleDate)` for the last 36 months. For each month show: total articles (rows with non-null `UBSArticleDate`), articles with `UBSGICTrackingID`, and the coverage percentage. Also flag the first month where coverage exceeds 80% — that's the realistic start date for cross-channel funnel reporting.*
 
-→ Quantifiziert Attribution-Gap (Orphan-Handling-Dringlichkeit).
+→ Definiert den **realistischen Wert-Anspruch** des Cross-Channel-Modells. Wenn Coverage erst ab z.B. 2024 verlässlich ist, sollte das Dashboard das transparent abbilden (Default-Zeitraum, Coverage-Note).
+
+### Q15b — TrackingID-Coverage in `sharepoint_bronze.pageviews` **(Folge-Frage)**
+
+> **Architektur-Hinweis**: `sharepoint_bronze.pageviews` ist die laufende Interactions-Tabelle (Views/Visits) und hat selbst eine Spalte `GICTrackingID` (ohne `UBS`-Präfix — Inkonsistenz zur Inventory `UBSGICTrackingID`). `sharepoint_bronze.pages` ist die Inventory.
+
+> *In `sharepoint_bronze.pageviews`: joine zu `sharepoint_bronze.pages` über `page_id` (oder ähnlichem FK). Zeige für die letzten 12 Monate pro Monat:*
+> - *Total page views*
+> - *Page views auf Article-Pages (joined page hat `UBSArticleDate IS NOT NULL`)*
+> - *Page views mit gefülltem `pageviews.GICTrackingID`*
+> - *Page views, bei denen `pages.UBSGICTrackingID = pageviews.GICTrackingID` (Konsistenz-Check zwischen den beiden Tabellen)*
+> - *Coverage-% (TrackingID-tracked Views / Article-Views)*
+
+→ Drei Befunde auf einmal: (1) Traffic-gewichtete Coverage (entscheidender als Inventory-Coverage, weil das Dashboard Views aggregiert); (2) Konsistenz-Check, ob die TrackingID in `pageviews` mit der in `pages` matcht; (3) Validierung, dass die historischen `pageviews_*`-Varianten irrelevant sind.
 
 ### Q16 — Attribution-Lag zwischen Email und PageView **(OP-16)**
 
