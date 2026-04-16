@@ -51,6 +51,22 @@ Hypothese A: GPN ist eine String-Transformation des T-Numbers (`t001108` → `00
 
 → Entscheidet, ob wir eine reine String-Transformation brauchen (billig) oder eine externe Bridge-Quelle erschliessen müssen (teuer).
 
+### Q3b — Erweiterte HR-Suche nach GPN-Spalte **(OP-07e, ergänzend)**
+
+> **Domänen-Wissen**: GPN und TNumber haben in HR eine bestätigte 1:1-Beziehung. Wenn unsere ersten Q3-Treffer keine GPN-Spalte gezeigt haben, war die Suche zu eng.
+
+> **Wichtig**: nur Metadaten und Pattern-Counts ausgeben — KEINE Beispielwerte (PII vermeiden).
+
+> *Three-step deep search — return only schema metadata and aggregate counts, no individual values:
+>
+> 1. List ALL tables in any schema starting with `tbl_hr_` or containing the word `employee`, `person`, `worker`, `staff`, `identity`, `directory`. Show table name, column count, row count.
+>
+> 2. For `tbl_hr_employees`: list all 114 column names and data types (DESCRIBE output). Then, for each STRING column, return only this aggregate: `count_matching_8digits` = number of rows where the column value matches regex `^[0-9]{8}$`. Do NOT return any actual values. Columns with a high `count_matching_8digits` are structurally GPN candidates.
+>
+> 3. Search column names across all HR tables for ANY of these tokens (case-insensitive): `gpn`, `global`, `g_p_n`, `personnel_no`, `personnel_number`, `pid`, `wmid`, `master_id`, `master_no`, `corp_id`, `emp_global`, `enterprise_id`. For each hit, return only `table.column`, data type, null count, total row count — no sample values.*
+
+→ Wenn das die GPN-Spalte findet: Bridge in HR vorhanden, OP-07e geschlossen. Wenn nicht: extern (AD/WebSSO) erschliessen.
+
 ---
 
 ## B — Status- und Event-Werte
