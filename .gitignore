@@ -12,7 +12,12 @@ input/*.xls
 AppInsightSchema/*.jpeg
 AppInsightSchema/*.jpg
 AppInsightSchema/*.png
+Bilder/
 10. März 2026/
+
+# macOS
+.DS_Store
+**/.DS_Store
 
 # Python
 __pycache__/
