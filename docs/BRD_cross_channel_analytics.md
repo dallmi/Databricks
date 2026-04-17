@@ -71,19 +71,33 @@ Die ID wird in CPLAN pro Activity generiert und in jedem Kanal mit­gegeben. Sie
 
 **Zu beachten:** CPLAN-Quell-CSVs enthalten sowohl `Tracking ID` als auch `Tacking ID` (Tippfehler). Beide Varianten müssen in der ETL gelesen werden.
 
-### 4.2 Layered Architecture (Unity Catalog)
+### 4.2 Layered Architecture (Unity Catalog) — revised post-Q16
 
 ```
-Bronze                 Silver                          Gold
-──────────             ─────────────────────           ──────────────────────
-imep_bronze.*     ──►  silver.fact_email         ──►  gold.fact_cross_channel
-appinsights raw   ──►  silver.fact_page_view     ──►  gold.dim_pack
-cplan packs/acts  ──►  silver.dim_pack / dim_activity
-hr_history        ──►  silver.dim_employee_temporal
-pbi_db_website_*  ──►  silver.dim_page
+Existing (read-only)                                  Our gold model
+═══════════════════════════════════════════════       ═══════════════════════
+
+iMEP Gold (5 tiers, confirmed):
+  Tier 3 (Mailing × dim, incl. UniqueOpens/Clicks):
+    imep_gold.tbl_pbi_engagement             ────►  gold.fact_cross_channel
+    imep_gold.tbl_pbi_mailingreciever_region ────►        (pack-level aggregation)
+    imep_gold.tbl_pbi_mailingreciever_division ──►
+  Tier 4 (Master):
+    imep_gold.tbl_pbi_platform_mailings      ────►  gold.dim_pack
+    imep_gold.tbl_pbi_platform_events        ────►  gold.dim_pack
+    imep_gold.tbl_pbi_deviceTypeall          ────►  (Device dimension)
+
+SharePoint Gold (TBD — Q17 to find):
+  sharepoint_gold.[pageview_aggregate?]      ────►  gold.fact_cross_channel
+                                                    (intranet side)
+
+Bronze only for enrichment we can't get from gold:
+  imep_bronze.tbl_hr_employee                ────►  silver.dim_employee_temporal
+  imep_bronze.tbl_hr_costcenter              ────►  (unless gold mapping fixes NULL-region)
+  sharepoint_bronze.pages                    ────►  silver.dim_page (article metadata)
 ```
 
-**Silver-Fakten führen alle 7 Tracking-Spalten** (`tracking_id`, `tracking_pack_id`, `tracking_cluster_id`, `tracking_pack_number`, `tracking_pub_date`, `tracking_activity_number`, `tracking_channel_abbr`) als first-class columns.
+**Revised principle**: Wo Gold bereits aggregiert, **aggregieren wir nicht neu** — wir joinen Gold direkt. Silver wird minimal (nur für Daten, die Gold wirklich nicht hat). Was Gold nicht hat: Employee-Bridge mit Temporal-Logik (`dim_employee_temporal`) und Page-Article-Metadaten (`dim_page`).
 
 ### 4.3 Silver Facts — Schemas
 
@@ -240,12 +254,15 @@ Die folgenden Punkte sind **vor** dem Start der Implementierung mit den jeweilig
 - **OP-07c** `TBL_EMAIL.CreatedBy` — wird das im Dashboard als Filter / Dimension benötigt (Creator-Reporting)?
 - ~~**OP-07d**~~ ✅ **Bridge gefunden**: `imep_bronze.tbl_hr_employee` enthält **sowohl** `T_NUMBER` (Lowercase, `t######`) **als auch** `WORKER_ID` (= GPN, 8-digit). Reiner LEFT JOIN, keine String-Transformation nötig.
 - ~~**OP-07e**~~ ✅ Erledigt durch OP-07d-Auflösung. **Konsequenz**: Im Silver-ETL für `fact_page_view` die GPN sofort via `WORKER_ID` zu `T_NUMBER` auflösen. Danach ist `t_number` der einzige Empfänger-Schlüssel im gesamten Silver/Gold-Layer.
-- ~~**OP-07f**~~ ✅ **iMEP Gold-Layer ausgewertet** (Q1b-Befund, siehe [memory/imep_gold_layer_analysis.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_gold_layer_analysis.md)):
-  - Gold ist **Master + Content-Metriken**, **kein** Send/Open/Click-Aggregat → `silver.fact_email` weiterhin aus Bronze (Pattern 2).
-  - Gold ist **ideal als `silver.dim_pack`-Quelle** → Pack-Metadaten ohne Bronze-JOIN, ohne CPLAN-Abhängigkeit.
-  - **Phase 2 (Events) kann vorgezogen werden** — `tbl_pbi_platform_events.registration` ist die Attended-Metrik.
-  - Historisierung: Mailings 2020-11→heute, Events 2013-10→heute, täglich refreshed.
-  - **Sentinel-Wert `2124` für `EventFrom`** bei open-ended Events → Filter-Logik.
+- ~~**OP-07f**~~ ✅ **iMEP Gold vollständig ausgewertet** (Q16-Befund, siehe [memory/imep_gold_full_inventory.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_gold_full_inventory.md)):
+  - **Gold hat doch Engagement-Aggregate.** Q1b-Suche war zu eng — nur `tbl_pbi_platform_mailings` inspiziert, nicht das komplette Schema.
+  - **5-Tier-Architektur**: Atomic Fact (`Final`, 525M), Rolling Timespan Aggs (Tier 2), **Mailing-Level Engagement Summaries** (Tier 3 — `tbl_pbi_engagement`, `tbl_pbi_mailingreciever_region`, `_division`), Platform Metadata (Tier 4), Reference (Tier 5).
+  - **`tbl_pbi_engagement`** (1.38M Rows) — Mailing × Link/Component mit `UniqueOpens`, `UniqueClicks`, `Count`.
+  - **`tbl_pbi_mailingreciever_region`** (697K) — Mailing × Region/Country/Town.
+  - **`tbl_pbi_mailingreciever_division`** (290K) — Mailing × Business Division.
+  - **Konsequenz**: `silver.fact_email` wird **nicht aus Bronze** gebaut, sondern ist ein direkter SELECT aus Tier-3-Gold. Keine Multi-Device-CTE, kein HR-Join — alles pre-aggregated.
+  - **Aggregate haben KEINE Historisierung** (Rebuild on Pipeline Run). Für Trend-Analyse über längere Zeit müssen wir Snapshots persistieren.
+- **OP-07g** (neu, **kritisch**) **66% NULL-Region in Gold** — `184M von 278M Recipients` haben keine Region-Zuordnung wegen fehlgeschlagenem `tbl_hr_employee.ORGANIZATIONAL_UNIT ↔ tbl_hr_costcenter` JOIN. Das ist laut Genie *der* dominante Datenqualitäts-Blocker. Dashboard muss transparent kommunizieren. Ursachen-Analyse nötig: sind betroffene Employees ex-Mitarbeiter mit alten Cost-Centern? Gibt es eine Cost-Center-Historie, die wir nutzen können?
 
 ### 9.2 TrackingId (vormals CammsTrackingID)
 
@@ -262,7 +279,10 @@ Die folgenden Punkte sind **vor** dem Start der Implementierung mit den jeweilig
 
 ### 9.4 AppInsights / PageViews
 
-- **OP-15** **Geklärt im Prinzip, Coverage-Analyse offen**: Laut User wird `UBSGICTrackingID` in `sharepoint_bronze.pages` **nur für News- und Event-Pages (Articles)** abgefüllt — nicht universell. `UBSArticleDate` als temporaler Anker. Konsequenz: Cross-Channel-Funnel ist auf **Article-Views begrenzt**, nicht auf alle Intranet-Pages. **Quantitative Coverage-Analyse (Genie Q15/Q15b) erforderlich**, um Default-Zeitraum und Dashboard-Scope zu setzen.
+- **OP-15** **Teilweise geklärt**: `UBSGICTrackingID` in `sharepoint_bronze.pages` nur für News/Event-Articles. Per Q17 bestätigt: `sharepoint_gold` liefert PageView-Aggregate (20 Tabellen, 270M rows) — ob pro TrackingId dimensioniert oder nur pro Page, klärt Q17b. Coverage-Analyse Q15/Q15b bleibt relevant.
+- **OP-15b** (neu) **`sharepoint_gold`-Inhalte nutzen**: Primäre PageView-Fact-Tabellen sind `pbi_db_interactions_metrics` (84M), `pbi_db_pageviewed_metric` (84M), `pbi_db_pagevisited_metric` (81M). Zu klären via Q17b: Gold-Metric direkt per TrackingId joinen oder via page_id → `sharepoint_bronze.pages.UBSGICTrackingID`.
+- **OP-15c** (neu) **CPLAN direkt in Databricks**: `sharepoint_cplan` enthält `trackingcluster_bronze` (17 Clusters), `communicationspacks_bronze` (280 Packs), `internalcommunicationactivities_bronze` (4,349 Activities). Das ersetzt externes CPLAN-Repo als Quelle für `silver.dim_pack`. Zu klären via Q17e: FK-Relationen zwischen diesen Tabellen und Link zu iMEP Gold.
+- **OP-15d** (neu, Governance) **`pbi_gold` Zugriff anfragen**: 60 Tabellen, wahrscheinlich zentrales Semantic Model. Aktuell inaccessible. Access-Request beim Catalog-Admin stellen (Q17f).
 - **OP-16** Attribution-Window: Wie lange nach Email-Send darf ein PageView noch der Kampagne zugerechnet werden, wenn `CammsTrackingID` fehlt (Orphan)?
 - **OP-17** Banner (`BAN`): Wie werden Banner-Impressions in AppInsights geliefert? Eigener EventType?
 

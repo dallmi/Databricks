@@ -242,17 +242,63 @@ Hypothese A: GPN ist eine String-Transformation des T-Numbers (`t001108` → `00
 
 Hintergrund: Laut User enthält Gold **zwangsläufig** Engagement-Aggregate (Sends/Opens/Clicks in iMEP, PageViews in SharePoint) — sonst könnte das bestehende Power-BI Semantic Model sie gar nicht darstellen. Unsere Q1b-Suche auf `tbl_pbi_platform_mailings` war zu eng. Ziel dieser Sektion: **die tatsächlich konsumierten Gold-Tabellen finden**, um `gold.fact_cross_channel` als reinen Gold-JOIN zu bauen (kein Bronze-ETL).
 
-### Q16 — Alle Tabellen in `imep_gold` (breiter als zuvor)
+### ~~Q16~~ ✅ Alle Tabellen in `imep_gold` **(gelöst 2026-04-17)**
 
-> *List ALL tables AND views in the `imep_gold` schema — not filtered by keyword. For each: table name, row count, column count, max(CreationDate) or load timestamp. Additionally, for each table, list the first 5 column names so we can spot engagement fields (sent_count, opened_count, clicked_count, unique_opens, unique_clicks, bounce_count, etc.).*
+> *List ALL tables AND views in the `imep_gold` schema …*
 
-→ Keine Keyword-Filterung diesmal — vollständiger Scan. Die Engagement-Tabellen haben vermutlich Power-BI-affine Namen wie `tbl_pbi_*` statt `tbl_engagement_*`.
+→ **Antwort**: 5-Tier-Architektur gefunden. Tier 1 = atomic `Final` (525M). Tier 2 = Rolling timespan aggs (`tbl_pbi_date*`, `_divarea*`, `_regcntry*`, `_deviceTypeall`) — pattern `EngagementType + Count`, keine separaten Open/Click-KPIs. **Tier 3 = Engagement-Summaries MIT UniqueOpens/UniqueClicks**: `tbl_pbi_engagement` (Mailing×Link, 1.38M), `tbl_pbi_mailingreciever_region` (697K), `tbl_pbi_mailingreciever_division` (290K). Tier 4 = Platform Metadata. Tier 5 = Reference. Daily refresh; Aggregationen ohne Historisierung. 66% NULL-Region als Data-Quality-Blocker. **Vollständige Tabellenliste**: siehe [memory/imep_gold_full_inventory.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_gold_full_inventory.md).
 
-### Q17 — Existieren weitere Gold-Schemas (speziell SharePoint)?
+### Q16b — `Final`-Tabelle: Grain und Partitionierung **(Follow-up)**
 
-> *Run `SHOW SCHEMAS` (or catalog listing). For any schema containing the word `gold`, `silver`, `pbi`, `dashboard`, `report`, `analytics`, `sharepoint` — list all tables with row count and column count. Highlight schemas containing `sharepoint` or `sp_`.*
+> *For `imep_gold.Final` (525M rows, 30 columns): show complete column list with types. Is the table partitioned (by date, by MailingId, by EventType)? Show `MIN/MAX(send_datetime)` to understand temporal coverage. Show distinct values and row counts for `EventType` and `EngagementType` columns.*
 
-→ SharePoint-Gold-Schicht muss existieren (PageView-Aggregate fürs Semantic Model). Name unbekannt — könnte `sharepoint_gold`, `sp_gold`, `intranet_gold`, `communications_gold` o.ä. sein.
+→ Verstehen, ob wir `Final` direkt für Ad-hoc-Queries nutzen können oder ob Tier 2/3 immer vorzuziehen sind.
+
+### Q16c — `tbl_pbi_kpi` Schema **(Follow-up)**
+
+> *Full column list with types for `imep_gold.tbl_pbi_kpi` (244K rows). Which KPI columns exist (open rate, click rate, bounce rate, unsubscribe rate)? Is it per mailing or per (mailing, segment)?*
+
+→ Könnte ein direkter Pack-Level-Summary sein, der uns die Silver-Aggregation erspart.
+
+### Q16d — NULL-Region Root-Cause **(Data Quality, kritisch)**
+
+> *In `imep_gold.tbl_pbi_mailingreciever_region`: for the 66% of recipients with NULL region — what is the distribution of their `MailingId` (is it concentrated in certain campaigns)? Join via MailingId to `tbl_pbi_platform_mailings` and show the distribution by CreationDate year. Also: for a sample of 100 affected TNumbers, check directly against `tbl_hr_employee` — do they exist there? If yes, what's their `ORGANIZATIONAL_UNIT`, and does that OU exist in `tbl_hr_costcenter`?*
+
+→ Entscheidet die Fix-Strategie: veraltete Cost-Center-Snapshots? Ex-Employees? Oder ein echtes Reference-Data-Gap?
+
+### ~~Q17~~ ✅ Existieren weitere Gold-Schemas **(gelöst 2026-04-17)**
+
+→ **Antwort**: **SharePoint-Gold existiert** (`sharepoint_gold`, 20 Tabellen, ~270M+ rows). Schlüssel: `pbi_db_interactions_metrics` (84M, 11 cols), `pbi_db_pageviewed_metric` (84M, 5 cols), `pbi_db_pagevisited_metric` (81M, 9 cols), `pbi_db_employeecontact` (24M, 17 cols), `pbi_db_datewise_overview_fact_tbl` (7.5M, 31 cols). Separat: **`sharepoint_clicks_gold`** mit `pbi_db_ctalabel_intr_fact_gold` (3M, CTA-Labels). **CPLAN-Daten bereits in Databricks** (`sharepoint_cplan`): Clusters (17), Packs (280), Activities (4,349). **`pbi_gold` (60 Tabellen, inaccessible)** — Zugriff anfragen, vermutlich Semantic Model. Vollständig: siehe [memory/sharepoint_gold_inventory.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/sharepoint_gold_inventory.md).
+
+### Q17b — TrackingID-Spalten in `sharepoint_gold` **(Follow-up)**
+
+> *For each table in `sharepoint_gold` (`pbi_db_interactions_metrics`, `pbi_db_pageviewed_metric`, `pbi_db_pagevisited_metric`, `pbi_db_page_visitedkey_view`, `pbi_db_employeecontact`, `pbi_db_90_days_interactions_metric`, `pbi_db_datewise_overview_fact_tbl`): list all column names with data types. For each table, identify: (a) which column joins back to `sharepoint_bronze.pages` (page_id or URL) to retrieve `UBSGICTrackingID`; (b) whether the metric table itself already carries a TrackingId column.*
+
+→ Entscheidet, ob wir den Gold-Metric direkt per TrackingID joinen oder via page_id → pages.UBSGICTrackingID.
+
+### Q17c — `pbi_db_datewise_overview_fact_tbl` als Pre-Joined Fact **(Follow-up)**
+
+> *Full column list for `sharepoint_gold.pbi_db_datewise_overview_fact_tbl` (7.5M rows, 31 cols). Is this already a pre-joined fact (date × page × employee × metrics)? Show 3 sample rows with all columns to understand what it aggregates.*
+
+→ Wenn das ein Pre-Joined Fact ist, ist unser Gold-Cross-Channel-Build fast fertig.
+
+### Q17d — `pbi_db_employeecontact` als alternative HR-Bridge **(Follow-up)**
+
+> *Full schema of `sharepoint_gold.pbi_db_employeecontact` (24M rows, 17 cols). Does it contain both TNumber and GPN/WORKER_ID? Can we use it instead of `imep_bronze.tbl_hr_employee` for the identity bridge (might be faster / pre-cleaned)?*
+
+→ Vereinfacht `silver.dim_employee_temporal`, wenn die Auflösung hier bereits fertig ist.
+
+### Q17e — CPLAN-Daten in `sharepoint_cplan` direkt nutzbar? **(Follow-up)**
+
+> *Full column list for `sharepoint_cplan.communicationspacks_bronze`, `_internalcommunicationactivities_bronze`, `_trackingcluster_bronze`. For each: are the relationships documented (FK columns)? Check that `trackingcluster_bronze.cluster_id` matches the first segment of `TrackingId` values in `imep_gold.tbl_pbi_platform_mailings`.*
+
+→ Bestätigt, dass wir CPLAN direkt aus Databricks nutzen können (kein Import aus externem CPLAN-Repo nötig).
+
+### Q17f — `pbi_gold` Access-Request **(Governance)**
+
+> *We observe that `pbi_gold` schema exists with 60 tables but all return row/col count = -1 (access denied). This schema is likely central for the corporate Power BI semantic model. Question for admin: (a) who owns this schema? (b) what's the access-request process? (c) is read-only access possible for cross-channel reporting?*
+
+→ Nicht direkt an Genie — sondern an den Catalog-Admin. Diese Frage gehört in die Governance-Sektion des BRD (OP-34 neu).
 
 ### Q18 — Pre-joined Cross-Channel-Views
 

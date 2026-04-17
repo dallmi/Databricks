@@ -54,13 +54,15 @@
     <h1><span class="accent">Cross-Channel</span> Communication Analytics — Architektur</h1>
     <p class="sub">Bronze → Silver → Gold → Dashboard. Join-Keys, Identifier-Bridges, Coverage-Grenzen.</p>
     <div class="legend-bar" style="margin-top:12px;padding:10px 14px;background:#F8F7F2;border:1px solid #CCCABC;border-radius:2px;font-size:13px;display:flex;gap:28px;flex-wrap:wrap;">
-      <span><span style="display:inline-block;width:22px;height:12px;vertical-align:middle;border:1.5px solid #7A7870;background:#ECEBE4;margin-right:6px;"></span><strong>Bestehend in Databricks</strong> (Bronze + iMEP Gold) — lesen wir aus</span>
-      <span><span style="display:inline-block;width:22px;height:12px;vertical-align:middle;border:1.5px dashed #7A7870;background:#F7F7F5;margin-right:6px;"></span><strong>Unser Zielmodell</strong> (Silver + Gold Cross-Channel) — bauen wir</span>
-      <span><span style="display:inline-block;width:22px;height:12px;vertical-align:middle;border:2px solid #E60000;background:#FFFFFF;margin-right:6px;"></span><strong>Dashboard</strong> — HTML-Stub vorhanden, wird an Gold angebunden</span>
+      <span><span style="display:inline-block;width:22px;height:12px;vertical-align:middle;border:1.5px solid #B98E2C;background:#F5F0E1;margin-right:6px;"></span><strong>Gold-Tabellen</strong> (iMEP + SharePoint + CPLAN) — direkt konsumieren</span>
+      <span><span style="display:inline-block;width:22px;height:12px;vertical-align:middle;border:1.5px solid #7A7870;background:#ECEBE4;margin-right:6px;"></span><strong>Bronze</strong> — nur für Article-Metadaten und Fallback-HR</span>
+      <span><span style="display:inline-block;width:22px;height:12px;vertical-align:middle;border:1.5px dashed #7A7870;background:#F7F7F5;margin-right:6px;"></span><strong>Unser Eigenbau</strong> — minimal: <code>silver.dim_page</code> + <code>gold.fact_cross_channel</code></span>
+      <span><span style="display:inline-block;width:22px;height:12px;vertical-align:middle;border:2px solid #E60000;background:#FFFFFF;margin-right:6px;"></span><strong>Dashboard</strong> — HTML-Stub, wird an <code>gold.fact_cross_channel</code> angebunden</span>
     </div>
     <div class="toc">
       <a href="#s1">1. Data Flow</a>
-      <a href="#s2">2. iMEP Joins</a>
+      <a href="#s1b">1b. iMEP Gold 5-Tier</a>
+      <a href="#s2">2. iMEP Joins (Ref)</a>
       <a href="#s3">3. Identity Bridge</a>
       <a href="#s4">4. TrackingId</a>
       <a href="#s5">5. Cross-Channel Fact</a>
@@ -72,82 +74,137 @@
 
   <main>
     <section id="s1">
-      <h2>1. End-to-End Data Flow (Layers)</h2>
-      <p class="sectionsub">Durchgezogen = existiert (lesen wir) · gestrichelt = bauen wir · rot = Dashboard.</p>
+      <h2>1. End-to-End Data Flow (Layers) — post-Q16/Q17</h2>
+      <p class="sectionsub">Beide Seiten des Funnels sind durch Gold abgedeckt: iMEP Gold für Email, SharePoint Gold für PageViews, CPLAN direkt in Databricks. Bronze nur noch als Fallback/Enrichment.</p>
       <div class="mermaid">
 flowchart LR
-    subgraph Bronze["Bronze — raw source tables"]
+    subgraph iMEP_Gold["iMEP Gold (Q16 confirmed)"]
         direction TB
-        IM1["imep_bronze.tbl_email<br/>Master + TrackingId"]
-        IM2["imep_bronze.tbl_analytics_link<br/>Opens/Clicks + Agent"]
-        IM3["imep_bronze.tbl_email_receiver_status<br/>Sends/Bounces"]
-        IM4["imep_bronze.tbl_email_links<br/>Template links"]
-        IM5["imep_bronze.tbl_hr_employee<br/>T_NUMBER + WORKER_ID"]
-        IM6["imep_bronze.tbl_hr_user<br/>UbsId = T-Number"]
-        IM7["imep_bronze.tbl_hr_costcenter<br/>Division/Region"]
-        SP1["sharepoint_bronze.pages<br/>Inventory + UBSGICTrackingID"]
-        SP2["sharepoint_bronze.pageviews<br/>Interactions + GICTrackingID"]
-        CP1["sharepoint_cplan.*<br/>tracking_id planning"]
+        T3E["tbl_pbi_engagement<br/>Mailing x Link + KPIs"]
+        T3R["tbl_pbi_mailingreciever_region<br/>Mailing x Region"]
+        T3D["tbl_pbi_mailingreciever_division<br/>Mailing x Division"]
+        T3DV["tbl_pbi_deviceTypeall<br/>Mailing x Device"]
+        T4M["tbl_pbi_platform_mailings<br/>TrackingId + Master"]
+        T4E["tbl_pbi_platform_events<br/>TrackingId + registration"]
     end
-    subgraph Gold_Ext["iMEP Gold — pre-aggregated master"]
+    subgraph SP_Gold["SharePoint Gold (Q17 confirmed)"]
         direction TB
-        GE1["imep_gold.tbl_pbi_platform_mailings<br/>Mailing master + TrackingId"]
-        GE2["imep_gold.tbl_pbi_platform_events<br/>Event master + registration count"]
+        SPI["pbi_db_interactions_metrics<br/>84M rows"]
+        SPV["pbi_db_pageviewed_metric<br/>84M rows"]
+        SPP["pbi_db_pagevisited_metric<br/>81M rows"]
+        SPD["pbi_db_datewise_overview_fact_tbl<br/>7.5M rows x 31 cols"]
+        SPE["pbi_db_employeecontact<br/>24M rows - potential HR bridge"]
     end
-    subgraph Silver["Silver — our harmonised model"]
+    subgraph SP_Clicks["SharePoint Clicks Gold"]
+        CTA["pbi_db_ctalabel_intr_fact_gold<br/>3M rows - CTA labels"]
+    end
+    subgraph CPLAN["sharepoint_cplan (Q17 confirmed)"]
         direction TB
-        S1["silver.dim_pack<br/>pack metadata"]
-        S2["silver.dim_page<br/>article metadata"]
-        S3["silver.dim_employee_temporal<br/>T_NUMBER + HR dims"]
-        S4["silver.fact_email<br/>per-recipient-event"]
-        S5["silver.fact_page_view<br/>per-view + t_number"]
-        S6["silver.fact_event<br/>registration count"]
+        CL["trackingcluster_bronze<br/>17 clusters"]
+        CP["communicationspacks_bronze<br/>280 packs"]
+        CA["internalcommunicationactivities_bronze<br/>4349 activities"]
     end
-    subgraph GoldX["Gold — cross-channel"]
-        GX1["gold.fact_cross_channel<br/>1 row per pack + channel KPIs"]
+    subgraph Bronze["Bronze (enrichment only)"]
+        direction TB
+        SP1["sharepoint_bronze.pages<br/>UBSGICTrackingID + UBSArticleDate"]
+        HR["imep_bronze.tbl_hr_employee<br/>fallback if SP_employeecontact insufficient"]
+    end
+    subgraph Ours["Unsere minimale Eigenbau-Schicht"]
+        DPG["silver.dim_page<br/>Article metadata"]
+        GX["gold.fact_cross_channel<br/>1 row per tracking_pack_id"]
     end
     DASH["dashboard/multi_channel.html"]
-    IM1 --> GE1
-    IM3 --> GE1
-    IM4 --> GE1
-    GE1 --> S1
-    GE2 --> S1
-    GE2 --> S6
-    CP1 -.optional enrichment.-> S1
-    IM1 --> S4
-    IM2 --> S4
-    IM3 --> S4
-    IM5 --> S4
-    IM6 --> S4
-    IM7 --> S4
-    IM5 --> S3
-    IM7 --> S3
-    SP1 --> S2
-    SP2 --> S5
-    S2 --> S5
-    IM5 -.GPN-to-TNumber bridge.-> S5
-    S3 --> S5
-    S1 --> GX1
-    S4 --> GX1
-    S5 --> GX1
-    S6 --> GX1
-    GX1 --> DASH
+    T3E --> GX
+    T3R --> GX
+    T3D --> GX
+    T3DV --> GX
+    T4M --> GX
+    T4E --> GX
+    SPI --> GX
+    SPV --> GX
+    SPP --> GX
+    SPD --> GX
+    CTA -.optional CTA enrichment.-> GX
+    SPE -.bridge candidate.-> GX
+    CL --> GX
+    CP --> GX
+    CA --> GX
+    SP1 --> DPG
+    DPG --> GX
+    HR -.fallback.-> GX
+    GX --> DASH
+    classDef gold fill:#F5F0E1,stroke:#B98E2C,color:#404040,stroke-width:1.5px;
+    classDef spgold fill:#F5F0E1,stroke:#946F29,color:#404040,stroke-width:1.5px;
+    classDef cta fill:#F5F0E1,stroke:#6C5312,color:#404040,stroke-width:1.5px;
+    classDef cplan fill:#F5F0E1,stroke:#B98E2C,color:#404040,stroke-width:1.5px;
     classDef bronze fill:#ECEBE4,stroke:#8E8D83,color:#404040,stroke-width:1.5px;
-    classDef goldext fill:#F5F0E1,stroke:#B98E2C,color:#404040,stroke-width:1.5px;
-    classDef silver fill:#F7F7F5,stroke:#7A7870,color:#404040,stroke-dasharray:5 3,stroke-width:1.5px;
-    classDef goldx fill:#F5F0E1,stroke:#946F29,color:#404040,stroke-dasharray:5 3,stroke-width:2px;
+    classDef ours fill:#F7F7F5,stroke:#7A7870,color:#404040,stroke-dasharray:5 3,stroke-width:1.5px;
+    classDef oursOut fill:#F5F0E1,stroke:#946F29,color:#404040,stroke-dasharray:5 3,stroke-width:2px;
     classDef dashboard fill:#FFFFFF,stroke:#E60000,color:#E60000,stroke-width:2px;
-    class IM1,IM2,IM3,IM4,IM5,IM6,IM7,SP1,SP2,CP1 bronze;
-    class GE1,GE2 goldext;
-    class S1,S2,S3,S4,S5,S6 silver;
-    class GX1 goldx;
+    class T3E,T3R,T3D,T3DV,T4M,T4E gold;
+    class SPI,SPV,SPP,SPD,SPE spgold;
+    class CTA cta;
+    class CL,CP,CA cplan;
+    class SP1,HR bronze;
+    class DPG ours;
+    class GX oursOut;
     class DASH dashboard;
+      </div>
+      <div class="legend">
+        Post-Q17 ist die gesamte Cross-Channel-Pipeline aus existierenden Gold-Tabellen komponierbar: iMEP Gold (Email), SharePoint Gold (PageViews), SharePoint Clicks Gold (CTA), <code>sharepoint_cplan</code> (Clusters/Packs/Activities). <strong>Unser Eigenbau schrumpft auf <code>silver.dim_page</code> (für Article-Flags und Coverage-Note) und <code>gold.fact_cross_channel</code> (die JOIN-View selbst).</strong>
+      </div>
+    </section>
+
+    <section id="s1b">
+      <h2>1b. iMEP Gold — die 5-Tier-Struktur im Detail</h2>
+      <p class="sectionsub">So ist <code>imep_gold</code> organisiert. Tier 3 ist unsere Haupt-Konsumtions-Ebene. Tier 1 <code>Final</code> ist für Ad-hoc zu gross (525M rows).</p>
+      <div class="mermaid">
+flowchart TB
+    T1["Tier 1 - Atomic Fact<br/><br/>Final<br/>525M rows<br/>event-level, not BI-safe"]
+    subgraph T2["Tier 2 - Rolling timespan aggregations (EngagementType + Count)"]
+        direction LR
+        T2A["tbl_pbi_date* x 4<br/>time-window"]
+        T2B["tbl_pbi_divarea* x 5<br/>Division/Area"]
+        T2C["tbl_pbi_regcntry* x 5<br/>Region/Country/Town"]
+        T2D["tbl_pbi_deviceTypeall<br/>Device"]
+    end
+    subgraph T3["Tier 3 - Mailing-level engagement - OUR PRIMARY SOURCE"]
+        direction LR
+        T3A["tbl_pbi_engagement<br/>1.38M<br/>Mailing x Link<br/>UniqueOpens UniqueClicks"]
+        T3B["tbl_pbi_mailingreciever_region<br/>697K<br/>Mailing x Region"]
+        T3C["tbl_pbi_mailingreciever_division<br/>290K<br/>Mailing x Division"]
+        T3D["tbl_pbi_kpi<br/>244K<br/>Mailing-level KPIs"]
+    end
+    subgraph T4["Tier 4 - Platform metadata"]
+        direction LR
+        T4A["tbl_pbi_platform_mailings<br/>73.9K"]
+        T4B["tbl_pbi_platform_events<br/>84K"]
+        T4C["tbl_pbi_platform_components<br/>3.3M"]
+        T4D["tbl_pbi_platform_*_tags<br/>taxonomies"]
+    end
+    T5["Tier 5 - Reference<br/>tbl_active_employee_month<br/>842 rows"]
+    T1 --> T2
+    T2 --> T3
+    T3 -.denormalised to.-> T4
+    classDef t1 fill:#ECEBE4,stroke:#8E8D83,stroke-width:1.5px;
+    classDef t2 fill:#F5F0E1,stroke:#B98E2C,stroke-width:1.5px;
+    classDef t3 fill:#F5F0E1,stroke:#E60000,stroke-width:2px,color:#BD000C;
+    classDef t4 fill:#F5F0E1,stroke:#B98E2C,stroke-width:1.5px;
+    classDef t5 fill:#ECEBE4,stroke:#8E8D83,stroke-width:1px;
+    class T1 t1;
+    class T2A,T2B,T2C,T2D t2;
+    class T3A,T3B,T3C,T3D t3;
+    class T4A,T4B,T4C,T4D t4;
+    class T5 t5;
+      </div>
+      <div class="legend" style="border-left-color:#E60000;">
+        Tier 3 ist rot umrandet — das ist <strong>unsere Dashboard-Quelle</strong>. Open/Click-KPIs existieren ausschliesslich dort. Tier 2 zeigt nur generische Counts nach <code>EngagementType</code>, keine KPIs.
       </div>
     </section>
 
     <section id="s2">
-      <h2>2. iMEP — Bronze-Join-Pattern (Pattern 2 aus Genie-Code)</h2>
-      <p class="sectionsub">Alle hier gezeigten Tabellen <strong>existieren</strong> in <code>imep_bronze</code>. So baut sich <code>silver.fact_email</code>: eine Row pro Empfänger-Interaktion, angereichert mit HR und Mailing-Master.</p>
+      <h2>2. iMEP Bronze-Join-Pattern — Referenz (nicht unser Pfad)</h2>
+      <p class="sectionsub"><strong>Hinweis post-Q16</strong>: Dieses Pattern ist das, was das iMEP-Team intern macht, um Tier 2/3 Gold aufzubauen. <strong>Wir bauen das nicht selbst</strong> — wir konsumieren direkt Tier 3. Hier zur Referenz und für mögliche Deep-Dive-Queries in Ad-hoc-Szenarien.</p>
       <div class="mermaid">
 erDiagram
     tbl_email ||--o{ tbl_email_receiver_status : "EmailId = Id"
@@ -220,8 +277,8 @@ WHERE      a.IsActive = 1</code></pre>
     </section>
 
     <section id="s3">
-      <h2>3. Employee-Identity-Bridge (GPN ↔ TNumber)</h2>
-      <p class="sectionsub">Einzige Stelle im Modell, an der GPN lebt: Silver-ETL für <code>fact_page_view</code>. Danach nur noch TNumber.</p>
+      <h2>3. Employee-Identity-Bridge (GPN ↔ TNumber) — SharePoint-Seite</h2>
+      <p class="sectionsub"><strong>Post-Q16-Kontext</strong>: Email-Seite braucht die Bridge nicht — iMEP Gold Tier 3 ist pro Mailing bereits mit Region/Division pre-joined. Die Bridge ist nur noch für die <strong>PageView-Seite</strong> relevant (falls SharePoint-Gold noch keinen Employee-Join hat, siehe Q17).</p>
       <div class="mermaid">
 flowchart LR
     AI["sharepoint_bronze.pageviews<br/>user_gpn: 00100200"]
@@ -260,61 +317,103 @@ flowchart LR
   └──────────────────────────────── cluster
   └───────┬───────┘
    tracking_pack_id  ← Dashboard-Grain</code></pre>
-      <p style="margin-top:16px;"><strong>Namens-Varianten pro System</strong> (Silver harmonisiert zu <code>tracking_id</code>):</p>
+      <p style="margin-top:16px;"><strong>Namens-Varianten pro System</strong> (wir harmonisieren im <code>gold.fact_cross_channel</code>-Build):</p>
       <div class="mermaid">
 flowchart LR
-    A["imep_bronze.tbl_email<br/>TrackingId"]
     B["imep_gold.tbl_pbi_platform_mailings<br/>TrackingId"]
     C["imep_gold.tbl_pbi_platform_events<br/>TrackingId"]
     D["sharepoint_bronze.pages<br/>UBSGICTrackingID"]
-    E["sharepoint_bronze.pageviews<br/>GICTrackingID"]
+    SPG["sharepoint_gold.pbi_db_* - Q17b<br/>TrackingId column TBD"]
     F["sharepoint_cplan.*<br/>tracking_id"]
-    SILVER["silver.*<br/>tracking_id<br/>+ tracking_pack_id<br/>+ tracking_channel_abbr"]
-    A --> SILVER
-    B --> SILVER
-    C --> SILVER
-    D --> SILVER
-    E --> SILVER
-    F --> SILVER
-    classDef src fill:#ECEBE4,stroke:#8E8D83,stroke-width:1.5px;
-    classDef silver fill:#F7F7F5,stroke:#7A7870,stroke-dasharray:5 3,stroke-width:2px;
-    class A,B,C,D,E,F src;
-    class SILVER silver;
+    TARGET["gold.fact_cross_channel<br/>tracking_id<br/>+ tracking_pack_id<br/>+ tracking_channel_abbr"]
+    B --> TARGET
+    C --> TARGET
+    D --> TARGET
+    SPG --> TARGET
+    F --> TARGET
+    classDef gold fill:#F5F0E1,stroke:#B98E2C,stroke-width:1.5px;
+    classDef bronze fill:#ECEBE4,stroke:#8E8D83,stroke-width:1.5px;
+    classDef tbd fill:#FFFFFF,stroke:#E4A911,stroke-dasharray:5 3,stroke-width:1.5px,color:#946F29;
+    classDef target fill:#F5F0E1,stroke:#946F29,stroke-dasharray:5 3,stroke-width:2px;
+    class B,C,F gold;
+    class D bronze;
+    class SPG tbd;
+    class TARGET target;
       </div>
     </section>
 
     <section id="s5">
-      <h2>5. Gold Cross-Channel Fact — der Funnel pro Pack</h2>
-      <p class="sectionsub">Alle hier gezeigten Tabellen sind <strong>unser Zielmodell</strong> (noch zu bauen). Eine Row pro <code>tracking_pack_id</code> mit allen Channel-KPIs nebeneinander.</p>
+      <h2>5. Gold Cross-Channel Fact — Funnel pro Pack (post-Q16)</h2>
+      <p class="sectionsub">Quellen sind jetzt grossteils iMEP Gold Tier 3/4 (existiert) plus SharePoint-Gold (TBD Q17). Eine Row pro <code>tracking_pack_id</code> mit allen Channel-KPIs nebeneinander.</p>
       <div class="mermaid">
 flowchart TB
-    DP["silver.dim_pack<br/>1 row per pack"]
-    FE["silver.fact_email<br/>sent/opened/clicked aggregation"]
-    FP["silver.fact_page_view<br/>views/UV/TOS aggregation"]
-    FV["silver.fact_event<br/>registration count"]
+    subgraph iMEP["iMEP Gold - Email side"]
+        ENG["tbl_pbi_engagement<br/>UniqueOpens + UniqueClicks<br/>per Mailing x Link"]
+        REG["tbl_pbi_mailingreciever_region<br/>per Mailing x Region"]
+        DIV["tbl_pbi_mailingreciever_division<br/>per Mailing x Division"]
+        DEV["tbl_pbi_deviceTypeall<br/>per Mailing x Device"]
+        MAIL["tbl_pbi_platform_mailings<br/>TrackingId"]
+        EVT["tbl_pbi_platform_events<br/>registration"]
+    end
+    subgraph SPG["SharePoint Gold - PageView side"]
+        SPI["pbi_db_interactions_metrics<br/>84M rows"]
+        SPV["pbi_db_pageviewed_metric<br/>84M rows"]
+        SPP["pbi_db_pagevisited_metric<br/>81M rows"]
+        SPD["pbi_db_datewise_overview_fact_tbl<br/>7.5M x 31 cols"]
+    end
+    CTA["sharepoint_clicks_gold<br/>pbi_db_ctalabel_intr_fact_gold<br/>CTA clicks 3M"]
+    subgraph CPL["sharepoint_cplan"]
+        CL["trackingcluster_bronze"]
+        CP["communicationspacks_bronze"]
+        CA["internalcommunicationactivities_bronze"]
+    end
     GX["gold.fact_cross_channel<br/>1 row per tracking_pack_id"]
-    DP -- "pack_id" --> GX
-    FE -- "GROUP BY tracking_pack_id" --> GX
-    FP -- "GROUP BY tracking_pack_id" --> GX
-    FV -- "GROUP BY tracking_pack_id" --> GX
+    MAIL -- "derive tracking_pack_id" --> GX
+    EVT -- "derive tracking_pack_id" --> GX
+    ENG --> GX
+    REG --> GX
+    DIV --> GX
+    DEV --> GX
+    SPI --> GX
+    SPV --> GX
+    SPP --> GX
+    SPD --> GX
+    CTA -.optional.-> GX
+    CL --> GX
+    CP --> GX
+    CA --> GX
     subgraph KPIs["Gold KPIs per pack"]
-        K1["email_sent<br/>email_opened<br/>email_clicked"]
-        K2["page_views<br/>unique_readers<br/>avg_time_on_page"]
-        K3["event_registered"]
+        K1["recipients<br/>email_sent<br/>unique_opens<br/>unique_clicks<br/>open_rate<br/>click_rate"]
+        K2["page_views<br/>unique_visitors"]
+        K3["CTA clicks (optional)"]
+        K4["event_registered"]
+        K5["region / division / device breakdowns"]
     end
     GX --> KPIs
-    classDef silver fill:#F7F7F5,stroke:#7A7870,stroke-dasharray:5 3,stroke-width:1.5px;
-    classDef gold fill:#F5F0E1,stroke:#946F29,stroke-dasharray:5 3,stroke-width:2px;
+    classDef gold fill:#F5F0E1,stroke:#B98E2C,stroke-width:1.5px;
+    classDef spgold fill:#F5F0E1,stroke:#946F29,stroke-width:1.5px;
+    classDef cta fill:#F5F0E1,stroke:#6C5312,stroke-width:1.5px;
+    classDef cplan fill:#F5F0E1,stroke:#B98E2C,stroke-width:1.5px;
+    classDef ours fill:#F5F0E1,stroke:#946F29,stroke-dasharray:5 3,stroke-width:2px;
     classDef kpi fill:#FFFFFF,stroke:#E60000,stroke-width:1.5px;
-    class DP,FE,FP,FV silver;
-    class GX gold;
-    class K1,K2,K3 kpi;
+    class ENG,REG,DIV,DEV,MAIL,EVT gold;
+    class SPI,SPV,SPP,SPD spgold;
+    class CTA cta;
+    class CL,CP,CA cplan;
+    class GX ours;
+    class K1,K2,K3,K4,K5 kpi;
       </div>
-      <p style="margin-top:16px;"><strong>Funnel auf Pack-Ebene:</strong></p>
-<pre><code>Sent (100%) ─► Opened (~45%) ─► Clicked (~8%) ─► Page View (~6%) ─► Event Registered (~1.5%)
-                                                      │
-                                              nur Article-Pages
-                                        (UBSGICTrackingID populated)</code></pre>
+      <p style="margin-top:16px;"><strong>Funnel mit validierten Baseline-Rates aus Q16:</strong></p>
+<pre><code>Recipients (100%)  ─►  Unique Opens (22.0%)  ─►  Unique Clicks (1.80%)  ─►  Page Views (???)  ─►  Event Registered (???)
+                                                                                    │
+                                                                            nur Article-Pages
+                                                                    (UBSGICTrackingID populated, Q15)
+
+Regional:
+  Switzerland & Liechtenstein:  71.1% Open  /  8.30% Click
+  Europe, Middle East:          66.5% Open  /  8.60% Click
+  Asia/Pacific:                 65.2% Open  /  4.40% Click
+  Americas:                     59.6% Open  /  3.80% Click</code></pre>
     </section>
 
     <section id="s6">
@@ -365,50 +464,80 @@ flowchart LR
     </section>
 
     <section id="s8">
-      <h2>8. Gold-First MVP — Cross-Channel nur aus existierenden Gold-Tabellen</h2>
+      <h2>8. Gold-First Architektur — bestätigt durch Q16</h2>
       <p class="sectionsub">
-        <strong>Hypothese (User-bestätigt):</strong> Gold enthält mit hoher Wahrscheinlichkeit bereits Engagement-Aggregate (Sends/Opens/Clicks in <code>imep_gold</code>, PageView-Counts in einer SharePoint-Gold-Schicht) — sonst könnte das bestehende Power-BI Semantic Model sie nicht darstellen. Unsere Q1b-Suche war zu eng. Q16–Q20 sollen die tatsächlich konsumierten Tabellen identifizieren.
+        <strong>Szenario A bestätigt (2026-04-17):</strong> <code>imep_gold</code> enthält eine komplette 5-Tier-Architektur mit pre-aggregierten Engagement-Summaries. Email-Seite des Dashboards ist als reiner Gold-JOIN baubar — ohne Bronze-ETL, ohne Silver-Aggregation.
       </p>
       <div class="legend" style="border-left-color:#6F7A1A;margin-bottom:18px;">
-        <strong>Wenn Q16/Q17/Q20 die vermuteten Engagement-Gold-Tabellen finden</strong>, wird der Gold-First-Ansatz von "MVP mit Scope-Kompromissen" zum <strong>natürlichen Standardweg</strong>. Das Diagramm unten zeigt zunächst den konservativen Fall (nur mailings + events); sobald Engagement-Gold verfügbar ist, ersetzt es die Bronze-Pfeile aus den Lücken.
+        <strong>Q16-Befund:</strong> Tier 3 enthält <code>tbl_pbi_engagement</code> (1.38M rows, Mailing×Link), <code>tbl_pbi_mailingreciever_region</code> (697K), <code>tbl_pbi_mailingreciever_division</code> (290K) — je mit <code>UniqueOpens</code>, <code>UniqueClicks</code>, <code>Count</code>. Global 22% Open Rate / 1.8% Click Rate. <strong>Offene Lücke</strong>: SharePoint-Gold (Q17) für PageView-Aggregate.
+      </div>
+      <div class="legend" style="border-left-color:#BD000C;margin-bottom:18px;">
+        <strong>⚠️ Data-Quality-Blocker: 66% NULL-Region.</strong> 184M von 278M Recipients ohne Region-Mapping — HR-JOIN zu <code>tbl_hr_costcenter</code> fehlt. Muss im Dashboard transparent gemacht werden. Root-Cause-Analyse via Q16d.
       </div>
       <div class="mermaid">
 flowchart LR
-    subgraph Input["Existing Gold (read-only)"]
+    subgraph T3["iMEP Gold Tier 3 - engagement summaries"]
         direction TB
-        M["imep_gold.tbl_pbi_platform_mailings<br/>TrackingId + StartsentTime<br/>+ content complexity<br/>+ CountLanguages"]
-        E["imep_gold.tbl_pbi_platform_events<br/>TrackingId + registration<br/>+ schedule + access rules"]
+        ENG["tbl_pbi_engagement<br/>Mailing x Link<br/>UniqueOpens + UniqueClicks"]
+        REG["tbl_pbi_mailingreciever_region<br/>Mailing x Region/Country/Town"]
+        DIV["tbl_pbi_mailingreciever_division<br/>Mailing x Business Division"]
+        DEV["tbl_pbi_deviceTypeall<br/>Mailing x Device Type"]
     end
-    SPLIT["REGEXP_EXTRACT<br/>tracking_pack_id =<br/>first 2 segments"]
-    JOIN["FULL OUTER JOIN<br/>USING tracking_pack_id"]
-    OUT["gold.fact_cross_channel_lite<br/>1 row per tracking_pack_id"]
-    VIEWS["Dashboard Views<br/>- Pack Inventory<br/>- Mailings-per-Pack<br/>- Events-per-Pack<br/>- Total Registrations<br/>- Content Complexity Trend"]
-    M --> SPLIT
-    E --> SPLIT
-    SPLIT --> JOIN
+    subgraph T4["iMEP Gold Tier 4 - master data"]
+        MAIL["tbl_pbi_platform_mailings<br/>TrackingId + StartsentTime"]
+        EVT["tbl_pbi_platform_events<br/>TrackingId + registration"]
+    end
+    SPJOIN["sharepoint_gold.* - Q17<br/>PageView aggregates TBD"]
+    JOIN["JOIN + GROUP BY tracking_pack_id"]
+    OUT["gold.fact_cross_channel<br/>1 row per tracking_pack_id<br/>Email + Events + PageView KPIs"]
+    DASH["dashboard/multi_channel.html"]
+    ENG --> JOIN
+    REG --> JOIN
+    DIV --> JOIN
+    DEV --> JOIN
+    MAIL --> JOIN
+    EVT --> JOIN
+    SPJOIN --> JOIN
     JOIN --> OUT
-    OUT --> VIEWS
-    classDef ext fill:#F5F0E1,stroke:#B98E2C,stroke-width:1.5px;
+    OUT --> DASH
+    classDef gold fill:#F5F0E1,stroke:#B98E2C,stroke-width:1.5px;
+    classDef tbd fill:#FFFFFF,stroke:#E4A911,stroke-dasharray:5 3,stroke-width:1.5px;
     classDef logic fill:#ECEBE4,stroke:#7A7870,stroke-dasharray:5 3,stroke-width:1.5px;
     classDef out fill:#F5F0E1,stroke:#946F29,stroke-dasharray:5 3,stroke-width:2px;
     classDef dash fill:#FFFFFF,stroke:#E60000,stroke-width:2px;
-    class M,E ext;
-    class SPLIT,JOIN logic;
+    class ENG,REG,DIV,DEV,MAIL,EVT gold;
+    class SPJOIN tbd;
+    class JOIN logic;
     class OUT out;
-    class VIEWS dash;
+    class DASH dash;
       </div>
 
-      <p style="margin-top:18px;"><strong>Was das Gold-First-MVP liefert:</strong></p>
+      <p style="margin-top:18px;"><strong>Was Gold direkt liefert (per Q16):</strong></p>
       <table>
-        <thead><tr><th>KPI</th><th>Quelle</th><th>Genauigkeit</th></tr></thead>
+        <thead><tr><th>KPI</th><th>Quelle</th><th>Grain</th></tr></thead>
         <tbody>
-          <tr><td>Anzahl Packs</td><td>distinct <code>tracking_pack_id</code></td><td>100% exakt</td></tr>
-          <tr><td>Mailings pro Pack</td><td>COUNT mailings in Pack</td><td>100% exakt</td></tr>
-          <tr><td>First-Send-Zeitpunkt</td><td><code>MIN(StartsentTime)</code> aus mailings</td><td>100% exakt</td></tr>
-          <tr><td>Events pro Pack</td><td>COUNT events in Pack</td><td>100% exakt</td></tr>
-          <tr><td>Total Registrations pro Pack</td><td><code>SUM(registration)</code> aus events</td><td>100% exakt (Attended vs. Registered nicht getrennt)</td></tr>
-          <tr><td>Content Complexity Trend</td><td>Avg(<code>elementcounts</code>, <code>uniquecomponents</code>)</td><td>Proxy für Aufwand</td></tr>
-          <tr><td>Language Reach</td><td>Avg(<code>CountLanguages</code>)</td><td>100% exakt</td></tr>
+          <tr><td>Recipients / Audience-Size</td><td><code>tbl_pbi_mailingreciever_region.Count</code></td><td>pro Mailing × Region × Country × Town</td></tr>
+          <tr><td>Unique Opens</td><td><code>tbl_pbi_engagement.UniqueOpens</code></td><td>pro Mailing × Link/Component</td></tr>
+          <tr><td>Unique Clicks</td><td><code>tbl_pbi_engagement.UniqueClicks</code></td><td>pro Mailing × Link/Component</td></tr>
+          <tr><td>Opens/Clicks pro Business-Division</td><td><code>tbl_pbi_mailingreciever_division</code></td><td>pro Mailing × Division</td></tr>
+          <tr><td>Device-Breakdown</td><td><code>tbl_pbi_deviceTypeall</code></td><td>pro Mailing × Device-Type</td></tr>
+          <tr><td>Event-Registrations</td><td><code>tbl_pbi_platform_events.registration</code></td><td>pro Event</td></tr>
+          <tr><td>Mailing-Master + TrackingId</td><td><code>tbl_pbi_platform_mailings</code></td><td>pro Mailing</td></tr>
+          <tr><td>Content-Complexity</td><td><code>tbl_pbi_platform_mailings</code></td><td>elementcounts, uniquecomponents</td></tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top:18px;"><strong>Globale Engagement-Rates (heute messbar):</strong></p>
+      <table>
+        <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Total Recipients</td><td>278,157,712</td></tr>
+          <tr><td>Total Unique Opens</td><td>61,134,757</td></tr>
+          <tr><td>Total Unique Clicks</td><td>5,062,291</td></tr>
+          <tr><td>Overall Open Rate</td><td><strong>22.00%</strong></td></tr>
+          <tr><td>Overall Click Rate</td><td><strong>1.80%</strong></td></tr>
+          <tr><td>Switzerland &amp; Liechtenstein — Open / Click Rate</td><td>71.10% / 8.30%</td></tr>
+          <tr><td>Americas — Open / Click Rate</td><td>59.60% / 3.80%</td></tr>
         </tbody>
       </table>
 
