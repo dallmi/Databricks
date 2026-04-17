@@ -62,7 +62,8 @@
     <div class="toc">
       <a href="#s1">1. Data Flow</a>
       <a href="#s1b">1b. iMEP Gold 5-Tier</a>
-      <a href="#s2">2. iMEP Joins (Ref)</a>
+      <a href="#s2">2. iMEP Bronze Joins (Ref)</a>
+      <a href="#s2b">2b. iMEP Gold Joins</a>
       <a href="#s3">3. Identity Bridge</a>
       <a href="#s4">4. TrackingId</a>
       <a href="#s5">5. Cross-Channel Fact</a>
@@ -274,6 +275,141 @@ LEFT JOIN  tbl_hr_employee hr           ON a.TNumber               = hr.T_NUMBER
 LEFT JOIN  tbl_hr_costcenter cc         ON hr.ORGANIZATIONAL_UNIT  = cc.ORGANIZATIONAL_UNIT
 LEFT JOIN  tbl_hr_user u                ON LOWER(hr.T_NUMBER)      = LOWER(u.UbsId)
 WHERE      a.IsActive = 1</code></pre>
+    </section>
+
+    <section id="s2b">
+      <h2>2b. iMEP Gold Join-Pattern — unser tatsächlicher Pfad</h2>
+      <p class="sectionsub">Alle Tier-3-Aggregate haben <code>MailingId</code> als FK zurück auf <code>tbl_pbi_platform_mailings.Id</code>. Die <code>TrackingId</code> lebt nur auf der Master-Tabelle — pack-level Aggregation braucht daher immer den Master-JOIN. Spalten-Namen sind aus Q16-Screenshots abgeleitet; Q21 finalisiert exakte Typen und Case.</p>
+      <div class="mermaid">
+erDiagram
+    tbl_pbi_platform_mailings ||--o{ tbl_pbi_engagement : "Id = MailingId"
+    tbl_pbi_platform_mailings ||--o{ tbl_pbi_mailingreciever_region : "Id = MailingId"
+    tbl_pbi_platform_mailings ||--o{ tbl_pbi_mailingreciever_division : "Id = MailingId"
+    tbl_pbi_platform_mailings ||--o{ tbl_pbi_deviceTypeall : "Id = MailingId"
+    tbl_pbi_platform_mailings ||--o{ tbl_pbi_kpi : "Id = MailingId"
+    tbl_pbi_platform_mailings }o--|| tbl_pbi_platform_events : "EventId = Id"
+    tbl_pbi_platform_mailings ||--o{ tbl_pbi_divarea_ALL : "Id = mailingId"
+    tbl_pbi_platform_mailings ||--o{ tbl_pbi_regcntry_ALL : "Id = mailingId"
+    tbl_pbi_platform_mailings ||--o{ tbl_pbi_date_ALL : "Id = mailingId"
+    Final }o--|| tbl_pbi_platform_mailings : "MailingId = Id"
+
+    tbl_pbi_platform_mailings {
+        string Id PK
+        string TrackingId "32-char key"
+        string EventId FK
+        timestamp CreationDate
+        timestamp StartsentTime
+        string Title
+        string Subject
+        string CreatedBy
+        int elementcounts
+        int uniquecomponents
+        int CountLanguages
+        boolean IsActive
+    }
+    tbl_pbi_platform_events {
+        string Id PK
+        string TrackingId
+        string Title
+        string Location
+        timestamp StartDate
+        timestamp EventFrom "2124 = open-ended"
+        bigint registration
+        boolean IsActive
+        boolean IsLegacy
+    }
+    tbl_pbi_engagement {
+        string MailingId FK
+        string SourceComponent
+        string SourceElement
+        string Url
+        bigint UniqueOpens "nullable"
+        bigint UniqueClicks "nullable"
+        bigint Count
+    }
+    tbl_pbi_mailingreciever_region {
+        string MailingId FK
+        string Region
+        string Country
+        string Town
+        bigint UniqueOpens "nullable"
+        bigint UniqueClicks "nullable"
+    }
+    tbl_pbi_mailingreciever_division {
+        string MailingId FK
+        string Business_Division
+        bigint UniqueOpens "nullable"
+        bigint UniqueClicks "nullable"
+        bigint Count
+    }
+    tbl_pbi_deviceTypeall {
+        string MailingId FK
+        string Device_Type
+        bigint Count
+    }
+    tbl_pbi_kpi {
+        string MailingId FK
+        string Status
+        timestamp send_date
+        string recipient_language
+    }
+    tbl_pbi_divarea_ALL {
+        string mailingId FK
+        string Business_Division
+        string Business_Area
+        string EngagementType "OPEN/CLICK"
+        bigint Count
+    }
+    tbl_pbi_regcntry_ALL {
+        string mailingId FK
+        string Region
+        string Country
+        string Town
+        string EngagementType
+        bigint Count
+    }
+    tbl_pbi_date_ALL {
+        string mailingId FK
+        date EventDate
+        string EngagementType
+        bigint Count
+    }
+    Final {
+        string Id PK
+        string MailingId FK
+        string EventType
+        string EngagementType
+        string RecipientID
+        timestamp send_datetime
+        string lang_origin_lang
+    }
+      </div>
+      <p style="margin-top:16px;"><strong>Legende der virtuellen Gruppen-Knoten:</strong></p>
+      <table>
+        <thead><tr><th>Knoten im Diagramm</th><th>Tatsächliche Tabellen</th><th>Zweck</th></tr></thead>
+        <tbody>
+          <tr><td><code>tbl_pbi_divarea_ALL</code></td><td><code>tbl_pbi_divarea15dplus</code>, <code>_15d</code>, <code>_5d</code>, <code>_7d</code>, <code>_24</code></td><td>Rolling-Window-Business-Hierarchy (5 Tabellen, je ~2.4M)</td></tr>
+          <tr><td><code>tbl_pbi_regcntry_ALL</code></td><td><code>tbl_pbi_regcntry15xplus</code>, <code>_15d</code>, <code>_5d</code>, <code>_7d</code>, <code>_24</code></td><td>Rolling-Window-Regional (5 Tabellen, je ~800K)</td></tr>
+          <tr><td><code>tbl_pbi_date_ALL</code></td><td><code>tbl_pbi_datesX4</code>, <code>_date24pabs</code>, <code>_dateId34</code>, <code>_dateId44</code></td><td>Rolling-Window-Time (4 Tabellen)</td></tr>
+        </tbody>
+      </table>
+      <p style="margin-top:16px;"><strong>Join-Kette für das Email-Aggregat auf Pack-Ebene:</strong></p>
+<pre><code>FROM       imep_gold.tbl_pbi_platform_mailings       m
+LEFT JOIN  imep_gold.tbl_pbi_mailingreciever_region  r    ON r.MailingId  = m.Id
+LEFT JOIN  imep_gold.tbl_pbi_mailingreciever_division d   ON d.MailingId  = m.Id
+LEFT JOIN  imep_gold.tbl_pbi_deviceTypeall            dev ON dev.MailingId = m.Id
+LEFT JOIN  imep_gold.tbl_pbi_engagement               e   ON e.MailingId  = m.Id
+LEFT JOIN  imep_gold.tbl_pbi_platform_events          ev  ON ev.Id        = m.EventId
+WHERE      m.TrackingId IS NOT NULL     -- skip transactional mails
+  AND      m.IsActive   = TRUE
+-- pack-level aggregation:
+GROUP BY   REGEXP_EXTRACT(m.TrackingId, '^([A-Z0-9]+-[0-9]+)', 1)</code></pre>
+      <div class="legend">
+        <strong>Wichtig</strong>: Tier-2-Tabellen (<code>divarea_*</code>, <code>regcntry_*</code>, <code>date*</code>) haben <code>EngagementType + Count</code> statt <code>UniqueOpens/UniqueClicks</code> — sie geben Event-Pivots (OPEN vs CLICK vs …), nicht KPIs. Für <strong>Open/Click-Rates</strong> ausschliesslich Tier 3 (<code>_engagement</code>, <code>_mailingreciever_*</code>) verwenden. Tier 2 ist nützlich für zeitliche Trends und Slicing ohne echte Rates.
+      </div>
+      <div class="legend" style="border-left-color:#E4A911;">
+        <strong>Case-Sensitivity-Warnung</strong>: Q16 zeigt uneinheitliche Schreibweisen der FK-Spalte — <code>MailingId</code> (Tier 3) vs <code>mailingId</code> (Tier 2). In Databricks ist das SQL-seitig meist egal, aber bei ETL-Tools und Parquet-Roundtrips explizit auf eine Schreibweise normalisieren.
+      </div>
     </section>
 
     <section id="s3">
