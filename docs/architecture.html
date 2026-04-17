@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>Cross-Channel Architecture</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #F7F7F5;
+      --surface: #ECEBE4;
+      --card: #FFFFFF;
+      --text: #000000;
+      --muted: #7A7870;
+      --border: #CCCABC;
+      --primary: #E60000;
+      --bronze: #B98E2C;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 14px; line-height: 1.5; }
+    header { background: var(--card); border-bottom: 1px solid var(--border); padding: 24px 32px; }
+    h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
+    h1 .accent { color: var(--primary); }
+    .sub { color: var(--muted); font-size: 13px; }
+    main { max-width: 1400px; margin: 0 auto; padding: 24px 32px 48px; }
+    section { background: var(--card); border: 1px solid var(--border); border-radius: 2px;
+      padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+    section h2 { margin: 0 0 4px; font-size: 17px; font-weight: 600; border-left: 3px solid var(--primary);
+      padding-left: 10px; }
+    section .sectionsub { color: var(--muted); font-size: 13px; margin: 0 0 16px 13px; }
+    .mermaid { background: var(--bg); border: 1px solid var(--border); border-radius: 2px;
+      padding: 20px; overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+    th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: var(--surface); font-weight: 600; text-transform: uppercase;
+      font-size: 11px; letter-spacing: 0.05em; color: var(--muted); }
+    tr:nth-child(even) td { background: #F8F7F2; }
+    code { background: var(--surface); padding: 1px 6px; border-radius: 2px; font-size: 12.5px;
+      font-family: "SF Mono", Menlo, Consolas, monospace; }
+    pre { background: var(--surface); border: 1px solid var(--border); border-radius: 2px;
+      padding: 14px 16px; overflow-x: auto; font-size: 12.5px; line-height: 1.55; }
+    pre code { background: transparent; padding: 0; }
+    .legend { background: #F8F7F2; border-left: 3px solid var(--bronze); padding: 10px 14px;
+      margin: 12px 0; font-size: 13px; }
+    .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+    .toc a { display: inline-block; padding: 4px 10px; background: var(--surface); color: var(--text);
+      text-decoration: none; border: 1px solid var(--border); border-radius: 2px; font-size: 12px; }
+    .toc a:hover { background: var(--card); border-color: var(--primary); color: var(--primary); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><span class="accent">Cross-Channel</span> Communication Analytics — Architektur</h1>
+    <p class="sub">Bronze → Silver → Gold → Dashboard. Join-Keys, Identifier-Bridges, Coverage-Grenzen.</p>
+    <div class="legend-bar" style="margin-top:12px;padding:10px 14px;background:#F8F7F2;border:1px solid #CCCABC;border-radius:2px;font-size:13px;display:flex;gap:28px;flex-wrap:wrap;">
+      <span><span style="display:inline-block;width:22px;height:12px;vertical-align:middle;border:1.5px solid #7A7870;background:#ECEBE4;margin-right:6px;"></span><strong>Bestehend in Databricks</strong> (Bronze + iMEP Gold) — lesen wir aus</span>
+      <span><span style="display:inline-block;width:22px;height:12px;vertical-align:middle;border:1.5px dashed #7A7870;background:#F7F7F5;margin-right:6px;"></span><strong>Unser Zielmodell</strong> (Silver + Gold Cross-Channel) — bauen wir</span>
+      <span><span style="display:inline-block;width:22px;height:12px;vertical-align:middle;border:2px solid #E60000;background:#FFFFFF;margin-right:6px;"></span><strong>Dashboard</strong> — HTML-Stub vorhanden, wird an Gold angebunden</span>
+    </div>
+    <div class="toc">
+      <a href="#s1">1. Data Flow</a>
+      <a href="#s2">2. iMEP Joins</a>
+      <a href="#s3">3. Identity Bridge</a>
+      <a href="#s4">4. TrackingId</a>
+      <a href="#s5">5. Cross-Channel Fact</a>
+      <a href="#s6">6. Grain</a>
+      <a href="#s7">7. Coverage</a>
+      <a href="#s8">8. Gold-First MVP</a>
+    </div>
+  </header>
+
+  <main>
+    <section id="s1">
+      <h2>1. End-to-End Data Flow (Layers)</h2>
+      <p class="sectionsub">Durchgezogen = existiert (lesen wir) · gestrichelt = bauen wir · rot = Dashboard.</p>
+      <div class="mermaid">
+flowchart LR
+    subgraph Bronze["Bronze — raw source tables"]
+        direction TB
+        IM1["imep_bronze.tbl_email<br/>Master + TrackingId"]
+        IM2["imep_bronze.tbl_analytics_link<br/>Opens/Clicks + Agent"]
+        IM3["imep_bronze.tbl_email_receiver_status<br/>Sends/Bounces"]
+        IM4["imep_bronze.tbl_email_links<br/>Template links"]
+        IM5["imep_bronze.tbl_hr_employee<br/>T_NUMBER + WORKER_ID"]
+        IM6["imep_bronze.tbl_hr_user<br/>UbsId = T-Number"]
+        IM7["imep_bronze.tbl_hr_costcenter<br/>Division/Region"]
+        SP1["sharepoint_bronze.pages<br/>Inventory + UBSGICTrackingID"]
+        SP2["sharepoint_bronze.pageviews<br/>Interactions + GICTrackingID"]
+        CP1["sharepoint_cplan.*<br/>tracking_id planning"]
+    end
+    subgraph Gold_Ext["iMEP Gold — pre-aggregated master"]
+        direction TB
+        GE1["imep_gold.tbl_pbi_platform_mailings<br/>Mailing master + TrackingId"]
+        GE2["imep_gold.tbl_pbi_platform_events<br/>Event master + registration count"]
+    end
+    subgraph Silver["Silver — our harmonised model"]
+        direction TB
+        S1["silver.dim_pack<br/>pack metadata"]
+        S2["silver.dim_page<br/>article metadata"]
+        S3["silver.dim_employee_temporal<br/>T_NUMBER + HR dims"]
+        S4["silver.fact_email<br/>per-recipient-event"]
+        S5["silver.fact_page_view<br/>per-view + t_number"]
+        S6["silver.fact_event<br/>registration count"]
+    end
+    subgraph GoldX["Gold — cross-channel"]
+        GX1["gold.fact_cross_channel<br/>1 row per pack + channel KPIs"]
+    end
+    DASH["dashboard/multi_channel.html"]
+    IM1 --> GE1
+    IM3 --> GE1
+    IM4 --> GE1
+    GE1 --> S1
+    GE2 --> S1
+    GE2 --> S6
+    CP1 -.optional enrichment.-> S1
+    IM1 --> S4
+    IM2 --> S4
+    IM3 --> S4
+    IM5 --> S4
+    IM6 --> S4
+    IM7 --> S4
+    IM5 --> S3
+    IM7 --> S3
+    SP1 --> S2
+    SP2 --> S5
+    S2 --> S5
+    IM5 -.GPN-to-TNumber bridge.-> S5
+    S3 --> S5
+    S1 --> GX1
+    S4 --> GX1
+    S5 --> GX1
+    S6 --> GX1
+    GX1 --> DASH
+    classDef bronze fill:#ECEBE4,stroke:#8E8D83,color:#404040,stroke-width:1.5px;
+    classDef goldext fill:#F5F0E1,stroke:#B98E2C,color:#404040,stroke-width:1.5px;
+    classDef silver fill:#F7F7F5,stroke:#7A7870,color:#404040,stroke-dasharray:5 3,stroke-width:1.5px;
+    classDef goldx fill:#F5F0E1,stroke:#946F29,color:#404040,stroke-dasharray:5 3,stroke-width:2px;
+    classDef dashboard fill:#FFFFFF,stroke:#E60000,color:#E60000,stroke-width:2px;
+    class IM1,IM2,IM3,IM4,IM5,IM6,IM7,SP1,SP2,CP1 bronze;
+    class GE1,GE2 goldext;
+    class S1,S2,S3,S4,S5,S6 silver;
+    class GX1 goldx;
+    class DASH dashboard;
+      </div>
+    </section>
+
+    <section id="s2">
+      <h2>2. iMEP — Bronze-Join-Pattern (Pattern 2 aus Genie-Code)</h2>
+      <p class="sectionsub">Alle hier gezeigten Tabellen <strong>existieren</strong> in <code>imep_bronze</code>. So baut sich <code>silver.fact_email</code>: eine Row pro Empfänger-Interaktion, angereichert mit HR und Mailing-Master.</p>
+      <div class="mermaid">
+erDiagram
+    tbl_email ||--o{ tbl_email_receiver_status : "EmailId = Id"
+    tbl_email ||--o{ tbl_analytics_link : "EmailId = Id"
+    tbl_email_receiver_status ||--o{ tbl_analytics_link : "Id = EmailReceiverStatusId"
+    tbl_email_receiver_status }o--|| tbl_hr_employee : "TNumber = T_NUMBER"
+    tbl_analytics_link }o--|| tbl_hr_employee : "TNumber = T_NUMBER"
+    tbl_hr_employee }o--|| tbl_hr_costcenter : "ORGANIZATIONAL_UNIT"
+    tbl_hr_employee }o--|| tbl_hr_user : "T_NUMBER = UbsId case-norm"
+    tbl_email ||--o{ tbl_email_links : "EmailId template"
+
+    tbl_email {
+        string Id PK
+        string TrackingId
+        string Title
+        string Subject
+        string CreatedBy
+        timestamp CreationDate
+    }
+    tbl_email_receiver_status {
+        string Id PK
+        string EmailId FK
+        string TNumber
+        string Receiver
+        int Status
+        string LogStatus
+        timestamp DateTime
+    }
+    tbl_analytics_link {
+        string Id PK
+        string EmailId FK
+        string EmailReceiverStatusId FK
+        string TNumber
+        string Agent
+        string LinkTypeEnum
+        string CurrentLanguage
+        timestamp CreationDate
+    }
+    tbl_hr_employee {
+        string T_NUMBER PK
+        string WORKER_ID
+        string ORGANIZATIONAL_UNIT
+    }
+    tbl_hr_costcenter {
+        string ORGANIZATIONAL_UNIT PK
+        string DIVISION
+        string AREA
+        string REGION
+        string COUNTRY
+    }
+    tbl_hr_user {
+        string UbsId
+        string Town
+    }
+    tbl_email_links {
+        string Id PK
+        string ElementValueId
+        string Url
+        string LinkLabel
+    }
+      </div>
+      <p style="margin-top:16px;"><strong>Zentrale Join-Kette für <code>silver.fact_email</code>:</strong></p>
+<pre><code>FROM       tbl_analytics_link a
+LEFT JOIN  tbl_email_receiver_status c  ON a.EmailReceiverStatusId = c.Id
+LEFT JOIN  tbl_email b                  ON a.EmailId               = b.Id
+LEFT JOIN  tbl_hr_employee hr           ON a.TNumber               = hr.T_NUMBER
+LEFT JOIN  tbl_hr_costcenter cc         ON hr.ORGANIZATIONAL_UNIT  = cc.ORGANIZATIONAL_UNIT
+LEFT JOIN  tbl_hr_user u                ON LOWER(hr.T_NUMBER)      = LOWER(u.UbsId)
+WHERE      a.IsActive = 1</code></pre>
+    </section>
+
+    <section id="s3">
+      <h2>3. Employee-Identity-Bridge (GPN ↔ TNumber)</h2>
+      <p class="sectionsub">Einzige Stelle im Modell, an der GPN lebt: Silver-ETL für <code>fact_page_view</code>. Danach nur noch TNumber.</p>
+      <div class="mermaid">
+flowchart LR
+    AI["sharepoint_bronze.pageviews<br/>user_gpn: 00100200"]
+    HR["imep_bronze.tbl_hr_employee<br/>T_NUMBER = t100200<br/>WORKER_ID = 00100200"]
+    FPV["silver.fact_page_view<br/>t_number: t100200<br/>no GPN"]
+    AI -- "JOIN ON gpn = WORKER_ID" --> HR
+    HR -- "emit LOWER T_NUMBER as t_number" --> FPV
+    classDef src fill:#ECEBE4,stroke:#8E8D83,stroke-width:1.5px;
+    classDef hr fill:#F5F0E1,stroke:#B98E2C,stroke-width:1.5px;
+    classDef silver fill:#F7F7F5,stroke:#7A7870,stroke-dasharray:5 3,stroke-width:1.5px;
+    class AI src;
+    class HR hr;
+    class FPV silver;
+      </div>
+      <table>
+        <thead><tr><th>Identifier</th><th>Ort</th><th>Format</th></tr></thead>
+        <tbody>
+          <tr><td><code>user_gpn</code> in pageviews</td><td><code>sharepoint_bronze.pageviews</code></td><td><code>00100200</code> (8-digit)</td></tr>
+          <tr><td><code>WORKER_ID</code> (= GPN)</td><td><code>imep_bronze.tbl_hr_employee</code></td><td><code>00100200</code></td></tr>
+          <tr><td><code>T_NUMBER</code></td><td><code>imep_bronze.tbl_hr_employee</code></td><td><code>t100200</code> (lowercase)</td></tr>
+          <tr><td><code>TNumber</code> in iMEP</td><td><code>tbl_email_receiver_status</code>, <code>tbl_analytics_link</code></td><td><code>t100200</code></td></tr>
+          <tr><td><code>UbsId</code></td><td><code>imep_bronze.tbl_hr_user</code></td><td><code>T100200</code> (UPPERCASE)</td></tr>
+        </tbody>
+      </table>
+      <div class="legend">Nach Silver-Build: einheitlich <code>t_number</code> (lowercase), überall. GPN gelöscht.</div>
+    </section>
+
+    <section id="s4">
+      <h2>4. Cross-Channel-Join über TrackingId</h2>
+      <p class="sectionsub">TrackingId ist der einzige kanalübergreifende Key — 32 Zeichen, 5 Segmente.</p>
+<pre><code>QRREP-0000058-240709-0000060-EMI
+  │       │       │       │     └── channel:  EMI / INT / EVT / BAN
+  │       │       │       └──────── activity sequence
+  │       │       └──────────────── YYMMDD
+  │       └──────────────────────── pack number
+  └──────────────────────────────── cluster
+  └───────┬───────┘
+   tracking_pack_id  ← Dashboard-Grain</code></pre>
+      <p style="margin-top:16px;"><strong>Namens-Varianten pro System</strong> (Silver harmonisiert zu <code>tracking_id</code>):</p>
+      <div class="mermaid">
+flowchart LR
+    A["imep_bronze.tbl_email<br/>TrackingId"]
+    B["imep_gold.tbl_pbi_platform_mailings<br/>TrackingId"]
+    C["imep_gold.tbl_pbi_platform_events<br/>TrackingId"]
+    D["sharepoint_bronze.pages<br/>UBSGICTrackingID"]
+    E["sharepoint_bronze.pageviews<br/>GICTrackingID"]
+    F["sharepoint_cplan.*<br/>tracking_id"]
+    SILVER["silver.*<br/>tracking_id<br/>+ tracking_pack_id<br/>+ tracking_channel_abbr"]
+    A --> SILVER
+    B --> SILVER
+    C --> SILVER
+    D --> SILVER
+    E --> SILVER
+    F --> SILVER
+    classDef src fill:#ECEBE4,stroke:#8E8D83,stroke-width:1.5px;
+    classDef silver fill:#F7F7F5,stroke:#7A7870,stroke-dasharray:5 3,stroke-width:2px;
+    class A,B,C,D,E,F src;
+    class SILVER silver;
+      </div>
+    </section>
+
+    <section id="s5">
+      <h2>5. Gold Cross-Channel Fact — der Funnel pro Pack</h2>
+      <p class="sectionsub">Alle hier gezeigten Tabellen sind <strong>unser Zielmodell</strong> (noch zu bauen). Eine Row pro <code>tracking_pack_id</code> mit allen Channel-KPIs nebeneinander.</p>
+      <div class="mermaid">
+flowchart TB
+    DP["silver.dim_pack<br/>1 row per pack"]
+    FE["silver.fact_email<br/>sent/opened/clicked aggregation"]
+    FP["silver.fact_page_view<br/>views/UV/TOS aggregation"]
+    FV["silver.fact_event<br/>registration count"]
+    GX["gold.fact_cross_channel<br/>1 row per tracking_pack_id"]
+    DP -- "pack_id" --> GX
+    FE -- "GROUP BY tracking_pack_id" --> GX
+    FP -- "GROUP BY tracking_pack_id" --> GX
+    FV -- "GROUP BY tracking_pack_id" --> GX
+    subgraph KPIs["Gold KPIs per pack"]
+        K1["email_sent<br/>email_opened<br/>email_clicked"]
+        K2["page_views<br/>unique_readers<br/>avg_time_on_page"]
+        K3["event_registered"]
+    end
+    GX --> KPIs
+    classDef silver fill:#F7F7F5,stroke:#7A7870,stroke-dasharray:5 3,stroke-width:1.5px;
+    classDef gold fill:#F5F0E1,stroke:#946F29,stroke-dasharray:5 3,stroke-width:2px;
+    classDef kpi fill:#FFFFFF,stroke:#E60000,stroke-width:1.5px;
+    class DP,FE,FP,FV silver;
+    class GX gold;
+    class K1,K2,K3 kpi;
+      </div>
+      <p style="margin-top:16px;"><strong>Funnel auf Pack-Ebene:</strong></p>
+<pre><code>Sent (100%) ─► Opened (~45%) ─► Clicked (~8%) ─► Page View (~6%) ─► Event Registered (~1.5%)
+                                                      │
+                                              nur Article-Pages
+                                        (UBSGICTrackingID populated)</code></pre>
+    </section>
+
+    <section id="s6">
+      <h2>6. Dashboard-Grain-Hierarchie</h2>
+      <p class="sectionsub">Default-View zeigt eine Row pro Pack. Drill-Down zur Activity-Ebene optional, Roll-up zum Cluster für Programm-Reports.</p>
+      <div class="mermaid">
+flowchart TD
+    CL["Cluster<br/>e.g. QRREP"]
+    PA["Pack<br/>tracking_pack_id<br/>QRREP-0000058"]
+    AC["Activity<br/>tracking_id<br/>QRREP-0000058-240709-0000060-EMI"]
+    CL --> PA
+    PA --> AC
+    D1["Dashboard Default-Grain<br/>1 row per Pack"]
+    PA --> D1
+    classDef lvl1 fill:#F5F0E1,stroke:#B98E2C;
+    classDef lvl2 fill:#F7F7F5,stroke:#7A7870,stroke-width:2px;
+    classDef lvl3 fill:#ECEBE4,stroke:#8E8D83;
+    classDef dash fill:#FFFFFF,stroke:#E60000,stroke-width:2px;
+    class CL lvl1;
+    class PA lvl2;
+    class AC lvl3;
+    class D1 dash;
+      </div>
+    </section>
+
+    <section id="s7">
+      <h2>7. Coverage Disclaimer (Q15-Findings)</h2>
+      <p class="sectionsub">Nicht alle Intranet-Views sind im Funnel abbildbar — TrackingID wird nur für News/Event-Articles gesetzt.</p>
+      <div class="mermaid">
+flowchart LR
+    ALL["Alle Intranet PageViews<br/>100%"]
+    ART["Article PageViews<br/>News + Events only"]
+    TRK["PageViews mit TrackingId<br/>= im Funnel"]
+    N["Dashboard-Metrik:<br/>'Attribuierte Views'<br/>deckt nur TRK ab"]
+    ALL --> ART
+    ART --> TRK
+    TRK --> N
+    classDef all fill:#ECEBE4,stroke:#8E8D83;
+    classDef art fill:#F5F0E1,stroke:#B98E2C;
+    classDef trk fill:#F7F7F5,stroke:#7A7870,stroke-width:2px;
+    classDef note fill:#FFFFFF,stroke:#E60000;
+    class ALL all;
+    class ART art;
+    class TRK trk;
+    class N note;
+      </div>
+      <div class="legend">Genie Q15/Q15b quantifizieren den Anteil TRK pro Monat → daraus ableitbar: Default-Zeitraum und Coverage-Note im Dashboard.</div>
+    </section>
+
+    <section id="s8">
+      <h2>8. Gold-First MVP — Cross-Channel nur aus existierenden Gold-Tabellen</h2>
+      <p class="sectionsub">Alternative Architektur: Dashboard baut sich aus <code>imep_gold.tbl_pbi_platform_mailings</code> + <code>imep_gold.tbl_pbi_platform_events</code>, joinen via abgeleitetem <code>tracking_pack_id</code>. Keine Bronze-Reads, kein HR-Join, kein ETL-Silver-Build. Schnell lieferbar — mit klaren Scope-Kompromissen.</p>
+      <div class="mermaid">
+flowchart LR
+    subgraph Input["Existing Gold (read-only)"]
+        direction TB
+        M["imep_gold.tbl_pbi_platform_mailings<br/>TrackingId + StartsentTime<br/>+ content complexity<br/>+ CountLanguages"]
+        E["imep_gold.tbl_pbi_platform_events<br/>TrackingId + registration<br/>+ schedule + access rules"]
+    end
+    SPLIT["REGEXP_EXTRACT<br/>tracking_pack_id =<br/>first 2 segments"]
+    JOIN["FULL OUTER JOIN<br/>USING tracking_pack_id"]
+    OUT["gold.fact_cross_channel_lite<br/>1 row per tracking_pack_id"]
+    VIEWS["Dashboard Views<br/>- Pack Inventory<br/>- Mailings-per-Pack<br/>- Events-per-Pack<br/>- Total Registrations<br/>- Content Complexity Trend"]
+    M --> SPLIT
+    E --> SPLIT
+    SPLIT --> JOIN
+    JOIN --> OUT
+    OUT --> VIEWS
+    classDef ext fill:#F5F0E1,stroke:#B98E2C,stroke-width:1.5px;
+    classDef logic fill:#ECEBE4,stroke:#7A7870,stroke-dasharray:5 3,stroke-width:1.5px;
+    classDef out fill:#F5F0E1,stroke:#946F29,stroke-dasharray:5 3,stroke-width:2px;
+    classDef dash fill:#FFFFFF,stroke:#E60000,stroke-width:2px;
+    class M,E ext;
+    class SPLIT,JOIN logic;
+    class OUT out;
+    class VIEWS dash;
+      </div>
+
+      <p style="margin-top:18px;"><strong>Was das Gold-First-MVP liefert:</strong></p>
+      <table>
+        <thead><tr><th>KPI</th><th>Quelle</th><th>Genauigkeit</th></tr></thead>
+        <tbody>
+          <tr><td>Anzahl Packs</td><td>distinct <code>tracking_pack_id</code></td><td>100% exakt</td></tr>
+          <tr><td>Mailings pro Pack</td><td>COUNT mailings in Pack</td><td>100% exakt</td></tr>
+          <tr><td>First-Send-Zeitpunkt</td><td><code>MIN(StartsentTime)</code> aus mailings</td><td>100% exakt</td></tr>
+          <tr><td>Events pro Pack</td><td>COUNT events in Pack</td><td>100% exakt</td></tr>
+          <tr><td>Total Registrations pro Pack</td><td><code>SUM(registration)</code> aus events</td><td>100% exakt (Attended vs. Registered nicht getrennt)</td></tr>
+          <tr><td>Content Complexity Trend</td><td>Avg(<code>elementcounts</code>, <code>uniquecomponents</code>)</td><td>Proxy für Aufwand</td></tr>
+          <tr><td>Language Reach</td><td>Avg(<code>CountLanguages</code>)</td><td>100% exakt</td></tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top:18px;"><strong>Was fehlt gegenüber dem Voll-Modell:</strong></p>
+      <div class="mermaid">
+flowchart TB
+    LITE["Gold-First MVP<br/>Pack-Inventory + Event-Registrations"]
+    GAP1["FEHLT: Email-Engagement<br/>Sent/Opened/Clicked counts<br/>per Pack"]
+    GAP2["FEHLT: PageView-Telemetrie<br/>Views/Unique-Readers<br/>per Pack"]
+    GAP3["FEHLT: HR-Audience<br/>Division/Region-Breakdown<br/>per Pack"]
+    GAP4["FEHLT: Funnel<br/>Send to Open to Click to View rates"]
+    LITE -.needs bronze.tbl_analytics_link + receiver_status.-> GAP1
+    LITE -.needs sharepoint_bronze.pageviews.-> GAP2
+    LITE -.needs bronze.tbl_hr_employee + costcenter.-> GAP3
+    LITE -.needs GAP1 + GAP2 combined.-> GAP4
+    classDef lite fill:#F5F0E1,stroke:#946F29,stroke-width:2px;
+    classDef gap fill:#FFFFFF,stroke:#BD000C,stroke-width:1.5px,color:#BD000C;
+    class LITE lite;
+    class GAP1,GAP2,GAP3,GAP4 gap;
+      </div>
+
+      <p style="margin-top:18px;"><strong>Progressiver Rollout-Pfad:</strong></p>
+<pre><code>Phase 0  — Gold-First MVP (2–3 Tage)
+           Pack-Inventory + Event-Registrations-Dashboard
+           Scope-Disclaimer: "keine Email-Engagement-KPIs"
+
+Phase 1  — Email-Engagement (1–2 Wochen)
+           + silver.fact_email aus imep_bronze.tbl_analytics_link
+           + Send/Open/Click pro tracking_pack_id
+           Ab jetzt echter Mini-Funnel: Mailing to Click to Event
+
+Phase 2  — Intranet-Reach (1–2 Wochen)
+           + silver.fact_page_view aus sharepoint_bronze.pageviews
+           + HR-Bridge für T_NUMBER-Auflösung
+           Voller Funnel inklusive News/Event-Views
+
+Phase 3  — Audience-Breakdown (3–5 Tage)
+           + HR-Dimensionen (Division, Region, Management Level)
+           Cross-Tabulation im Dashboard</code></pre>
+
+      <p style="margin-top:18px;"><strong>SQL-Skizze für <code>gold.fact_cross_channel_lite</code>:</strong></p>
+<pre><code>WITH m AS (
+  SELECT
+    REGEXP_EXTRACT(TrackingId, '^([A-Z0-9]+-[0-9]+)', 1) AS tracking_pack_id,
+    REGEXP_EXTRACT(TrackingId, '^([A-Z0-9]+)',       1) AS cluster_id,
+    COUNT(*)                                            AS mailing_count,
+    MIN(StartsentTime)                                  AS first_send_at,
+    AVG(elementcounts)                                  AS avg_elementcounts,
+    AVG(uniquecomponents)                               AS avg_components,
+    AVG(CountLanguages)                                 AS avg_languages
+  FROM imep_gold.tbl_pbi_platform_mailings
+  WHERE IsActive = TRUE
+  GROUP BY 1, 2
+),
+e AS (
+  SELECT
+    REGEXP_EXTRACT(TrackingId, '^([A-Z0-9]+-[0-9]+)', 1) AS tracking_pack_id,
+    COUNT(*)                                            AS event_count,
+    SUM(registration)                                   AS total_registrations,
+    MIN(StartDate)                                      AS first_event_at
+  FROM imep_gold.tbl_pbi_platform_events
+  WHERE IsActive = TRUE
+    AND IsLegacy  = FALSE
+    AND EventFrom &lt; '2100-01-01'
+  GROUP BY 1
+)
+SELECT
+  COALESCE(m.tracking_pack_id, e.tracking_pack_id) AS tracking_pack_id,
+  m.cluster_id, m.mailing_count, m.first_send_at,
+  m.avg_elementcounts, m.avg_components, m.avg_languages,
+  e.event_count, e.total_registrations, e.first_event_at
+FROM m FULL OUTER JOIN e USING (tracking_pack_id);</code></pre>
+
+      <div class="legend" style="border-left-color:#BD000C;">
+        <strong>Offene Fragen für Genie zur Gold-First-Viability</strong> — siehe neue Sektion I in
+        <a href="genie_questions_imep.md#i--gold-first-viability-q16-q19">genie_questions_imep.md</a>.
+        Speziell: gibt es in <code>imep_gold</code> oder <code>sharepoint_gold</code> bereits pre-aggregated Engagement-Views, die wir nicht kennen?
+      </div>
+    </section>
+  </main>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: "base",
+      themeVariables: {
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif",
+        fontSize: "13px",
+        primaryColor: "#F7F7F5",
+        primaryTextColor: "#000000",
+        primaryBorderColor: "#7A7870",
+        lineColor: "#7A7870",
+        secondaryColor: "#ECEBE4",
+        tertiaryColor: "#F5F0E1"
+      }
+    });
+  </script>
+</body>
+</html>

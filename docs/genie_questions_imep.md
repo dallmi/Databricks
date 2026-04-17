@@ -238,6 +238,36 @@ Hypothese A: GPN ist eine String-Transformation des T-Numbers (`t001108` → `00
 
 ---
 
+## I — Gold-First Viability (Q16–Q19)
+
+Hintergrund: Wir prüfen, ob ein Cross-Channel-Dashboard **ohne Bronze-ETL** allein aus existierenden Gold-Tabellen baubar ist (siehe [architecture.html §8](architecture.html#s8)). Dafür müssen wir wissen, welche Gold-Tabellen es überhaupt gibt.
+
+### Q16 — Gibt es weitere Tabellen in `imep_gold`?
+
+> *List ALL tables in the `imep_gold` schema. For each: table name, row count, column count, and `MAX(CreationDate)` (oder load timestamp). Highlight any table whose name suggests engagement aggregation (containing `engagement`, `interaction`, `click`, `open`, `receiver`, `delivery`, `kpi`, `metric`, `summary`).*
+
+→ Wenn es ein `imep_gold.tbl_pbi_platform_engagement` oder ähnliches gibt, das Send/Open/Click pro Mailing aggregiert, erspart uns das den ganzen Bronze-Pattern-2-Build.
+
+### Q17 — Gibt es eine `sharepoint_gold`-Schicht?
+
+> *List ALL schemas in the catalog that start with `sharepoint_`. For each schema, list all tables with row count and max CreationDate. Highlight any `sharepoint_gold.*` tables — especially those that look like PageView aggregations or cross-channel pre-joins.*
+
+→ Analog zu iMEP Gold: Vielleicht existiert eine vor-aggregierte PageView-Schicht, die uns den Bronze-Read auf `sharepoint_bronze.pageviews` erspart.
+
+### Q18 — Gibt es bereits pre-joined Cross-Channel-Views?
+
+> *Search the entire catalog for tables/views whose name contains `cross_channel`, `multi_channel`, `campaign_performance`, `communication_performance`, `funnel`, `journey`, `attribution`, or `pack_performance`. For each hit show schema.table, column count, row count, and 3 column names that reveal its purpose.*
+
+→ Best Case: Jemand hat das Cross-Channel-Modell schon gebaut und wir schliessen uns an.
+
+### Q19 — Beziehung `tbl_pbi_platform_mailings.EventId` ↔ `tbl_pbi_platform_events.Id`
+
+> *In `imep_gold.tbl_pbi_platform_mailings`: what percentage of rows have a non-null `EventId`? For those, verify that the `EventId` matches an existing `tbl_pbi_platform_events.Id` (JOIN hit rate). Also show: of mailings linked to an event, does the mailing's `tracking_pack_id` (first 2 segments of TrackingId) equal the event's `tracking_pack_id`?*
+
+→ Bestätigt, ob die `EventId`-FK direkt nutzbar ist (statt über `tracking_pack_id`-Derivation zu joinen) und ob beide Tabellen konsistent im gleichen Pack liegen.
+
+---
+
 ## Nutzungshinweise
 
 1. **Reihenfolge**: Q1 und Q3 zuerst — sie entscheiden, ob das Modell überhaupt baubar ist. Q19/Q20 am Schluss als Validierung.
