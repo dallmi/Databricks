@@ -238,33 +238,44 @@ Hypothese A: GPN ist eine String-Transformation des T-Numbers (`t001108` → `00
 
 ---
 
-## I — Gold-First Viability (Q16–Q19)
+## I — Gold-First Viability (Q16–Q20)
 
-Hintergrund: Wir prüfen, ob ein Cross-Channel-Dashboard **ohne Bronze-ETL** allein aus existierenden Gold-Tabellen baubar ist (siehe [architecture.html §8](architecture.html#s8)). Dafür müssen wir wissen, welche Gold-Tabellen es überhaupt gibt.
+Hintergrund: Laut User enthält Gold **zwangsläufig** Engagement-Aggregate (Sends/Opens/Clicks in iMEP, PageViews in SharePoint) — sonst könnte das bestehende Power-BI Semantic Model sie gar nicht darstellen. Unsere Q1b-Suche auf `tbl_pbi_platform_mailings` war zu eng. Ziel dieser Sektion: **die tatsächlich konsumierten Gold-Tabellen finden**, um `gold.fact_cross_channel` als reinen Gold-JOIN zu bauen (kein Bronze-ETL).
 
-### Q16 — Gibt es weitere Tabellen in `imep_gold`?
+### Q16 — Alle Tabellen in `imep_gold` (breiter als zuvor)
 
-> *List ALL tables in the `imep_gold` schema. For each: table name, row count, column count, and `MAX(CreationDate)` (oder load timestamp). Highlight any table whose name suggests engagement aggregation (containing `engagement`, `interaction`, `click`, `open`, `receiver`, `delivery`, `kpi`, `metric`, `summary`).*
+> *List ALL tables AND views in the `imep_gold` schema — not filtered by keyword. For each: table name, row count, column count, max(CreationDate) or load timestamp. Additionally, for each table, list the first 5 column names so we can spot engagement fields (sent_count, opened_count, clicked_count, unique_opens, unique_clicks, bounce_count, etc.).*
 
-→ Wenn es ein `imep_gold.tbl_pbi_platform_engagement` oder ähnliches gibt, das Send/Open/Click pro Mailing aggregiert, erspart uns das den ganzen Bronze-Pattern-2-Build.
+→ Keine Keyword-Filterung diesmal — vollständiger Scan. Die Engagement-Tabellen haben vermutlich Power-BI-affine Namen wie `tbl_pbi_*` statt `tbl_engagement_*`.
 
-### Q17 — Gibt es eine `sharepoint_gold`-Schicht?
+### Q17 — Existieren weitere Gold-Schemas (speziell SharePoint)?
 
-> *List ALL schemas in the catalog that start with `sharepoint_`. For each schema, list all tables with row count and max CreationDate. Highlight any `sharepoint_gold.*` tables — especially those that look like PageView aggregations or cross-channel pre-joins.*
+> *Run `SHOW SCHEMAS` (or catalog listing). For any schema containing the word `gold`, `silver`, `pbi`, `dashboard`, `report`, `analytics`, `sharepoint` — list all tables with row count and column count. Highlight schemas containing `sharepoint` or `sp_`.*
 
-→ Analog zu iMEP Gold: Vielleicht existiert eine vor-aggregierte PageView-Schicht, die uns den Bronze-Read auf `sharepoint_bronze.pageviews` erspart.
+→ SharePoint-Gold-Schicht muss existieren (PageView-Aggregate fürs Semantic Model). Name unbekannt — könnte `sharepoint_gold`, `sp_gold`, `intranet_gold`, `communications_gold` o.ä. sein.
 
-### Q18 — Gibt es bereits pre-joined Cross-Channel-Views?
+### Q18 — Pre-joined Cross-Channel-Views
 
-> *Search the entire catalog for tables/views whose name contains `cross_channel`, `multi_channel`, `campaign_performance`, `communication_performance`, `funnel`, `journey`, `attribution`, or `pack_performance`. For each hit show schema.table, column count, row count, and 3 column names that reveal its purpose.*
+> *Search the entire catalog for tables/views whose name contains `cross_channel`, `multi_channel`, `campaign_performance`, `communication_performance`, `funnel`, `journey`, `attribution`, `pack_performance`, `semantic`, `reporting_layer`. For each hit show schema.table, column count, row count, and 3 column names that reveal its purpose.*
 
-→ Best Case: Jemand hat das Cross-Channel-Modell schon gebaut und wir schliessen uns an.
+→ Best Case: das Cross-Channel-Modell existiert schon.
 
 ### Q19 — Beziehung `tbl_pbi_platform_mailings.EventId` ↔ `tbl_pbi_platform_events.Id`
 
 > *In `imep_gold.tbl_pbi_platform_mailings`: what percentage of rows have a non-null `EventId`? For those, verify that the `EventId` matches an existing `tbl_pbi_platform_events.Id` (JOIN hit rate). Also show: of mailings linked to an event, does the mailing's `tracking_pack_id` (first 2 segments of TrackingId) equal the event's `tracking_pack_id`?*
 
-→ Bestätigt, ob die `EventId`-FK direkt nutzbar ist (statt über `tracking_pack_id`-Derivation zu joinen) und ob beide Tabellen konsistent im gleichen Pack liegen.
+→ Bestätigt, ob die `EventId`-FK direkt nutzbar ist.
+
+### Q20 — Power-BI / Semantic Model als authoritative Quelle (neu, kritisch)
+
+> **Kontext**: Das bestehende Power-BI-Dashboard zeigt Opens/Clicks/Views — konsumiert also bestimmte Gold-Tabellen. Diese sind unser authoritative Starting-Point.
+
+> *Can you inspect the Databricks Lakehouse Monitoring / Unity Catalog lineage for any downstream Power BI dataset consumers? Specifically:*
+> *a) List all tables in any `*_gold` schema that are referenced by a Power BI / Lakeflow / semantic model downstream.*
+> *b) If lineage is not available: list all tables in `imep_gold` and `sharepoint_*` that have been queried in the last 30 days (via query history / audit log). The frequently-read ones are the ones Power BI hits.*
+> *c) For the top 5 most-queried tables: show column list so we can identify engagement metrics (count columns, *_sent, *_opened, *_clicked, *_views).*
+
+→ Kürzester Weg zu den richtigen Gold-Tabellen: schauen, welche Power-BI bereits aktiv abfragt. Falls Genie keine Lineage hat: die Tabellen, die in Queries am häufigsten auftauchen, sind die "live" genutzten.
 
 ---
 

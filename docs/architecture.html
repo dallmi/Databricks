@@ -366,7 +366,12 @@ flowchart LR
 
     <section id="s8">
       <h2>8. Gold-First MVP — Cross-Channel nur aus existierenden Gold-Tabellen</h2>
-      <p class="sectionsub">Alternative Architektur: Dashboard baut sich aus <code>imep_gold.tbl_pbi_platform_mailings</code> + <code>imep_gold.tbl_pbi_platform_events</code>, joinen via abgeleitetem <code>tracking_pack_id</code>. Keine Bronze-Reads, kein HR-Join, kein ETL-Silver-Build. Schnell lieferbar — mit klaren Scope-Kompromissen.</p>
+      <p class="sectionsub">
+        <strong>Hypothese (User-bestätigt):</strong> Gold enthält mit hoher Wahrscheinlichkeit bereits Engagement-Aggregate (Sends/Opens/Clicks in <code>imep_gold</code>, PageView-Counts in einer SharePoint-Gold-Schicht) — sonst könnte das bestehende Power-BI Semantic Model sie nicht darstellen. Unsere Q1b-Suche war zu eng. Q16–Q20 sollen die tatsächlich konsumierten Tabellen identifizieren.
+      </p>
+      <div class="legend" style="border-left-color:#6F7A1A;margin-bottom:18px;">
+        <strong>Wenn Q16/Q17/Q20 die vermuteten Engagement-Gold-Tabellen finden</strong>, wird der Gold-First-Ansatz von "MVP mit Scope-Kompromissen" zum <strong>natürlichen Standardweg</strong>. Das Diagramm unten zeigt zunächst den konservativen Fall (nur mailings + events); sobald Engagement-Gold verfügbar ist, ersetzt es die Bronze-Pfeile aus den Lücken.
+      </div>
       <div class="mermaid">
 flowchart LR
     subgraph Input["Existing Gold (read-only)"]
@@ -407,42 +412,49 @@ flowchart LR
         </tbody>
       </table>
 
-      <p style="margin-top:18px;"><strong>Was fehlt gegenüber dem Voll-Modell:</strong></p>
+      <p style="margin-top:18px;"><strong>Was heute bekannt fehlt — und wie es geschlossen wird:</strong></p>
       <div class="mermaid">
 flowchart TB
-    LITE["Gold-First MVP<br/>Pack-Inventory + Event-Registrations"]
-    GAP1["FEHLT: Email-Engagement<br/>Sent/Opened/Clicked counts<br/>per Pack"]
-    GAP2["FEHLT: PageView-Telemetrie<br/>Views/Unique-Readers<br/>per Pack"]
-    GAP3["FEHLT: HR-Audience<br/>Division/Region-Breakdown<br/>per Pack"]
-    GAP4["FEHLT: Funnel<br/>Send to Open to Click to View rates"]
-    LITE -.needs bronze.tbl_analytics_link + receiver_status.-> GAP1
-    LITE -.needs sharepoint_bronze.pageviews.-> GAP2
-    LITE -.needs bronze.tbl_hr_employee + costcenter.-> GAP3
-    LITE -.needs GAP1 + GAP2 combined.-> GAP4
+    LITE["Gold-First MVP<br/>heute bekannte Daten:<br/>Pack-Inventory + Event-Registrations"]
+    GAP1["Email-Engagement<br/>Sent / Opened / Clicked counts"]
+    GAP2["PageView-Telemetrie<br/>Views / Unique-Readers"]
+    GAP3["HR-Audience<br/>Division / Region Breakdown"]
+    GAP4["echter Funnel<br/>Send to Open to Click to View"]
+    LITE -.->|"vermutlich bereits in imep_gold - Q16/Q20"| GAP1
+    LITE -.->|"vermutlich in sharepoint_gold - Q17"| GAP2
+    LITE -.->|"silver.dim_employee_temporal aus HR bronze"| GAP3
+    LITE -.->|"ergibt sich aus Engagement + PageView"| GAP4
     classDef lite fill:#F5F0E1,stroke:#946F29,stroke-width:2px;
-    classDef gap fill:#FFFFFF,stroke:#BD000C,stroke-width:1.5px,color:#BD000C;
+    classDef gap fill:#FFFFFF,stroke:#E4A911,stroke-width:1.5px,color:#946F29;
     class LITE lite;
     class GAP1,GAP2,GAP3,GAP4 gap;
       </div>
+      <div class="legend">
+        Die ersten drei Gaps sind <strong>Suchaufgaben</strong> (Q16/Q17/Q20 in der Gold-Landschaft), keine Bau-Aufgaben. Nur HR-Audience erfordert in jedem Fall einen eigenen Silver-Build, weil Bronze-Stammdaten mit Temporal-Logik angereichert werden müssen.
+      </div>
 
-      <p style="margin-top:18px;"><strong>Progressiver Rollout-Pfad:</strong></p>
-<pre><code>Phase 0  — Gold-First MVP (2–3 Tage)
-           Pack-Inventory + Event-Registrations-Dashboard
-           Scope-Disclaimer: "keine Email-Engagement-KPIs"
+      <p style="margin-top:18px;"><strong>Rollout-Pfad (abhängig von Q16/Q17/Q20-Befund):</strong></p>
+<pre><code>Szenario A — Gold enthält Engagement-Aggregate (wahrscheinlich)
+===================================================================
+Phase 0   Discovery via Q16/Q17/Q20 (1 Tag)
+          Identifizieren der Engagement-Gold-Tabellen in imep_gold
+          und SharePoint-Gold
 
-Phase 1  — Email-Engagement (1–2 Wochen)
-           + silver.fact_email aus imep_bronze.tbl_analytics_link
-           + Send/Open/Click pro tracking_pack_id
-           Ab jetzt echter Mini-Funnel: Mailing to Click to Event
+Phase 1   Gold-JOIN fact_cross_channel (3–5 Tage)
+          mailings + events + engagement + pageviews
+          als View oder materialisierte Tabelle
+          Voller Funnel, kein Bronze-Read
 
-Phase 2  — Intranet-Reach (1–2 Wochen)
-           + silver.fact_page_view aus sharepoint_bronze.pageviews
-           + HR-Bridge für T_NUMBER-Auflösung
-           Voller Funnel inklusive News/Event-Views
+Phase 2   HR-Audience (3–5 Tage)
+          silver.dim_employee_temporal fürs Audience-Breakdown
 
-Phase 3  — Audience-Breakdown (3–5 Tage)
-           + HR-Dimensionen (Division, Region, Management Level)
-           Cross-Tabulation im Dashboard</code></pre>
+Szenario B — Gold enthält keine Engagement-Aggregate (unwahrscheinlich)
+===================================================================
+Phase 0   Gold-First MVP (2–3 Tage)
+          Pack-Inventory + Event-Registrations-Dashboard
+Phase 1   + silver.fact_email aus imep_bronze (1–2 Wochen)
+Phase 2   + silver.fact_page_view aus sharepoint_bronze (1–2 Wochen)
+Phase 3   + HR-Audience (3–5 Tage)</code></pre>
 
       <p style="margin-top:18px;"><strong>SQL-Skizze für <code>gold.fact_cross_channel_lite</code>:</strong></p>
 <pre><code>WITH m AS (
