@@ -325,6 +325,57 @@ Hintergrund: Laut User enthält Gold **zwangsläufig** Engagement-Aggregate (Sen
 
 ---
 
+## J — Build Readiness für Cross-Channel-JOIN (Q21–Q24)
+
+Ziel: Die letzten Schema-Details und Volume-Checks, die wir brauchen, um den konkreten SQL-Build von `gold.fact_cross_channel` zu starten. Plan: Email via `imep_gold.tbl_pbi_platform_mailings` + `tbl_pbi_mailingreciever_region` ↔ Intranet via `sharepoint_gold.pbi_db_*_metric` + `sharepoint_bronze.pages`, gejoint über abgeleiteten `tracking_pack_id`.
+
+### Q21 — iMEP Gold Tier 3 Schemas (JOIN-kritisch)
+
+> *For the following iMEP Gold tables, return full column list with types and nullability:*
+> *- `imep_gold.tbl_pbi_mailingreciever_region`*
+> *- `imep_gold.tbl_pbi_mailingreciever_division`*
+> *- `imep_gold.tbl_pbi_engagement`*
+> *- `imep_gold.tbl_pbi_kpi`*
+>
+> *For each, identify the exact column name that joins back to `imep_gold.tbl_pbi_platform_mailings.Id` (is it `MailingId`, `email_id`, `Id`, or something else?). Confirm the types of `UniqueOpens`, `UniqueClicks`, `Count` — are they nullable (per Q16-note "intentional NULLs for no tracked engagement")?*
+
+→ Ohne diese Spalten-Details kann der `JOIN ON r.MailingId = m.Id` nicht konkret formuliert werden.
+
+### Q22 — SharePoint Gold Metric-Schemas
+
+> *For the following SharePoint Gold tables, return full column list with types and nullability:*
+> *- `sharepoint_gold.pbi_db_interactions_metrics` (84M × 11 cols)*
+> *- `sharepoint_gold.pbi_db_pageviewed_metric` (84M × 5 cols)*
+> *- `sharepoint_gold.pbi_db_pagevisited_metric` (81M × 9 cols)*
+> *- `sharepoint_gold.pbi_db_datewise_overview_fact_tbl` (7.5M × 31 cols)*
+>
+> *For each: (a) identify the page-identifying FK column (`page_id`, `pageId`, `url_hash`, etc.) that joins back to `sharepoint_bronze.pages`; (b) check whether any of these tables carries a direct `GICTrackingID` / `UBSGICTrackingID` column (so we can skip the pages-JOIN).*
+
+→ Entscheidet, ob Intranet-Aggregat direkt per TrackingID joinbar ist oder via `page_id → pages.UBSGICTrackingID` resolved werden muss.
+
+### Q23 — TrackingId-Format-Konsistenz zwischen iMEP und SharePoint
+
+> *Take 100 sample values of `TrackingId` from `imep_gold.tbl_pbi_platform_mailings` and 100 samples of `UBSGICTrackingID` from `sharepoint_bronze.pages`. Do NOT return the sample values — return only a structural comparison:*
+> *(a) Do both have the same length (32 chars)?*
+> *(b) Do both use the same segment structure (5 segments, dash-separated)?*
+> *(c) Is case consistent across both (all uppercase? mixed?)?*
+> *(d) Any leading/trailing whitespace in either column?*
+> *(e) Count how many TrackingIds appear in both tables (intersection size) vs only in one.*
+
+→ Falls Formate divergieren, brauchen wir einen `UPPER(TRIM(...))` oder Regex-Normalize im JOIN. Intersection-Count ist die echte Coverage-Zahl für den Cross-Channel-Funnel.
+
+### Q24 — Volumen-Check mit `TrackingId IS NOT NULL`-Filter (Performance-relevant)
+
+> *In `imep_gold.tbl_pbi_platform_mailings`:*
+> *(a) How many rows have `TrackingId IS NOT NULL` vs NULL?*
+> *(b) Break down the NOT-NULL count by `YEAR(CreationDate)` for the last 5 years.*
+> *(c) Of the rows with TrackingId, what percentage has the channel-suffix `-EMI` (= email)? And what's the distribution of the other suffixes (EVT, BAN, etc.)?*
+> *(d) Assuming we filter `WHERE TrackingId IS NOT NULL AND RIGHT(TrackingId, 3) = 'EMI'` — how many distinct `tracking_pack_id` (first 2 segments) does that leave us?*
+
+→ Zeigt wie viel vom 278M-Recipients-Universum nach dem Filter für unsere Email-Seite übrig bleibt, und wie viele distinct Packs wir im Dashboard zu erwarten haben.
+
+---
+
 ## Nutzungshinweise
 
 1. **Reihenfolge**: Q1 und Q3 zuerst — sie entscheiden, ob das Modell überhaupt baubar ist. Q19/Q20 am Schluss als Validierung.
