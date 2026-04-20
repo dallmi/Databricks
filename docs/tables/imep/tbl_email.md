@@ -9,7 +9,7 @@
 | **Grain** | 1 row per Mailing (Versand-Definition, nicht pro Empfänger) |
 | **Primary key** | `Id` |
 | **Cross-channel key** | `TrackingId` (32-char, 5 Segmente) |
-| **Refresh** | *TBD — via Q28 (`DESCRIBE HISTORY`) zu klären* |
+| **Refresh** | **2×/Tag @ 00:00 und 12:00 UTC** (MERGE full-table upsert on Id, Service Principal) — Q28 |
 | **Approx row count** | ~145K (Q27-Stand 2026-04-20, Timespan Nov 2020 – Apr 2026) |
 | **PII** | `CreatedBy` = TNumber des Autors → indirekt identifizierend |
 

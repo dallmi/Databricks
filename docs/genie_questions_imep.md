@@ -462,7 +462,7 @@ Ziel: Die letzten Schema-Details und Volume-Checks, die wir brauchen, um den kon
 >
 > Volldetails: [memory/imep_join_graph_q27_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_join_graph_q27_findings.md).
 
-### Q28 — Pipeline-Hinweise aus Delta-History (OP-lineage-c)
+### ~~Q28~~ ✅ Pipeline-Hinweise aus Delta-History **(OP-lineage-c — gelöst 2026-04-20)**
 
 > *For each of these tables run `DESCRIBE HISTORY` and return the last 10 operations (timestamp, operation, userName, operationParameters, operationMetrics.numOutputRows):*
 >
@@ -476,7 +476,31 @@ Ziel: Die letzten Schema-Details und Volume-Checks, die wir brauchen, um den kon
 >
 > *From this I need: refresh cadence (how often), operation type (MERGE / INSERT / COPY INTO / WRITE), the service-principal or user that writes, and whether the write pattern looks like batch or streaming.*
 
-→ Erwartet: Für jede Tabelle eine Schätzung von Refresh-Frequenz + Writer-Identität + Batch/Streaming-Charakter.
+→ **Antwort** (110 History-Rows über 11 Tabellen):
+>
+> **Einheitliches Rhythmus-Muster**: `MERGE/WRITE → OPTIMIZE (Z-Order) → VACUUM`, 7-Tage-Retention.
+>
+> **iMEP Bronze — MERGE Upsert 2×/day @ 00:00/12:00 UTC**:
+> - `tbl_email`: ~145K full-table upsert
+> - `tbl_email_receiver_status`: 27–72M per run (full upsert)
+> - `tbl_analytics_link`: **3.7–8.5K per run → echt inkrementell** (neue Click-Events)
+>
+> **SharePoint Bronze — 1×/day @ 02:00 UTC**:
+> - `pages`: MERGE Daily Snapshot (48K)
+> - `pageviews`: **Append WRITE, 7 Bursts innerhalb 1 Minute** (API-Pagination-Pattern, micro-batched, **kein** Streaming)
+>
+> **iMEP Gold — CTAS Full Rebuild 2×/day @ ~00:23/12:25 UTC**:
+> - **Keine Inkrementalität** — jede Gold-Tabelle komplett zerstört und neu aufgebaut
+> - **520M-Row-Tabelle** (Label `tbl_pbi_platform_mailings` im Image — ⚠️ widerspricht Q27's 73K, wahrscheinlich `imep_gold.final`, durch Q30 zu klären) wird 2× täglich voll neu geschrieben → **grösster Compute-Kostenpunkt**
+> - Weitere Gold-CTAS: `tbl_pbi_mailings_region` (73,530), `tbl_pbi_mailings_division` (697,787), `tbl_pbi_analytics` (290,723), `tbl_pbi_kpi` (245,040), +1 (1,384,800)
+>
+> **Writer**: `userName` überall leer → **Service Principal** (SPN-Präfix `a71734ea-...`). Vollautomatisierte Pipeline, kein menschlicher Writer.
+>
+> **Dashboard-Implikation**: Refresh-Window-Risk um 00:23/12:25 UTC (Gold-CTAS-Phase) — Queries in diesem Fenster können auf partiellen/inkonsistenten Stand treffen. Cache oder Schedule drum herum.
+>
+> **Optimierungs-Hinweis** (nicht unsere Baustelle): Gold CTAS → Incremental MERGE würde Compute deutlich reduzieren.
+>
+> Volldetails: [memory/imep_pipeline_ops_q28_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_pipeline_ops_q28_findings.md).
 
 ### Q29 — Tier-Struktur aus Tabellen-Shape ableiten (OP-lineage-d)
 
