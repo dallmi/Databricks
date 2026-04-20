@@ -434,7 +434,7 @@ Ziel: Die letzten Schema-Details und Volume-Checks, die wir brauchen, um den kon
 >
 > **Konsequenz**: `silver.fact_email` NICHT bauen — iMEP hat sich bewusst dagegen entschieden. `imep_gold.final` direkt konsumieren. Volldetails: [memory/imep_silver_q26_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_silver_q26_findings.md).
 
-### Q27 — Lineage über Column-Fingerprint (OP-lineage-b)
+### ~~Q27~~ ✅ Lineage über Column-Fingerprint **(OP-lineage-b — gelöst 2026-04-20)**
 
 > *Across ALL schemas in the workspace, find every table that contains at least one of these columns (case-insensitive match on column name): `Id`, `EmailId`, `mailingid`, `MailingId`, `TrackingId`, `UBSGICTrackingID`, `GICTrackingID`, `TNumber`, `T_NUMBER`, `WORKER_ID`.*
 >
@@ -442,7 +442,25 @@ Ziel: Die letzten Schema-Details und Volume-Checks, die wir brauchen, um den kon
 >
 > *Goal: reconstruct join-key relationships between bronze and gold purely from column overlap + row counts.*
 
-→ Erwartet: Implizite Lineage-Karte via gemeinsamer Join-Keys, inkl. Hinweis, welche Tabellen zueinander "gehören".
+→ **Antwort**: **93 Tabellen / 8 Schemas** haben Treffer. Kern-Findings:
+>
+> **Zwei einzige Full-Key-Fact-Hubs** (Id + EmailId + TNumber):
+> - `imep_bronze.tbl_analytics_link` — **533M** rows
+> - `imep_bronze.tbl_email_receiver_status` — **293M** rows
+>
+> **Row-Counts bestätigt**: `imep_gold.final` 520M · `sharepoint_bronze.pageviews` 173M · `tbl_email` 145K · `tbl_pbi_platform_mailings` 73K · `sharepoint_bronze.pages` 48K · `tbl_hr_employee` 265K.
+>
+> **Join-Graph-Topologie**:
+> - `EmailId` → **12 Tabellen** (Backbone für Email-Domain)
+> - `TNumber` → **nur 2 Tabellen** → Person-Level-Analytics existieren ausschliesslich auf Email-Engagement-Grain
+> - `TrackingId` → **exakt 4 Tabellen** (tbl_email, tbl_event, tbl_pbi_platform_mailings, tbl_pbi_platform_events), **nie** zusammen mit EmailId → TrackingId ist **Dimension**, nicht Fact-Key
+> - 26 `imep_gold.tbl_pbi_*` joinen alle zurück: `MailingId = tbl_pbi_platform_mailings.Id = tbl_email.Id`
+>
+> **Cross-Channel**: Email ↔ SharePoint geht **dimensional** (TrackingId ↔ GICTrackingID auf `pages`), **nicht** über Engagement-Rows. SharePoint hat kein Person-Key-Equivalent zu TNumber.
+>
+> **Neues Schema gesichtet**: `page_metadata_bronze` (pagelikesview 40K, comments 3.4K, reportedcomments, moderatedcomments, metadata-pageviews 293) — separat vom main pageview-Fact.
+>
+> Volldetails: [memory/imep_join_graph_q27_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_join_graph_q27_findings.md).
 
 ### Q28 — Pipeline-Hinweise aus Delta-History (OP-lineage-c)
 

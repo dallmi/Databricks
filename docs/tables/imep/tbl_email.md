@@ -9,8 +9,8 @@
 | **Grain** | 1 row per Mailing (Versand-Definition, nicht pro Empfänger) |
 | **Primary key** | `Id` |
 | **Cross-channel key** | `TrackingId` (32-char, 5 Segmente) |
-| **Refresh** | *TBD — Pipeline-Owner bestätigen* |
-| **Approx row count** | *TBD — `SELECT COUNT(*)` in Databricks* |
+| **Refresh** | *TBD — via Q28 (`DESCRIBE HISTORY`) zu klären* |
+| **Approx row count** | ~145K (Q27-Stand 2026-04-20, Timespan Nov 2020 – Apr 2026) |
 | **PII** | `CreatedBy` = TNumber des Autors → indirekt identifizierend |
 
 ---
@@ -126,8 +126,9 @@ Gleiche `Id`, aber mit Content-Metriken angereichert. **Wir konsumieren Gold**, 
 
 ## Quality caveats
 
-- **TrackingId NULL-Rate**: Nicht jedes Mailing ist getrackt. Für Cross-Channel-Attribution `WHERE TrackingId IS NOT NULL` setzen.
+- **TrackingId NULL-Rate**: Nicht jedes Mailing ist getrackt. Für Cross-Channel-Attribution `WHERE TrackingId IS NOT NULL` setzen. Q24: nur 986/73,930 Mailings (1.3%) haben TrackingId, aber starker Uptrend (2024: 99 → 2025: 637 → 2026 YTD: 250).
 - **TrackingId-Format**: Immer 32 Zeichen, 5 Segmente getrennt durch `-`, UPPER. Channel-Segment (SEG5) ist System-Ownership, nicht Medium — für Cross-Channel-Match mit SharePoint nur SEG1–4 vergleichen (siehe `joins/cross_channel_trackingid.md`).
+- **Cross-Channel-Pfad (Q27)**: TrackingId ist **Dimension**, nicht Fact-Key — koexistiert **nie** mit EmailId in derselben Tabelle. Cross-Channel läuft deshalb `tbl_email.TrackingId ↔ sharepoint_bronze.pages.UBSGICTrackingID`, **nicht** über Engagement-Rows (`pageviews` / `tbl_analytics_link`).
 - **`CreationDate` ≠ Versandzeit**: Für "wann ging's raus" `tbl_email_receiver_status.DateTime` joinen.
 - **`CreatedBy` Format**: lowercase `t######`. Joins gegen `tbl_hr_user.UbsId` brauchen `LOWER(UbsId)`.
 
