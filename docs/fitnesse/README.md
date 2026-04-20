@@ -6,6 +6,35 @@
 
 ## POC — What is here
 
+## Automated upload (recommended)
+
+A Python script uploads all pages + containers in one run:
+
+```bash
+# Dry run — prints the plan without touching FitNesse
+python3 scripts/fitnesse_upload.py --dry-run
+
+# Live upload (requires network access to the FitNesse instance)
+python3 scripts/fitnesse_upload.py
+
+# Override defaults when the FitNesse endpoint differs
+python3 scripts/fitnesse_upload.py \
+  --base-url http://<fitnesse-host>:8200 \
+  --parent-path FrontPage.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard \
+  --root-name MultiChannelDataModel
+```
+
+Uses only Python stdlib (no `pip install` needed). 30 pages upload in ~15 seconds. Anonymous HTTP POST — no auth required inside the corp network.
+
+**Flags**:
+- `--dry-run` — prints the plan and reads all local files, without HTTP calls
+- `--stop-on-error` — abort on first failure (default: keep going, report at end)
+- `--delay 0.3` — seconds between requests to avoid overwhelming FitNesse
+
+---
+
+## Manual copy-paste (fallback)
+
 The entire KB as copy-paste-ready `.txt` files lives under `pages/`, mirroring the target FitNesse hierarchy:
 
 ```

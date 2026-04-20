@@ -176,7 +176,7 @@ Every rule in this document traces back to a Genie session:
 
 !2 Cross References
 
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Overview
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErCrossChannel
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.ImepBronzeEmailEvents
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.SharePointGoldToPages
