@@ -133,27 +133,36 @@ Gleiche `Id`, aber mit Content-Metriken angereichert. **Wir konsumieren Gold**, 
 
 ---
 
-## Lineage — Bronze → Silver → Gold
+## Lineage — Bronze → Gold (Silver ist übersprungen!)
 
-> **Status**: Die Existenz und Struktur eines dedizierten iMEP-Silver-Layers ist noch nicht bestätigt. iMEP-Gold hat laut Q16 eine 5-Tier-Architektur (Tier 1 = master, Tier 3 = engagement). Die Transformations-Jobs und Zwischentabellen sind über Genie/Unity-Catalog-Lineage zu klären — siehe offene Prompts unten.
+> **Confirmed 2026-04-20 (Q26)**: Email-Engagement **skipped den Silver-Layer komplett**. iMEP hat sich bewusst gegen eine dedizierte `silver.fact_email`-Schicht entschieden. `imep_silver` existiert — aber nur für **Events** (`invitation`, `eventregistration`, `event`), nicht für Email.
 
 ```
-imep_bronze.tbl_email                         [Quelle]
-          │
-          │  [Transformation TBD — iMEP-Team-Pipeline,
-          │   vermutlich Jobs/DLT im Unity Catalog]
-          ▼
-imep_gold.tbl_pbi_platform_mailings           [Tier-1 master, 1:1 zu Bronze.Id]
-          │
-          └─► imep_gold.<tier-3 engagement tables>
-                 - Join über lowercase `mailingid`
-                 - UniqueOpens / UniqueClicks pro Mailing × Region / Division
+imep_bronze.tbl_email
+imep_bronze.tbl_email_receiver_status   ───►   imep_gold.final  (~520M rows)
+imep_bronze.tbl_analytics_link                    │
+                                                  ├─ denormalisierter Join über Bronze
+                                                  ├─ HR-Enrichment spät angewendet
+                                                  └─ extreme Breite & Grösse by design
+
+imep_bronze.tbl_email  ───►  imep_gold.tbl_pbi_platform_mailings  [Master, 1:1 zu Bronze.Id]
+                                       │
+                                       └─► imep_gold.<tier-3 engagement>
+                                              - Join über lowercase `mailingid`
+                                              - UniqueOpens / UniqueClicks pro Mailing × Region
 ```
 
-**Offene Fragen zur Lineage** — durch Genie zu klären:
-- Welches Job/DLT-Pipeline produziert `tbl_pbi_platform_mailings` aus `tbl_email`?
-- Existiert ein `imep_silver`-Catalog oder ist es eine Tier innerhalb `imep_gold`?
-- Refresh-Cadence & SLA?
+**Consumption-Strategie für Cross-Channel-MVP**:
+- **Email-Events**: aus `imep_gold.final` konsumieren (ist *der* Email-Fact), nicht Bronze neu joinen.
+- **Mailing-Master**: `imep_gold.tbl_pbi_platform_mailings` für Title/Subject/TrackingId pro Mailing.
+- **Engagement-KPIs**: Tier-3 Tabellen (`UniqueOpens`/`UniqueClicks` pro Mailing × Region/Division).
+
+**Offen (Q28/Q29/Q30)**:
+- Exakter Tabellenname `imep_gold.final` + Spalten-Grain (per-recipient-event?)
+- Refresh-Cadence via `DESCRIBE HISTORY`
+- Ob `imep_gold.final` alle Bronze-Spalten 1:1 trägt oder nur KPI-Untermenge
+
+Siehe [memory/imep_silver_q26_findings.md](../../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_silver_q26_findings.md) für volle Findings.
 
 ---
 

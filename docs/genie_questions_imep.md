@@ -418,11 +418,21 @@ Ziel: Die letzten Schema-Details und Volume-Checks, die wir brauchen, um den kon
 
 > **Kontext 2026-04-20**: Wir haben weder UC-Lineage-Graph noch `system.access.table_lineage`. Bronze → Gold Pipeline-Struktur muss rein aus SQL gegen Hive Metastore + Delta-Table-Metadaten rekonstruiert werden. Ziel: Data-Card-Lineage-Sektionen (siehe `docs/tables/`) mit echten Transformations-Jobs und Refresh-Cadence füllen — statt Annahmen.
 
-### Q26 — Silver-Existenz über Schema-Naming (OP-lineage-a)
+### ~~Q26~~ ✅ Silver-Existenz über Schema-Naming **(OP-lineage-a — gelöst 2026-04-20)**
 
 > *Run `SHOW DATABASES` (or `SHOW SCHEMAS`). List every schema whose name contains any of: "silver", "stage", "staging", "curated", "std", "standardized", "int", "intermediate", "harmonized", "conformed", "enriched". For each match, return schema name and `COUNT(*)` of tables via `SHOW TABLES IN <schema>`. If none exist, confirm that bronze writes directly to gold with no intermediate layer.*
 
-→ Erwartet: Klarheit, ob eine dedizierte Silver-Schicht existiert oder iMEP/SharePoint direkt Bronze→Gold transformieren.
+→ **Antwort**: **17 Silver-Schemas existieren**, alle suffix `_silver`. **Zero hits** für alternative Namens-Pattern (stage/staging/curated/std/standardized/intermediate/harmonized/conformed/enriched). Medallion-Pattern ist **asymmetrisch**:
+> - `bronze → silver → gold` für SharePoint, Adobe, Dynamics, Ads
+> - `bronze → gold` (skip silver) für **Email-Engagement (iMEP)** → direkter Write in `imep_gold.final` (~520M rows, denormalisierter Join, HR-Enrichment spät)
+>
+> **`sharepoint_silver`** (5 Tabellen): `webpageviewed` ~262M · `pageviewed` ~136M · `pageposted` ~105M + Dims `webpage`, `website`. → für unsere Cross-Channel-SQL die SharePoint-Quelle der Wahl.
+>
+> **`imep_silver`** existiert nur für Events: `invitation`, `eventregistration` ~13.7M, `event` ~84K. **Kein Silver für Email.**
+>
+> Weitere relevante Silvers: `adobe_silver` (15), `dynamics_silver` (7), `email_campaign_forms_silver` (5), `adform_silver` (3), `profile_silver` (~6), `linkedin_silver`, `google_silver`, `facebook_silver`, `oii_silver`, `bid_silver`, `persona_data_silver`.
+>
+> **Konsequenz**: `silver.fact_email` NICHT bauen — iMEP hat sich bewusst dagegen entschieden. `imep_gold.final` direkt konsumieren. Volldetails: [memory/imep_silver_q26_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_silver_q26_findings.md).
 
 ### Q27 — Lineage über Column-Fingerprint (OP-lineage-b)
 
