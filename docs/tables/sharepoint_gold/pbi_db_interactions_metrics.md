@@ -7,10 +7,12 @@
 | **Layer** | Gold (Consumption) |
 | **Source system** | SharePoint Analytics (aggregiert aus `sharepoint_silver`) |
 | **Grain** | 1 row per `marketingPageId × visitdatekey × viewingcontactid × referenceapplicationid` |
-| **Primary key** | Composite (wahrscheinlich — via Q30 zu klären) |
+| **Primary key** | Composite (marketingPageId + visitdatekey + viewingcontactid + referenceapplicationid) |
 | **Cross-channel key** | **keiner direkt** — nur über FK-Kette `marketingPageId → pageUUID → UBSGICTrackingID` |
-| **Refresh** | Täglicher Gold-Build (exakte Cadence Q28-Follow-up) |
-| **Approx row count** | **~84M** (Q22/Q17-Stand, Zeitrahmen ab 2023) |
+| **Tier** | **Tier 0 — Atomic Interaction Fact** (Q29) |
+| **Refresh** | Täglicher Gold-Build via Notebook-CTAS (Spark 3.2.1), keine managed Pipeline (Q30) |
+| **Approx row count** | **~84M**, 35,544 distinct pages (Q29) |
+| **Physical storage** | External Delta, ADLS path `abfss://gold@<gold-acc>/.../employee_analytics/pbi_db_interactions_metrics`, **keine Partitionierung** (Q30) → Full-Scan-Risk |
 | **PII** | `viewingcontactid` (GUID) → indirekt identifizierend |
 
 ---

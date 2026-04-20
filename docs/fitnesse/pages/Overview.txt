@@ -98,3 +98,18 @@ Only 986/73,930 mailings (1.3%) have a TrackingId. Default dashboard time window
 
 !3 5. Email skips Silver entirely
 imep_silver exists only for events. For email engagement there is '''no silver layer''' — imep_gold.final is the direct consumption endpoint (denormalized, HR-enriched). (Q26)
+
+!3 6. Gold is classified into 4 tiers
+
+Both gold schemas follow the same strict hierarchy (Q29):
+
+ * '''Tier 0''' — Atomic Fact (largest tables): iMEP final 520M, SP pbi_db_interactions_metrics 84M
+ * '''Tier 1''' — Pre-aggregated Timespans (Rolling Windows, Date aggregates)
+ * '''Tier 2''' — Per-Mailing / Per-Page Summaries (UniqueOpens/Clicks, Engagement)
+ * '''Tier 3''' — Platform & Reference Dimensions (tbl_pbi_platform_mailings, employeecontact, Calendar etc.)
+
+'''Mental Model''': iMEP Gold = message-centric per-recipient; SharePoint Gold = page-centric analytics. TrackingId is the only conceptual bridge, and it lives at the dimension level (Tier 3).
+
+!3 7. Storage architecture: Gold co-located, zero partitioning
+
+All 114 Delta tables are External, across '''3 ADLS accounts''' (iMEP-Bronze, SP-Bronze, '''shared Gold'''). The shared-gold design enables cross-channel joins inside Fabric/Spark without cross-account auth. '''⚠️ No partitioning on any table''' — biggest structural performance gap. Queries on final or interactions_metrics without a time filter = full-scan risk. (Q30)

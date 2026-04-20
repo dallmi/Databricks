@@ -502,37 +502,49 @@ Ziel: Die letzten Schema-Details und Volume-Checks, die wir brauchen, um den kon
 >
 > Volldetails: [memory/imep_pipeline_ops_q28_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_pipeline_ops_q28_findings.md).
 
-### Q29 — Tier-Struktur aus Tabellen-Shape ableiten (OP-lineage-d)
+### ~~Q29~~ ✅ Tier-Struktur aus Tabellen-Shape ableiten **(OP-lineage-d — gelöst 2026-04-20)**
 
-> *For every table in `imep_gold` AND `sharepoint_gold`, return:*
+> *For every table in `imep_gold` AND `sharepoint_gold`, return: table name, all column names, row count, `COUNT(DISTINCT <id-like column>)`, presence of dimension/metric columns as boolean flags. Goal: bucket tables by grain.*
+
+→ **Antwort**: 52 Gold-Tabellen in strikter 4-Tier-Hierarchie. **iMEP Gold (31 Tabellen)**:
+> - **Tier 0** — Atomic Fact (1 Tabelle): `final` (520M, grain `mailing × recipient × event × hour`) — **löst die Q28-Label-Verwirrung endgültig** ✅
+> - **Tier 1** — Timespan × Dimension Aggregates (15 Tabellen): 24h/72h/1w/15w/15m+, Date/DateHour/DivArea/RegCntry
+> - **Tier 2** — Per-Mailing Summaries (~8 Tabellen): `mailingreceiver_*`, `engagement` (1.8M, **117K distinct mailingIds → emails+events gemixt**), `log_mail`
+> - **Tier 3** — Platform & Reference Dimensions (~7): `tbl_pbi_platform_mailings` (73,920 Rows, **927 TrackingIds**), `tbl_pbi_platform_events` (84,052), Mailing-Access, Logins etc.
 >
-> - *table name*
-> - *all column names (comma-separated)*
-> - *row count*
-> - *`COUNT(DISTINCT <id-like column>)` for each of: `Id`, `mailingid`, `pageUUID`, `TrackingId`, `UBSGICTrackingID` (whichever exist)*
-> - *presence of dimension columns (`Region`, `Division`, `Area`, `Country`, `Language`, `LinkType`) as boolean flags*
-> - *presence of metric columns (`UniqueOpens`, `UniqueClicks`, `Views`, `TimeOnSite`) as boolean flags*
+> **SharePoint Gold (20 Tabellen)**:
+> - Tier 0 — Atomic Interaction Facts (4): `interactions_metrics` 84M, `pageviewed_metric`, `pagevisited_metric`, `90_days`
+> - Tier 1 — Pre-Aggregated Overview (3): `datewise_overview_fact_tbl` (7.5M, 27 rolling-window stats)
+> - Tier 2 — Engagement/Social (3): `pageliked_metric`, `pagecommented_metric`, `page_like_int_fact`
+> - Tier 3 — Dimensions (7): `employeecontact` (24.3M, Person-Bridge-Kandidat), `website_page_inventory`, Calendar, Referer-App
+> - **Video Sub-Domain (3 Tabellen)**: `fact_video_engagement_gold` etc. — die einzigen managed-Declarative-Pipeline-Tabellen im ganzen System
 >
-> *Goal: bucket tables by grain (per-mailing, per-mailing×dim, per-recipient, per-page, per-page×day) to infer the tier structure from data shape alone.*
-
-→ Erwartet: Tier-Zuordnung jeder Gold-Tabelle ohne auf UC-Metadaten angewiesen zu sein.
-
-### Q30 — Tabellen-Properties & Storage-Location (OP-lineage-e)
-
-> *For every table in `imep_bronze`, `imep_gold`, `sharepoint_bronze`, `sharepoint_gold`, run `DESCRIBE EXTENDED` and return the Detailed Table Information block — specifically:*
+> **Cross-System-Join-Mechanismus**: iMEP Gold + SP Gold haben **keine shared FK** — einzige Brücke ist `tbl_pbi_platform_mailings.TrackingId → pages.UBSGICTrackingID → pages.pageUUID → marketingPageId`, und sie funktioniert nur nach SEG1-4-Match.
 >
-> - *`Location` (ADLS / S3 path)*
-> - *`Owner` / `Created By`*
-> - *`Created Time`*
-> - *`Last Access` / `Last Modified`*
-> - *`Comment`*
-> - *`Table Properties` (all rows)*
-> - *`Partition columns`*
-> - *`Table type` (MANAGED / EXTERNAL)*
+> **Mental Model**: iMEP Gold = message-centric per-recipient; SP Gold = page-centric analytics; TrackingId = einzige konzeptuelle Brücke auf Dimensions-Ebene.
 >
-> *The ADLS path often encodes the producing pipeline name (e.g. `/mnt/imep/jobs/tier3-engagement-merge/…`) — I want to grep those paths for pipeline identifiers.*
+> Volldetails: [memory/imep_sp_gold_tiers_q29_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_sp_gold_tiers_q29_findings.md).
 
-→ Erwartet: ADLS-Pfade, die Pipeline-Namen verraten, + Table-Comments, die hoffentlich die Transformation beschreiben.
+### ~~Q30~~ ✅ Tabellen-Properties & Storage-Location **(OP-lineage-e — gelöst 2026-04-20)**
+
+> *For every table in `imep_bronze`, `imep_gold`, `sharepoint_bronze`, `sharepoint_gold`, run `DESCRIBE EXTENDED` and return Detailed Table Information. The ADLS path often encodes the producing pipeline name.*
+
+→ **Antwort**: 114 External Delta Tables in **3 ADLS-Accounts** (iMEP-Bronze, SP-Bronze, Gold gemeinsam):
+>
+> **Pipeline-Fingerprints**:
+> - iMEP Bronze: 49 Tabellen, uniform path `abfss://bronze@<iMEP-bronze-acc>/.../imep/<TABLE>` → **1 Ingestion-Job**
+> - iMEP Gold: 31 Tabellen via CTAS in `/final` + `/tbl_pbi/*` (+ 1 Outlier `/imep/tbl_active_employee_month`) → **1 Orchestration-Notebook**
+> - SP Bronze: 12 Tabellen + Historical-Snapshots (`pageviews_09_27_2023`, `pageviews_08022024` etc.) → **1 Ingestion-Pipeline mit ad-hoc Snapshot-Folders**
+> - SP Gold: **zwei Pipeline-Familien** — Family 1 "Employee Analytics" (16 Notebooks-CTAS-Tabellen in `/employee_analytics/pbi_db_*`, Spark 3.2.1) + Family 2 "Video Analytics" (3 Tabellen unter **managed Declarative Pipeline**, Spark 3.5.2/4.0.0, pipelines.pipelineId, ChangeDataFeed enabled, proper table comments)
+>
+> **3 strukturelle Befunde**:
+> 1. **Pipeline-Reality-Check**: Von 114 Tabellen sind **nur 3 (Video) managed Declarative Pipelines** — die anderen 111 sind Notebook-basierte Jobs ohne Pipeline-Metadata. Folder-Layout suggeriert 2–3 grosse Orchestrierungs-Notebooks statt layered framework.
+> 2. **⚠️ Zero Partitioning across all 114 tables** — besonders impactful für `imep_gold.final` (520M, CTAS-rebuilt 2×/Tag) und `sharepoint_gold.interactions_metrics` (84M). Partitionierung by date würde CTAS-Kosten massiv reduzieren und Power-BI-Latency verbessern. **Biggest structural performance gap.**
+> 3. **Gold Co-Location ist intentional**: Beide Gold-Schemas in **einem** ADLS-Gold-Account → Cross-System-Joins inside Fabric/Spark direkt möglich, keine Cross-Account-Auth nötig. Deliberate architectural alignment für Analytics.
+>
+> **One-Page-Summary**: Physical layout zeigt die Architektur-Wahrheit — alles ist notebook-driven (ausser Video), Gold wird wholesale rebuilt (nicht incremental), Keine Partitionierung ist der grösste Performance-Gap, Gold-Co-Location ist korrektes Design für Cross-Channel.
+>
+> Volldetails: [memory/storage_architecture_q30_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/storage_architecture_q30_findings.md).
 
 **Was Genie NICHT beantworten kann** (per Workspace-UI oder REST-API zu klären):
 - Job-Definitionen & Scheduler → Jobs-UI bzw. `/api/2.1/jobs/list`

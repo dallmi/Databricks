@@ -3,15 +3,15 @@
 '''The denormalized consumption endpoint for email engagement.''' 520M rows, fully rebuilt 2x/day via CTAS. Combines tbl_email + tbl_email_receiver_status + tbl_analytics_link with HR enrichment (Region, Division, etc.) — in a single table. Email engagement intentionally has '''no Silver layer'''; final '''is''' the Silver-skip endpoint. (Q26)
 
 !2 Meta
-| '''Layer'''          | Gold (Consumption) |
+| '''Layer'''          | Gold (Consumption) — '''Tier 0 (Atomic Fact)''' |
 | '''Source systems''' | iMEP Bronze (3 tables) + HR (Bronze) |
-| '''Grain'''          | 1 row per recipient event (Send / Open / Click / Bounce) with full HR context |
-| '''Primary key'''    | Id (+ possibly composite — to be clarified via Q30) |
+| '''Grain'''          | '''1 row per mailing × recipient × event × hour''' — events are hour-bucketed (Q29) |
+| '''Primary key'''    | Id |
 | '''Cross-channel key''' | TrackingId (inherited via join on Mailing master) |
 | '''Refresh'''        | '''2x/day @ ~00:23 and ~12:25 UTC''' ('''CTAS Full Rebuild''' — no incrementality, Service Principal) — Q28 |
-| '''Rows'''           | '''~520M''' (Jun 2021 - Apr 2026) |
+| '''Rows'''           | '''~520M''', 64,196 distinct mailings (Q29) |
+| '''Physical storage''' | External Delta, ADLS path abfss://gold@<gold-acc>/.../final, '''no partitioning''' (Q30) |
 | '''PII'''            | TNumber, possibly Receiver -> directly identifying |
-| '''⚠️ Label confusion''' | Image in Q28 labelled the same table as tbl_pbi_platform_mailings — likely an image error (Q27 shows tbl_pbi_platform_mailings at 73K rows). Verify via Q30. |
 
 !2 Neighborhood Diagram
 
@@ -126,6 +126,7 @@ See !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataMo
 
 !2 Quality Caveats
 
+ * '''⚠️ Zero Partitioning''' (Q30) — biggest structural performance gap across all 114 tables in the system. Queries without a tight time or TrackingId filter trigger a full 520M-row scan. An iMEP-team architecture concern, not ours to fix.
  * '''⚠️ CTAS Full Rebuild 2x/day''' — the table is completely destroyed and rebuilt. Long-running queries spanning the refresh windows (00:23 + 12:25 UTC) may encounter an inconsistent state.
  * '''No incrementality on the Gold side''' — any change in Bronze only lands in final after the next CTAS run. For out-of-band questions about newer events, use Bronze directly.
  * '''Full scan is expensive''': 520M rows × wide schema. Always restrict queries with event_time or TrackingId filter. According to Q28 the Gold CTAS has '''no Z-Order''' — no queries optimized for specific columns.
@@ -150,12 +151,15 @@ imep_bronze.tbl_hr_costcenter           -+
  * '''If you can't find something in final''' (e.g. a specific Bronze column): don't try to extend final, join Bronze directly.
  * '''If final gets too large''': use the Tier-3 aggregates (tbl_pbi_mailings_region, _division, tbl_pbi_kpi) — they are pre-aggregated via GROUP BY MailingId × Dimension.
 
-!2 Open Verification Items (Q30)
+!2 Verification Status after Q29 / Q30
 
- 1 Clarify the name: imep_gold.final vs. tbl_pbi_platform_mailings (Q28 image inconsistency). Likely final. Validate via SHOW TABLES IN imep_gold.
- 1 Exact schema: DESCRIBE imep_gold.final — which columns are actually present.
- 1 Grain verification: is it really 1 row per event, or 1 row per mailing recipient (with status + last event)?
- 1 Column provenance: which columns come from which Bronze source?
+| '''Item''' | '''Status''' |
+| Name | ✅ imep_gold.final (Q29 explicitly confirmed; Q28 label was image error) |
+| Rows | ✅ 520M, 64,196 distinct mailings |
+| Tier classification | ✅ Tier 0 (Atomic Fact) |
+| Grain | ✅ mailing × recipient × event × hour (hour-bucketed) |
+| Storage | ✅ External Delta, no partitioning |
+| Source-column provenance (which Bronze column maps where) | ⚠️ run DESCRIBE imep_gold.final in Databricks when needed |
 
 !2 Cross References
 

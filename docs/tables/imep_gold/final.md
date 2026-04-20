@@ -4,15 +4,15 @@
 
 | | |
 |---|---|
-| **Layer** | Gold (Consumption) |
+| **Layer** | Gold (Consumption) — **Tier 0** (Atomic Fact) |
 | **Source systems** | iMEP Bronze (3 Tabellen) + HR (Bronze) |
-| **Grain** | 1 row per Empfänger-Event (Send / Open / Click / Bounce) mit vollem HR-Context |
-| **Primary key** | `Id` (+ evtl. Composite — via Q30 zu klären) |
+| **Grain** | **1 row per `mailing × recipient × event × hour`** — Events sind stunden-gebucket, nicht pro einzelnem Event (Q29) |
+| **Primary key** | `Id` |
 | **Cross-channel key** | `TrackingId` (via Join auf Mailing-Master inherited) |
 | **Refresh** | **2×/Tag @ ~00:23 und ~12:25 UTC** (**CTAS Full Rebuild** — komplettes `CREATE OR REPLACE TABLE AS SELECT`, **keine Inkrementalität**, Service Principal) — Q28 |
-| **Approx row count** | **~520M** (Q26/Q27/Q28-Stand 2026-04-20, Timespan Jun 2021 – Apr 2026) |
+| **Approx row count** | **~520M**, 64,196 distinct mailings (Q29-Stand 2026-04-20) |
+| **Physical storage** | External Delta, ADLS path `abfss://gold@<gold-acc>/.../final`, **keine Partitionierung** (Q30) — Full-Scan-Risk bei Queries ohne Time-Filter |
 | **PII** | `TNumber`, evtl. `Receiver` → direkt identifizierend |
-| **⚠️ Label-Verwirrung** | Image in Q28 labelte dieselbe Tabelle als `tbl_pbi_platform_mailings` — vermutlich Image-Fehler (Q27 hat `tbl_pbi_platform_mailings` bei 73K Rows). Verifizierung via Q30. |
 
 ---
 
@@ -134,6 +134,7 @@ Siehe [join_strategy_contract.md](../../joins/join_strategy_contract.md) Pattern
 - **⚠️ CTAS Full Rebuild 2×/Tag** — die Tabelle wird komplett zerstört und neu aufgebaut. Lange Queries über die Refresh-Fenster (`00:23` + `12:25` UTC) hinweg können auf inkonsistenten Stand treffen.
 - **Keine Inkrementalität auf Gold-Seite** — jede Änderung in Bronze landet erst nach dem nächsten CTAS-Run in `final`. Bei Out-of-Band-Fragen nach neueren Events → Bronze-Tabellen direkt nutzen.
 - **Full-Scan kostet**: 520M Rows × breites Schema. Queries **immer** mit `event_time`-Filter oder `TrackingId`-Filter einschränken. Die Gold-CTAS hat laut Q28 **kein Z-Order** — auf bestimmte Spalten optimierte Queries gibt es nicht.
+- **⚠️ Keine Partitionierung** (Q30) — zero partitioning ist der grösste strukturelle Performance-Gap im ganzen System. Partitioning by date würde Scan-I/O und CTAS-Kosten massiv reduzieren, aber das ist Architektur-Change beim iMEP-Team, nicht bei uns.
 - **HR-Snapshot zur Build-Zeit**: `Region`/`Division` reflektieren den HR-Stand zum CTAS-Zeitpunkt. Wechselt ein Mitarbeiter am 1. Juli von EMEA → APAC, zeigen alle älteren `final`-Events **nach dem nächsten CTAS** den neuen Wert — nicht den historischen. Für echte temporale HR-Analysen muss aus Bronze mit `tbl_hr_employee`-Snapshot gejoint werden.
 - **Biggest compute hotspot im gesamten Pipeline-Budget** — CTAS-Rebuild einer 520M-Row-Tabelle 2×/Tag. Ist als erster Optimierungs-Lever identifiziert (Q28), aber nicht unsere Baustelle.
 
@@ -163,14 +164,16 @@ Für neue Cross-Channel-Analysen gilt:
 
 ---
 
-## Offene Verifikations-Items
+## Verifikations-Stand nach Q29/Q30 ✅
 
-1. **Name klären**: `imep_gold.final` vs. `tbl_pbi_platform_mailings` (Q28-Image-Inkonsistenz). Wahrscheinlich `final`. Via `SHOW TABLES IN imep_gold` validieren.
-2. **Exaktes Schema**: `DESCRIBE imep_gold.final` — welche Spalten sind tatsächlich drin.
-3. **Grain-Verifikation**: ist es wirklich 1 Row pro Event, oder 1 Row pro Mailing-Recipient (mit Status + letztem Event)?
-4. **Spalten-Herkunft**: welche Spalten stammen aus welcher Bronze-Quelle? Für Lineage-Dokumentation relevant.
-
-Q30 (`DESCRIBE EXTENDED`) klärt alle drei Punkte.
+| Item | Stand |
+|---|---|
+| Name | ✅ `imep_gold.final` (Q29 explizit bestätigt, Q28-Labeling war Image-Fehler) |
+| Rows | ✅ 520M, 64,196 distinct mailings |
+| Tier-Klassifikation | ✅ Tier 0 (Atomic Fact) |
+| Grain | ✅ `mailing × recipient × event × hour` (Events sind stunden-gebucket) |
+| Storage | ✅ External Delta, ADLS path `abfss://gold@<gold-acc>/.../final`, no partitioning |
+| Source-Spalten (welche aus welcher Bronze) | ⚠️ via `DESCRIBE imep_gold.final` in Databricks zu prüfen wenn nötig |
 
 ---
 

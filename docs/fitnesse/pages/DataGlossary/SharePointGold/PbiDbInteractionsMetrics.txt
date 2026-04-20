@@ -3,13 +3,14 @@
 '''Master interaction fact for SharePoint.''' 84M rows, 11 columns. Central table for PageView, Visit, Duration, and Comment metrics at Page × Date × Contact grain. '''Carries no direct TrackingID''' — cross-channel attribution always runs via marketingPageId -> pageUUID -> UBSGICTrackingID through sharepoint_bronze.pages. (Q22)
 
 !2 Meta
-| '''Layer'''          | Gold (Consumption) |
+| '''Layer'''          | Gold (Consumption) — '''Tier 0 (Atomic Interaction Fact)''' (Q29) |
 | '''Source system'''  | SharePoint Analytics (aggregated from sharepoint_silver) |
 | '''Grain'''          | 1 row per marketingPageId × visitdatekey × viewingcontactid × referenceapplicationid |
-| '''Primary key'''    | Composite (likely — to be clarified via Q30) |
+| '''Primary key'''    | Composite (marketingPageId + visitdatekey + viewingcontactid + referenceapplicationid) |
 | '''Cross-channel key''' | '''none directly''' — only via FK chain marketingPageId -> pageUUID -> UBSGICTrackingID |
-| '''Refresh'''        | Daily Gold build (exact cadence — Q28 follow-up) |
-| '''Rows'''           | '''~84M''' (from 2023) |
+| '''Refresh'''        | Daily Gold build via Notebook-CTAS (Spark 3.2.1), no managed pipeline (Q30) |
+| '''Rows'''           | '''~84M''', 35,544 distinct pages (Q29) |
+| '''Physical storage''' | External Delta, ADLS path abfss://gold@<gold-acc>/.../employee_analytics/pbi_db_interactions_metrics, '''no partitioning''' (Q30) → full-scan risk |
 | '''PII'''            | viewingcontactid (GUID) -> indirectly identifying |
 
 !2 Neighborhood Diagram

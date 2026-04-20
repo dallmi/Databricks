@@ -1,6 +1,21 @@
 # ER-Diagramm — `sharepoint_gold.*`
 
-> Gold-Topologie für SharePoint. **Die FK-Kette läuft über `marketingPageId`** — alle Gold-Metric-Tables referenzieren zurück zu `sharepoint_bronze.pages.pageUUID`. **Keine direkte TrackingID auf den Gold-Facts!** Cross-Channel-Attribution geht immer über `pages`.
+> Gold-Topologie für SharePoint. **Strikte 4-Tier-Hierarchie** (Q29, 20 Tabellen + 3 Video-Sub-Domain + 2 Views). Die FK-Kette läuft über `marketingPageId` — alle Gold-Metric-Tables referenzieren zurück zu `sharepoint_bronze.pages.pageUUID`. **Keine direkte TrackingID auf den Gold-Facts!** Cross-Channel-Attribution geht immer über `pages`.
+
+---
+
+## 4-Tier-Hierarchie (Q29)
+
+| Tier | Rolle | # Tabellen | Vertreter |
+|---|---|---|---|
+| **Tier 0 — Atomic Interaction Facts** | Per-Visitor × Page × Date | **4** | `pbi_db_interactions_metrics` (84M), `pageviewed_metric` (84M), `pagevisited_metric` (81M), `90_days_interactions_metric` (9M) |
+| **Tier 1 — Pre-Aggregated Overview** | Rolling Windows (7/14/21/28d) über Page × Date × Division | **3** | `datewise_overview_fact_tbl` (7.5M, 27 cols) |
+| **Tier 2 — Engagement / Social Signals** | Likes, Comments, CTA | **3** | `pageliked_metric` (400K), `pagecommented_metric` (500K), `page_like_int_fact` (30K) |
+| **Tier 3 — Dimension Tables** | Person + Page + Calendar + Referrer | **~7** | `employeecontact` (24.3M, potentielle Person-Bridge), `website_page_inventory`, `calendar`, `referer_application` |
+
+**Plus Video Sub-Domain (3 Tabellen)** — die einzigen Tabellen im System, die über eine **managed Declarative Pipeline** laufen (Spark 3.5.2/4.0.0, ChangeDataFeed enabled, proper comments). Der Rest ist Notebook-CTAS (Spark 3.2.1). Siehe Q30.
+
+**Plus 2 Views** (no physical storage): `pbi_db_page_visitedkey_view`, `pbi_db_website_page_view`.
 
 ---
 
@@ -148,6 +163,19 @@ sharepoint_bronze.pages
               ▼
 Cross-channel match to imep_bronze.tbl_email.TrackingId (SEG1-4)
 ```
+
+---
+
+## Physical Storage (Q30)
+
+**Zwei Pipeline-Familien** in SharePoint Gold — ersichtlich an ADLS-Pfaden:
+
+- **Family 1 "Employee Analytics" (16 Tabellen)** — `abfss://gold@<gold-acc>/.../employee_analytics/pbi_db_*`, Spark 3.2.1, Notebook-CTAS, keine Pipeline-Metadata
+- **Family 2 "Video Analytics" (3 Tabellen)** — `abfss://gold@<gold-acc>/.../sharepoint_gold/sharepoint_gold/pbi_db_*`, Spark 3.5.2/4.0.0, managed Declarative Pipeline (`pipelines.pipelineId`), ChangeDataFeed enabled, proper table comments
+
+**Gold-Co-Location mit iMEP Gold**: beide Schemas liegen im selben ADLS-Gold-Account → Cross-Channel-Joins inside Fabric/Spark ohne Cross-Account-Auth.
+
+**⚠️ Zero Partitioning** auf allen 20 Tabellen — `interactions_metrics` (84M) + `pageviewed_metric` (84M) werden bei jeder Query ohne Datums-Filter voll gescannt.
 
 ---
 

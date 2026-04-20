@@ -1,10 +1,21 @@
 # ER-Diagramm — `imep_gold.*`
 
-> Gold-Topologie für iMEP. **5-Tier-Architektur** (Q16). Alle Tabellen joinen via `MailingId = tbl_pbi_platform_mailings.Id = tbl_email.Id` zurück zum Master. Tier-Zuordnung zum Teil noch via Q29 zu verifizieren.
+> Gold-Topologie für iMEP. **Strikte 4-Tier-Hierarchie** (Q29, 31 Tabellen klassifiziert). Alle Tabellen joinen via `MailingId = tbl_pbi_platform_mailings.Id = tbl_email.Id` zurück zum Master. Das `final` ist der einzige Tier-0-Atomic-Fact und trägt 520M Rows.
 
 ---
 
-## Tier-Struktur
+## 4-Tier-Hierarchie (Q29)
+
+| Tier | Rolle | # Tabellen | Vertreter |
+|---|---|---|---|
+| **Tier 0 — Atomic Fact** | Per-Recipient × Event × Hour | **1** | `final` (520M, 64K mailings) |
+| **Tier 1 — Timespan × Dim Aggregates** | 24h / 72h / 1w / 15w / 15m+ × Date/DateHour/DivArea/RegCntry | **15** | `dateonly`, `datetime`, `divarea`, `regcntry` Varianten |
+| **Tier 2 — Per-Mailing Summaries** | UniqueOpens/UniqueClicks pro Mailing × Dim | ~8 | `mailingreceiver_*`, `engagement` (1.8M, 117K mailings — mixed mail+event!), `log_mail` |
+| **Tier 3 — Platform & Reference Dims** | Master + Lookup-Tabellen | ~7 | `tbl_pbi_platform_mailings` (73,920 / 927 TIDs), `tbl_pbi_platform_events` (84,052) |
+
+---
+
+## Zentrale Tier-Relationen
 
 ```mermaid
 erDiagram
@@ -17,7 +28,7 @@ erDiagram
     final                     }o..o{ tbl_pbi_platform_mailings : "denormalized join contains Id"
 
     tbl_pbi_platform_mailings {
-        string Id PK "73K rows — Tier 1 master"
+        string Id PK "73,920 rows — TIER 3 DIMENSION (927 TIDs)"
         string TrackingId
         string Title
         string Subject
@@ -50,13 +61,14 @@ erDiagram
         bigint RegistrationCount
     }
     final {
-        string Id PK "520M rows — denormalized consumption endpoint"
-        string MailingId
-        string TrackingId
+        string Id PK "520M rows — TIER 0 ATOMIC FACT"
+        string MailingId "64,196 distinct"
+        string TrackingId "inherited"
         string TNumber
         string LogStatus
         string Region "HR-enriched"
         string Division "HR-enriched"
+        timestamp event_hour "hour-bucketed"
     }
 ```
 
@@ -146,11 +158,16 @@ Semantische NULLs, keine Defekte. Für Aggregationen `COALESCE(value, 0)` nutzen
 
 ---
 
-## Offene Verifikationspunkte (Q29/Q30)
+## Physical Storage (Q30)
 
-- **Exakter Tier-Aufbau**: Welche Tabelle gehört zu welchem Tier? Q29 (Shape-Analyse) ordnet zu.
-- **Label-Verwirrung**: `final` vs. `tbl_pbi_platform_mailings` — welche trägt die 520M Rows? Q30 klärt via `DESCRIBE EXTENDED`.
-- **Spalten-Mapping im `final`**: Welche Bronze-Spalte landet wo? Für Lineage-Dokumentation.
+- Alle 31 Gold-Tabellen liegen im **geteilten Gold-ADLS-Account** zusammen mit `sharepoint_gold.*` → Cross-Channel-Joins innerhalb Fabric/Spark ohne Cross-Account-Auth
+- Path-Pattern: `abfss://gold@<gold-acc>/.../final` bzw. `/tbl_pbi/*` (+ 1 Outlier `/imep/tbl_active_employee_month`)
+- External Delta, erzeugt von **einem Orchestration-Notebook** (Spark 3.2.1) — keine managed Pipeline
+- **⚠️ Zero Partitioning** auf allen Tabellen — grösster struktureller Performance-Gap; Full-Scans bei jeder Query ohne enge Filter
+
+## Engagement-Table-Anomalie (Q29)
+
+`engagement` (Tier 2, 1.8M Rows) führt **117,185 distinct mailingIds**, während `tbl_pbi_platform_mailings` nur 73,930 enthält. Der Delta (~44K) = Event-IDs aus `tbl_pbi_platform_events`. iMEP Gold behandelt **Emails + Events als dieselbe Engagement-Einheit** in Tier-2-Aggregaten. Bei Mailing-spezifischen Analysen filtert man explizit auf die 73K Mailing-IDs.
 
 ---
 

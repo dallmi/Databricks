@@ -1,8 +1,16 @@
 !1 ER Diagram — iMEP Gold
 
-Gold topology for iMEP. '''5-tier architecture''' (Q16). All tables join via MailingId = tbl_pbi_platform_mailings.Id = tbl_email.Id back to the master. Tier assignments partially still to verify via Q29.
+Gold topology for iMEP. '''Strict 4-tier hierarchy''' (Q29, 31 tables classified). All tables join via MailingId = tbl_pbi_platform_mailings.Id = tbl_email.Id back to the master. final is the sole Tier-0 atomic fact and carries 520M rows.
 
-!2 Tier Structure
+!2 4-Tier Hierarchy (Q29)
+
+| '''Tier''' | '''Role''' | '''# Tables''' | '''Representative members''' |
+| Tier 0 — Atomic Fact | Per-Recipient × Event × Hour | 1 | final (520M, 64K mailings) |
+| Tier 1 — Timespan × Dim Aggregates | 24h / 72h / 1w / 15w / 15m+ × Date/DateHour/DivArea/RegCntry | 15 | dateonly, datetime, divarea, regcntry variants |
+| Tier 2 — Per-Mailing Summaries | UniqueOpens/UniqueClicks per Mailing × Dim | ~8 | mailingreceiver_*, engagement (1.8M, 117K mailings — '''mixed mail+event'''!), log_mail |
+| Tier 3 — Platform & Reference Dims | Master + lookup tables | ~7 | tbl_pbi_platform_mailings (73,920 / 927 TIDs), tbl_pbi_platform_events (84,052) |
+
+!2 Central Tier Relations
 
 !startuml
 skinparam linetype ortho
@@ -16,7 +24,7 @@ entity "tbl_pbi_platform_mailings" as master {
   Subject : string
   ContentMetrics : int
   ..
-  '''73K rows — Tier 1 master'''
+  '''73,920 rows — TIER 3 DIMENSION (927 TIDs)'''
 }
 
 entity "tbl_pbi_mailings_region" as region {
@@ -73,8 +81,10 @@ entity "final" as final {
   LogStatus : string
   Region : string
   Division : string
+  event_hour : timestamp
   ..
-  '''520M rows — denormalized consumption endpoint'''
+  '''520M rows — TIER 0 ATOMIC FACT'''
+  '''grain: mailing × recipient × event × hour'''
 }
 
 entity "tbl_email" as bronze {
@@ -161,11 +171,16 @@ In tbl_pbi_mailings_region and _division:
 
 Semantic NULLs, not defects. Use COALESCE(value, 0) for aggregations.
 
-!2 Open Verification Points (Q29/Q30)
+!2 Physical Storage (Q30)
 
- * Exact tier layout — which table belongs to which tier. Q29 (shape analysis) maps this out.
- * Label confusion: final vs. tbl_pbi_platform_mailings — which carries the 520M rows? Q30 clarifies via DESCRIBE EXTENDED.
- * Column mapping in final — which Bronze column lands where. Relevant for lineage docs.
+ * All 31 gold tables live in the '''shared gold ADLS account''' alongside sharepoint_gold.* — cross-channel joins inside Fabric/Spark possible without cross-account auth
+ * Path pattern: abfss://gold@<gold-acc>/.../final or /tbl_pbi/* (+ 1 outlier /imep/tbl_active_employee_month)
+ * External Delta, produced by a '''single orchestration notebook''' (Spark 3.2.1) — no managed pipeline
+ * '''⚠️ Zero Partitioning''' on any table — biggest structural performance gap in the entire system; full scans on any query without tight filter
+
+!2 Engagement-Table Anomaly (Q29)
+
+engagement (Tier 2, 1.8M rows) carries '''117,185 distinct mailingIds''', while tbl_pbi_platform_mailings only has 73,930. The delta (~44K) = event-IDs from tbl_pbi_platform_events. iMEP Gold treats '''emails + events as the same engagement unit''' in Tier-2 aggregates. Filter explicitly on the 73K mailing-IDs for mailing-specific analyses.
 
 !2 Cross References
 
