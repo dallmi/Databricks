@@ -1,0 +1,146 @@
+!1 TblEmailReceiverStatus ('''imep_bronze.tbl_email_receiver_status''')
+
+'''Sends & Bounces''' per recipient. One row per mailing × recipient. Together with tbl_analytics_link, one of the two '''full-key fact hubs''' (Id + EmailId + TNumber). This is also where the '''true send time''' lives (DateTime), not the template creation time.
+
+!2 Meta
+| '''Layer'''          | Bronze |
+| '''Source system'''  | iMEP (SQL Server) -> CDC -> Delta |
+| '''Grain'''          | 1 row per Mailing × recipient (per send event) |
+| '''Primary key'''    | Id |
+| '''FK'''             | EmailId -> tbl_email.Id; TNumber -> tbl_hr_employee.T_NUMBER |
+| '''Refresh'''        | 2x/day @ 00:00 and 12:00 UTC (MERGE full-table upsert, Service Principal) — Q28 |
+| '''Rows'''           | '''293M''' (Nov 2020 - Apr 2026) |
+| '''Per-MERGE delta''' | 27-72M rows (full-replace upsert) |
+| '''PII'''            | TNumber + Receiver (email) -> directly identifying |
+
+!2 Neighborhood Diagram
+
+!startuml
+skinparam linetype ortho
+hide circle
+
+entity "tbl_email_receiver_status" as rs {
+  * Id : string <<PK>>
+  --
+  EmailId : FK
+  TNumber : FK
+  Receiver : string
+  Status : int
+  LogStatus : string
+  EmailLanguage : string
+  DateTime : timestamp
+}
+entity "tbl_email" as email {
+  * Id : string <<PK>>
+  --
+  TrackingId : string
+  CreationDate : timestamp
+}
+entity "tbl_analytics_link" as al {
+  * Id : string <<PK>>
+  --
+  EmailId : FK
+  EmailReceiverStatusId : FK
+  TNumber : string
+  LinkTypeEnum : string
+}
+entity "tbl_hr_employee" as hr {
+  * T_NUMBER : string <<PK>>
+  --
+  WORKER_ID : string
+}
+entity "tbl_hr_user" as user {
+  * UbsId : string <<PK>>
+  --
+  Town : string
+}
+
+email ||--o{ rs : "Id = EmailId"
+rs    ||--o{ al : "Id = EmailReceiverStatusId"
+rs    }o--|| hr : "TNumber = T_NUMBER"
+rs    }o--|| user : "LOWER(TNumber) = LOWER(UbsId)"
+
+!enduml
+
+!2 Key Columns
+
+| '''Column'''    | '''Type'''  | '''Role'''             | '''Notes''' |
+| Id              | string      | PK                     | GUID. Referenced by tbl_analytics_link.EmailReceiverStatusId -> bridge from send event to open/click event. |
+| EmailId         | string      | FK -> tbl_email.Id     | Links to the mailing master |
+| TNumber         | string      | FK -> tbl_hr_employee  | Lowercase t######. '''The only person key''' iMEP carries per recipient. |
+| Receiver        | string      | PII                    | Email address — only pull when PII is required |
+| Status          | int         | Status code            | Numeric — mapping via LogStatus is more readable |
+| LogStatus       | string      | '''Human-readable'''   | Values like Open, Bounce, Sent. Use for filtering/grouping. |
+| EmailLanguage   | string      | Localization           | DE / EN / FR / ... |
+| DateTime        | timestamp   | '''Actual send time''' | The '''true''' send time — do '''not''' use tbl_email.CreationDate |
+
+Full column list: !- DESCRIBE imep_bronze.tbl_email_receiver_status -!.
+
+!2 Sample Row
+
+{{{
+Id             = "3b9c1a8f-..."
+EmailId        = "0a3f6c2e-..."
+TNumber        = "t100200"
+Receiver       = "max.muster@example.com"
+Status         = 1
+LogStatus      = "Open"
+EmailLanguage  = "DE"
+DateTime       = 2024-07-09 08:12:47      -- actual send time
+}}}
+
+!2 Primary Joins
+
+!3 Join to tbl_email (N:1) — Mailing master with TrackingId
+
+{{{
+SELECT rs.*, e.TrackingId, e.Title, e.Subject
+FROM   imep_bronze.tbl_email_receiver_status rs
+JOIN   imep_bronze.tbl_email                  e ON e.Id = rs.EmailId
+}}}
+
+!3 Join to tbl_analytics_link (1:N) — Open / Click events
+
+{{{
+SELECT rs.TNumber, rs.DateTime AS send_time, al.LinkTypeEnum, al.CreationDate AS event_time, al.Agent
+FROM   imep_bronze.tbl_email_receiver_status rs
+JOIN   imep_bronze.tbl_analytics_link         al ON al.EmailReceiverStatusId = rs.Id
+                                                AND al.EmailId               = rs.EmailId
+WHERE  al.IsActive = 1
+}}}
+
+!3 Join to tbl_hr_employee (N:1) — HR enrichment
+
+{{{
+SELECT rs.*, hr.WORKER_ID AS gpn, hr.ORGANIZATIONAL_UNIT
+FROM   imep_bronze.tbl_email_receiver_status rs
+LEFT JOIN imep_bronze.tbl_hr_employee          hr ON hr.T_NUMBER = rs.TNumber
+}}}
+
+!2 Quality Caveats
+
+ * '''Granularity''': 1 row per recipient × mailing. Large mailings × many recipients quickly reach 100k+ rows per mailing.
+ * '''Full-table MERGE''': every 12h the entire table is upserted (27-72M per run) — not incremental. Delta history shows a "wave" per refresh cycle, not streaming.
+ * '''LogStatus vs Status''': LogStatus is the readable string (Open, Bounce, ...), Status the numeric code. For dashboards always use LogStatus.
+ * '''DateTime is send time''' — for "when was it opened", look at tbl_analytics_link.CreationDate.
+ * '''PII''': Receiver is a plain-text email address. Only pull when explicitly needed; otherwise use TNumber only.
+
+!2 Lineage — Bronze -> Gold
+
+Email engagement '''skips Silver''' (Q26). tbl_email_receiver_status is one of the three Bronze sources flowing directly into imep_gold.final.
+
+{{{
+imep_bronze.tbl_email                    -+
+imep_bronze.tbl_email_receiver_status    -|--> imep_gold.final  (~520M rows,
+imep_bronze.tbl_analytics_link           -+                    denormalized, HR-enriched)
+}}}
+
+Send counts from this table also flow into Tier-3 aggregates (tbl_pbi_mailings_region, _division, tbl_pbi_kpi) via GROUP BY MailingId × Dimension.
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblAnalyticsLink
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrEmployee
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.ImepBronzeEmailEvents

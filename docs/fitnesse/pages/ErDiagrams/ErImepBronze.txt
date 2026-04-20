@@ -135,13 +135,13 @@ hr    }o--|| user  : "LOWER(T_NUMBER) = LOWER(UbsId)"
 !2 Three Join Patterns in This Domain
 
 !3 1. Mailing-centric (starts from tbl_email)
-For "what happened to mailing X?". See !see .ClarityDashboard.JoinStrategy.ImepBronzeEmailEvents.
+For "what happened to mailing X?". See !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.ImepBronzeEmailEvents.
 
 !3 2. Person-centric (starts from tbl_hr_employee)
 For "which engagement events did person X have?". Only possible via the two hub tables (tbl_email_receiver_status, tbl_analytics_link). '''SharePoint side has no equivalent person key.'''
 
 !3 3. HR enrichment (from any TNumber-bearing table)
-For "enrich my engagement fact with Region/Division". See !see .ClarityDashboard.JoinStrategy.HrEnrichment.
+For "enrich my engagement fact with Region/Division". See !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment.
 
 !2 Key Observations
 
@@ -152,7 +152,7 @@ For "enrich my engagement fact with Region/Division". See !see .ClarityDashboard
 
 !2 Cross References
 
-!see .ClarityDashboard.DataGlossary.ImepBronze.TblEmail
-!see .ClarityDashboard.DataGlossary.ImepBronze.TblEmailReceiverStatus
-!see .ClarityDashboard.DataGlossary.ImepBronze.TblAnalyticsLink
-!see .ClarityDashboard.JoinStrategy.StrategyContract
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmailReceiverStatus
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblAnalyticsLink
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract

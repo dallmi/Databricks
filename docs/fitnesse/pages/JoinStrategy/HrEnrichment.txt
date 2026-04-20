@@ -1,0 +1,145 @@
+!1 Join Recipe — HR Enrichment (TNumber ↔ GPN ↔ Region/Division)
+
+The HR bridge. For '''three scenarios''': (1) enrich TNumber from iMEP engagement, (2) translate GPN from SharePoint to TNumber, (3) case normalization between T_NUMBER (lowercase) and UbsId (UPPERCASE). All three based on imep_bronze.tbl_hr_employee — '''no external sources required'''.
+
+!2 The Three Identifier Formats
+
+| '''Name''' | '''Location''' | '''Format''' | '''Example''' |
+| TNumber | iMEP Engagement | lowercase t###### | t100200 |
+| T_NUMBER | HR | lowercase t###### | t100200 |
+| WORKER_ID | HR | 8-digit numeric (= GPN) | 00100200 |
+| user_gpn | SharePoint pageviews | 8-digit numeric | 00100200 |
+| UbsId | tbl_hr_user | UPPERCASE T###### | T100200 |
+| viewingcontactid | sharepoint_gold.* | GUID | 1254e21a-... |
+
+'''Key fact''': tbl_hr_employee is the only table that carries '''both''' T_NUMBER and WORKER_ID at the same time -> a simple JOIN instead of an external bridge source (Q3b).
+
+!2 Scenario 1: iMEP Engagement → HR Region/Division
+
+{{{
+SELECT
+    al.TNumber,
+    al.LinkTypeEnum,
+    al.CreationDate,
+    hr.WORKER_ID           AS gpn,
+    cc.REGION,
+    cc.DIVISION,
+    cc.AREA,
+    cc.COUNTRY
+FROM   imep_bronze.tbl_analytics_link  al
+LEFT JOIN imep_bronze.tbl_hr_employee   hr ON hr.T_NUMBER            = al.TNumber
+LEFT JOIN imep_bronze.tbl_hr_costcenter cc ON cc.ORGANIZATIONAL_UNIT = hr.ORGANIZATIONAL_UNIT
+WHERE  al.IsActive = 1
+}}}
+
+'''Important''': LEFT JOIN — otherwise you lose events from former employees or external recipients whose TNumber is no longer in HR.
+
+!2 Scenario 2: SharePoint GPN → iMEP TNumber
+
+{{{
+SELECT
+    pv.user_gpn,
+    hr.T_NUMBER            AS t_number,
+    pv.ViewTime,
+    pv.pageId
+FROM   sharepoint_bronze.pageviews  pv
+LEFT JOIN imep_bronze.tbl_hr_employee hr ON hr.WORKER_ID = pv.user_gpn
+}}}
+
+'''The bridge''': WORKER_ID = user_gpn. Both are 8-digit numeric.
+
+'''Anti-pattern — DO NOT do this''':
+{{{
+-- WRONG: tries to map GPN string via prefix manipulation
+ON  CONCAT('t', LPAD(pv.user_gpn, 6, '0')) = hr.T_NUMBER   -- does NOT work
+}}}
+
+Q3a confirmed: the string-based transformation 00100200 -> t100200 works '''as an example''', but not systematically. Enough GPNs do '''not''' match their T-Number under this rule. '''Always use WORKER_ID.'''
+
+!2 Scenario 3: Match UbsId (UPPERCASE) with T_NUMBER (lowercase)
+
+{{{
+SELECT
+    hr.T_NUMBER,
+    u.UbsId,
+    u.Town
+FROM   imep_bronze.tbl_hr_employee hr
+JOIN   imep_bronze.tbl_hr_user      u ON LOWER(u.UbsId) = LOWER(hr.T_NUMBER)
+}}}
+
+'''Case normalization is mandatory''' — without LOWER() you get 0 matches, because T_NUMBER = t100200 and UbsId = T100200.
+
+tbl_hr_user additionally provides Town and further office metadata. Only join if these fields are needed — otherwise tbl_hr_employee + tbl_hr_costcenter is sufficient.
+
+!2 Scenario 4: Full Cross-Channel Employee Enrichment
+
+When you need all three worlds in one query — iMEP, SharePoint, HR:
+
+{{{
+WITH sp_views AS (
+  SELECT user_gpn, COUNT(*) AS view_count
+  FROM   sharepoint_bronze.pageviews
+  WHERE  ViewTime >= '2025-01-01'
+  GROUP BY user_gpn
+),
+imep_opens AS (
+  SELECT TNumber, COUNT(*) AS open_count
+  FROM   imep_bronze.tbl_analytics_link
+  WHERE  LinkTypeEnum = 'OPEN'
+    AND  IsActive = 1
+    AND  CreationDate >= '2025-01-01'
+  GROUP BY TNumber
+)
+SELECT
+    hr.T_NUMBER,
+    hr.WORKER_ID                       AS gpn,
+    cc.REGION, cc.DIVISION,
+    COALESCE(sp.view_count, 0)         AS sp_views,
+    COALESCE(io.open_count, 0)         AS imep_opens
+FROM   imep_bronze.tbl_hr_employee   hr
+LEFT JOIN imep_bronze.tbl_hr_costcenter cc ON cc.ORGANIZATIONAL_UNIT = hr.ORGANIZATIONAL_UNIT
+LEFT JOIN sp_views                     sp ON sp.user_gpn = hr.WORKER_ID
+LEFT JOIN imep_opens                   io ON io.TNumber  = hr.T_NUMBER
+WHERE  COALESCE(sp.view_count, 0) + COALESCE(io.open_count, 0) > 0
+}}}
+
+!2 Gotchas
+
+!3 1. T_NUMBER vs. TNumber vs. UbsId — three variants of the same key
+
+| '''Where''' | '''Column name''' | '''Case''' |
+| tbl_hr_employee | T_NUMBER | lowercase |
+| tbl_email_receiver_status, tbl_analytics_link | TNumber | lowercase |
+| tbl_hr_user | UbsId | UPPERCASE |
+
+Join iMEP engagement ↔ HR = direct. Join HR ↔ tbl_hr_user = needs LOWER().
+
+!3 2. GPN comes only from tbl_hr_employee.WORKER_ID
+
+GPN does '''not''' exist on tbl_hr_employee as a separate column named "GPN". The 8-digit ID is called WORKER_ID. Q3b finding: the HR columns searched initially did list it ("Primary worker identifier") — but not flagged as "= GPN".
+
+!3 3. There are more HR identifiers — but only these are relevant for us
+
+tbl_hr_employee also carries: ABACUS_ID, ALTERNATE_WORKER_ID, WEBSSO, UUNAME, PersonalNumber. For cross-channel analytics, T_NUMBER + WORKER_ID is sufficient. The others are for other use cases (WebSSO for auth, Abacus for finance joins).
+
+!3 4. HR is upserted 2x/day — snapshot, not history
+
+tbl_hr_employee and tbl_hr_costcenter represent the '''current''' HR state. Regional analysis "Person X was in EMEA in July, in APAC in August" does '''not''' work out-of-the-box — that requires snapshot tables (if they exist, still to be clarified).
+
+!3 5. LEFT JOIN, never INNER JOIN
+
+Not all TNumbers in iMEP engagement are in HR (former employees, external addresses). INNER JOIN loses these.
+
+!3 6. viewingcontactid on SP Gold is not a TNumber
+
+When working in sharepoint_gold.pbi_db_interactions_metrics, do '''not''' use viewingcontactid for HR joins. It's a GUID, not a GPN. Bridge candidates:
+ * sharepoint_gold.pbi_db_employeecontact (24M rows, potential bridge — not validated)
+ * or back to sharepoint_bronze.pageviews.user_gpn
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrEmployee
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrCostcenter
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrUser
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErCrossChannel
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract

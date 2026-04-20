@@ -1,0 +1,125 @@
+!1 ER Diagram — SharePoint Bronze
+
+Bronze topology for the SharePoint intranet. Central distinction: '''pages''' (inventory, with TrackingID) vs. '''pageviews / customevents''' (interactions, without TrackingID). Cross-channel attribution '''always''' goes through pages.
+
+!2 Complete Bronze Topology
+
+!startuml
+skinparam linetype ortho
+hide circle
+
+entity "pages" as pages {
+  * pageUUID : string <<PK>>
+  --
+  UBSGICTrackingID : string
+  UBSArticleDate : date
+  PageURL : string
+  PageTitle : string
+  SiteId : FK
+  ..
+  48K rows
+  '''only 4% have UBSGICTrackingID'''
+}
+
+entity "pageviews" as pv {
+  * Id : string <<PK>>
+  --
+  GICTrackingID : string
+  user_gpn : string
+  pageId : FK
+  ViewTime : timestamp
+  customDimensions : string
+  ..
+  '''173M rows'''
+}
+
+entity "customevents" as ce {
+  * Id : string <<PK>>
+  --
+  pageId : FK
+  EventName : string
+  EventTime : timestamp
+  ..
+  '''262M rows'''
+}
+
+entity "sites" as sites {
+  * SiteId : string <<PK>>
+  --
+  SiteName : string
+  SiteUrl : string
+  ..
+  805 rows
+}
+
+entity "videos" as vid {
+  * Id : string <<PK>>
+  --
+  pageId : FK
+  ..
+  3K rows
+}
+
+entity "master_employee_cdm_data" as cdm {
+  * PersonId : string <<PK>>
+  --
+  T_NUMBER : string
+  user_gpn : string
+  ..
+  24M rows, 246 cols
+}
+
+pages ||--o{ pv    : "pageUUID = pageId (Q30 to verify)"
+pages ||--o{ ce    : "pageUUID = pageId"
+pages }o--|| sites : "SiteId = SiteId"
+pages ||--o{ vid   : "pageUUID = pageId"
+cdm   }o..o{ pv    : "potential user_gpn bridge"
+
+!enduml
+
+!2 Volumes & Refresh Cadence
+
+| '''Table'''            | '''Rows''' | '''Refresh'''          | '''Pattern''' |
+| customevents           | 262M       | 1x/day @ 02:00 UTC     | (Q28: presumably Append) |
+| pageviews              | 173M       | 1x/day @ 02:00 UTC     | '''Append WRITE''', 7 bursts in 1 min (API pagination) |
+| master_employee_cdm_data | 24M      | 1x/day                  | TBD |
+| pages                  | 48K        | 1x/day @ 02:00 UTC     | '''MERGE daily snapshot replace''' |
+| videos                 | 3K         | 1x/day                  | TBD |
+| sites                  | 805        | 1x/day                  | TBD |
+
+!2 Critical Distinction: Inventory vs. Interactions
+
+!3 pages = Inventory (Dimension)
+Contains all SharePoint pages + their metadata incl. UBSGICTrackingID (where set). Find "which articles exist, which pages belong to TrackingID Y, which site hosts it". Does '''not''' contain view counts or interactions.
+
+!3 pageviews / customevents = Interactions (Fact)
+Every single user-page interaction. Find "who read which page when, which device, which custom event triggered". Does '''not''' contain TrackingID directly — always join via pages.
+
+{{{
+-- The canonical SP Bronze chain
+SELECT pv.user_gpn, pv.ViewTime, p.UBSGICTrackingID, p.PageTitle
+FROM   sharepoint_bronze.pageviews pv
+JOIN   sharepoint_bronze.pages     p ON p.pageUUID = pv.pageId
+WHERE  p.UBSGICTrackingID IS NOT NULL
+}}}
+
+!2 Person Identity in SharePoint Bronze
+
+SharePoint does '''not''' natively carry a TNumber. Instead:
+ * pageviews.user_gpn — GPN in 8-digit format (00100200)
+ * master_employee_cdm_data.T_NUMBER — potential bridge (Q17 hypothesis, not yet validated)
+
+Confirmed bridge runs via iMEP HR (Q3b): join pageviews.user_gpn = tbl_hr_employee.WORKER_ID. See !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment.
+
+!2 Key Observations
+
+ * '''Schema inconsistency''': pages.UBSGICTrackingID vs. pageviews.GICTrackingID — different column names for the same business key. Harmonization happens in Silver (sharepoint_silver.webpage uses gICTrackingID).
+ * '''1:1 URL↔TID mapping''' (Q25): at the pages level, each URL has at most one TID. Safe for URL-based aggregation.
+ * '''Append bursts on pageviews''': 7 fast writes within 1 minute (00:15-00:16 UTC) — not streaming but API pagination, very short windows.
+ * '''customevents is ~2x larger than pageviews''' (262M vs 173M). Covers related but distinct interaction scopes.
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze.Pages
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErCrossChannel

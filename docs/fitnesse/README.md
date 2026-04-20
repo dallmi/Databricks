@@ -6,12 +6,22 @@
 
 ## POC — What is here
 
-Two sample pages that can be pasted directly into FitNesse:
+The entire KB as copy-paste-ready `.txt` files lives under `pages/`, mirroring the target FitNesse hierarchy:
 
-| File | FitNesse page name | Purpose |
-|---|---|---|
-| [sample/TblEmail.txt](sample/TblEmail.txt) | `.ClarityDashboard.DataGlossary.ImepBronze.TblEmail` | Data-glossary entry for a table |
-| [sample/ErImepBronze.txt](sample/ErImepBronze.txt) | `.ClarityDashboard.ErDiagrams.ErImepBronze` | ER diagram via PlantUML |
+```
+pages/
+├── Overview.txt                         -> .MultiChannelDataModel.Overview
+├── DataGlossary/
+│   ├── ImepBronze/
+│   │   ├── TblEmail.txt                 -> …MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
+│   │   └── …
+│   ├── ImepGold/
+│   ├── SharePointBronze/
+│   ├── SharePointGold/
+│   └── Hr/
+├── ErDiagrams/
+└── JoinStrategy/
+```
 
 **How to copy-paste**:
 1. Create a new page in FitNesse (following the hierarchy below)
@@ -40,10 +50,13 @@ entity Test {
 
 ## Suggested FitNesse hierarchy
 
-Root: **`.ClarityDashboard`** — a new top-level WikiWord under which the entire Cross-Channel KB lives. Sits parallel to the existing `.EmployeeEngagement` branch; keeps our tree clean and navigable without mixing into the broader Marketing-Ecosystem hierarchy.
+Root: **`.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel`** — a dedicated subsection under the existing `CPlanGICTrackingCLARITYDashboard` page. Sibling to `.CommunicationPack` and any other existing subpages. Keeps the entire Cross-Channel KB in one self-contained tree without diluting the dashboard's own Overview.
 
 ```
-.ClarityDashboard
+.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard    [exists]
+├── .CommunicationPack                                   [exists]
+├── …other existing subpages
+└── .MultiChannelDataModel                               [<- our KB root]
 ├── .Overview                         [Landing page, analogous to knowledge_base.md]
 ├── .DataGlossary
 │   ├── .ImepBronze
@@ -96,12 +109,12 @@ The existing MD docs translate almost 1:1. The main substitutions:
 | `*italic*` | `''italic''` (two apostrophes) |
 | `` `code` `` | `!- code -!` or `{{{code}}}` |
 | `[Text](url)` | `[[Text][url]]` |
-| `[[.Page]]` link | `.ClarityDashboard.DataGlossary.ImepBronze.TblEmail` |
+| `[[.Page]]` link | `.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail` |
 | \`\`\`mermaid / \`\`\` | `!startuml / !enduml` (diagram re-authored in PlantUML) |
 | `- item` | `  * item` (with leading spaces) |
 | Markdown table | FitNesse table `\| col1 \| col2 \|` (no separator row!) |
 
-Cross-references in corporate style: `!see .ClarityDashboard.JoinStrategy.StrategyContract`.
+Cross-references in corporate style: `!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract`.
 
 ---
 

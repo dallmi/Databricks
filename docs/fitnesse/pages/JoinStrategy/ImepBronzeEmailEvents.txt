@@ -1,0 +1,144 @@
+!1 Join Recipe — iMEP Bronze Email Events
+
+The canonical Bronze chain for all per-recipient event analyses. '''4 tables''', grain = 1 row per event per recipient per mailing. This is the truth '''before''' Gold denormalizes it.
+
+'''When to use''': Ad-hoc analyses, debugging, cases where imep_gold.final doesn't have the right resolution (e.g. you need a Bronze column that doesn't land in Gold).
+
+'''Do not use''' for: dashboard backends — there imep_gold.final is faster and already HR-enriched.
+
+!2 The Canonical 4-Table Chain
+
+{{{
+SELECT
+    -- Mailing context
+    e.TrackingId,
+    e.Title,
+    e.Subject,
+
+    -- Recipient context (from receiver_status)
+    rs.TNumber,
+    rs.Receiver,
+    rs.EmailLanguage,
+    rs.DateTime         AS send_time,
+    rs.LogStatus        AS send_status,
+
+    -- Event context (from analytics_link)
+    al.LinkTypeEnum     AS event_type,
+    al.CreationDate     AS event_time,
+    al.Agent            AS device_agent,
+    al.CurrentLanguage,
+
+    -- HR enrichment (separate join)
+    hr.WORKER_ID        AS gpn,
+    cc.REGION,
+    cc.DIVISION,
+    cc.AREA,
+    cc.COUNTRY
+
+FROM    imep_bronze.tbl_email                   e
+JOIN    imep_bronze.tbl_email_receiver_status   rs ON rs.EmailId              = e.Id
+LEFT JOIN imep_bronze.tbl_analytics_link        al ON al.EmailReceiverStatusId = rs.Id
+                                                  AND al.EmailId               = e.Id
+                                                  AND al.IsActive              = 1
+LEFT JOIN imep_bronze.tbl_hr_employee           hr ON hr.T_NUMBER             = rs.TNumber
+LEFT JOIN imep_bronze.tbl_hr_costcenter         cc ON cc.ORGANIZATIONAL_UNIT  = hr.ORGANIZATIONAL_UNIT
+
+WHERE   e.TrackingId IS NOT NULL                   -- Cross-channel filter
+  AND   rs.DateTime >= '2025-01-01'                -- Default time range (Q24 adoption ramp)
+  AND   rs.LogStatus IN ('Sent', 'Open')           -- adjust per analysis
+}}}
+
+!2 Variants
+
+!3 Variant A — Sends only (without Open/Click)
+
+If you only want to know who received which mailing (bounce analysis etc.):
+
+{{{
+SELECT e.TrackingId, rs.TNumber, rs.LogStatus, rs.DateTime
+FROM   imep_bronze.tbl_email                  e
+JOIN   imep_bronze.tbl_email_receiver_status  rs ON rs.EmailId = e.Id
+WHERE  e.TrackingId IS NOT NULL
+}}}
+
+293M rows total. One row per mailing × recipient. tbl_analytics_link not needed if only send events are of interest.
+
+!3 Variant B — Opens/Clicks only (Fact-only)
+
+If send context is irrelevant:
+
+{{{
+SELECT al.EmailId, al.TNumber, al.LinkTypeEnum, al.CreationDate, al.Agent
+FROM   imep_bronze.tbl_analytics_link al
+WHERE  al.IsActive = 1
+  AND  al.CreationDate >= '2025-01-01'
+}}}
+
+533M rows. Most expensive — always set a time filter.
+
+!3 Variant C — Pack-Level aggregates
+
+For dashboard numbers (not per-event):
+
+{{{
+WITH mail AS (
+  SELECT Id, TrackingId,
+         array_join(slice(split(UPPER(TrackingId), '-'), 1, 2), '-') AS tracking_pack_id
+  FROM   imep_bronze.tbl_email
+  WHERE  TrackingId IS NOT NULL
+)
+SELECT
+    mail.tracking_pack_id,
+    COUNT(DISTINCT rs.Id)                                                            AS sends,
+    COUNT(DISTINCT CASE WHEN al.LinkTypeEnum = 'OPEN'  THEN al.TNumber END)          AS unique_opens,
+    COUNT(DISTINCT CASE WHEN al.LinkTypeEnum = 'CLICK' THEN al.TNumber END)          AS unique_clicks
+FROM    mail
+JOIN    imep_bronze.tbl_email_receiver_status rs ON rs.EmailId = mail.Id
+LEFT JOIN imep_bronze.tbl_analytics_link       al ON al.EmailReceiverStatusId = rs.Id
+                                                 AND al.IsActive = 1
+GROUP BY mail.tracking_pack_id
+}}}
+
+!2 Gotchas
+
+!3 1. ALWAYS filter al.IsActive = 1
+
+Without this filter you pull soft-deleted events into the numbers. Dashboards come out too high.
+
+!3 2. Double FK between analytics_link and receiver_status
+
+tbl_analytics_link has '''both''' EmailId and EmailReceiverStatusId as FK. Use both in the join condition — otherwise you risk a Cartesian product if a recipient has had multiple send events (rare, but possible on retries).
+
+!3 3. tbl_analytics_link only for OPEN + CLICK, not for Sends
+
+Sends live in tbl_email_receiver_status, not in tbl_analytics_link. A common confusion.
+
+!3 4. rs.DateTime vs al.CreationDate
+
+ * rs.DateTime = when it was sent
+ * al.CreationDate = when it was opened/clicked
+
+For time-to-open analyses: DATEDIFF(second, rs.DateTime, al.CreationDate).
+
+!3 5. HR join is N:1, but can change
+
+tbl_hr_employee is upserted 2x/day. Region/Division are current, not historical. For "who was in which division on day X" you need tbl_hr_employee_history (if it exists) or a snapshot merge.
+
+!3 6. TrackingId only on tbl_email
+
+Do not look for it on receiver_status or analytics_link — they don't carry it. Always fetch via e.Id = EmailId.
+
+!2 Performance Tuning
+
+ * '''Time filter first''': rs.DateTime >= '…' as the first WHERE clause -> partition pruning if available
+ * '''TrackingId pre-filter''': WHERE e.TrackingId IS NOT NULL reduces the starting set to ~1.3% of mailings
+ * '''LEFT JOIN on tbl_analytics_link''', not INNER: otherwise you lose mailings that were never opened
+ * '''Cache at Pack-Level aggregates''': if you pull the same funnel 10×/day, materialize into a local view
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmailReceiverStatus
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblAnalyticsLink
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract

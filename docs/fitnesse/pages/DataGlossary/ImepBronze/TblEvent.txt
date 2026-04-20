@@ -1,0 +1,108 @@
+!1 TblEvent ('''imep_bronze.tbl_event''')
+
+'''Event master table''' — events as a feature in iMEP (not to be confused with "email events" in the sense of Opens/Clicks). Carries '''TrackingId''' (one of only 4 tables with this column). For event registrations see additionally imep_silver.eventregistration (13.7M).
+
+!2 Meta
+| '''Layer'''          | Bronze |
+| '''Source system'''  | iMEP (SQL Server) -> CDC -> Delta |
+| '''Grain'''          | 1 row per event definition |
+| '''Primary key'''    | Id |
+| '''Cross-channel key''' | TrackingId |
+| '''Refresh'''        | 2x/day @ 00:00/12:00 UTC (MERGE) |
+| '''Rows'''           | ~100K (2009 - Apr 2026 — oldest dataset in the project!) |
+| '''PII'''            | low — event definitions are internal |
+
+!2 Key Columns (expected — exact verification via DESCRIBE)
+
+| '''Column'''   | '''Type''' | '''Role'''           | '''Notes''' |
+| Id             | string     | PK                   | Event GUID |
+| TrackingId     | string     | '''Cross-channel key''' | Format like tbl_email.TrackingId, 32-char 5-seg |
+| Title          | string     |                      | Event name |
+| EventDate      | timestamp  |                      | When the event takes place |
+| CreatedBy      | string     |                      | TNumber of the creator |
+| CreationDate   | timestamp  |                      | When the event was created |
+
+Full schema: !- DESCRIBE imep_bronze.tbl_event -!
+
+!2 Relationships
+
+!startuml
+skinparam linetype ortho
+hide circle
+
+entity "tbl_event" as event {
+  * Id : string <<PK>>
+  --
+  TrackingId : string
+  Title : string
+  EventDate : timestamp
+}
+entity "tbl_pbi_platform_events" as gold {
+  * Id : string <<PK>>
+  --
+  TrackingId : string
+  RegistrationCount : bigint
+}
+entity "eventregistration" as er {
+  * EventId : FK
+  --
+  TNumber : string
+  RegistrationStatus : string
+}
+entity "invitation" as inv {
+  * EventId : FK
+  --
+  TNumber : string
+}
+
+event ||--|| gold : "Id = Id (gold 1:1)"
+event ||--o{ er : "Id = EventId (silver)"
+event ||--o{ inv : "Id = EventId (silver)"
+
+!enduml
+
+!2 Primary Joins
+
+!3 To imep_silver.eventregistration — Who registered?
+
+{{{
+SELECT e.Title, e.EventDate, e.TrackingId, er.TNumber, er.RegistrationStatus
+FROM   imep_bronze.tbl_event           e
+JOIN   imep_silver.eventregistration   er ON er.EventId = e.Id
+WHERE  e.TrackingId IS NOT NULL
+  AND  e.EventDate >= '2025-01-01'
+}}}
+
+!3 To imep_gold.tbl_pbi_platform_events — Pre-aggregated with registration count
+
+{{{
+SELECT e.Title, e.TrackingId, pe.RegistrationCount
+FROM   imep_bronze.tbl_event                 e
+JOIN   imep_gold.tbl_pbi_platform_events     pe ON pe.Id = e.Id
+}}}
+
+For dashboard consumption: use Gold instead of Bronze -> Silver aggregation.
+
+!2 Quality Caveats
+
+ * '''EventDate can be 2124 (sentinel for "open-ended")''' — Q1b confirmed. In filter logic guard with WHERE EventDate < '2100-01-01' if desired.
+ * '''Oldest dataset in the project''' (from 2009). Pre-2020 data has little relevance for cross-channel analyses, but historical events exist.
+ * '''TrackingId adoption''': most pre-2024 events have no TrackingId — cross-channel attribution only possible for newer events.
+
+!2 Lineage
+
+{{{
+imep_bronze.tbl_event
+        |
+        +--> imep_silver.event (84K), invitation, eventregistration (13.7M)  [Silver exists for Events!]
+        |
+        +--> imep_gold.tbl_pbi_platform_events (84K) with RegistrationCount
+}}}
+
+'''Important''': Events are '''the one area''' where imep_silver exists (Q26). Email engagement '''does not'''.
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.CrossChannelViaTrackingId

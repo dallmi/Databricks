@@ -1,0 +1,184 @@
+!1 Join Strategy Contract — Cross-Channel Analytics
+
+Single-pager with the most important rules for joins in the cross-channel model. '''Read this before you write SQL.''' Every rule derives from a concrete Genie finding (Q1–Q30).
+
+!2 The 5 Rules You Must Follow
+
+!3 Rule 1 — Cross-Channel runs dimensionally, never through Engagement
+
+'''DO''':
+{{{
+tbl_email.TrackingId  <->  sharepoint_bronze.pages.UBSGICTrackingID
+}}}
+
+'''DON'T''':
+{{{
+-- WRONG: direct join of Engagement Facts between domains
+tbl_analytics_link  <->  sharepoint_bronze.pageviews   -- NO
+tbl_email_receiver_status  <->  sharepoint_gold.pbi_db_interactions_metrics  -- NO
+}}}
+
+'''Why''': TrackingId exists in exactly 4 tables (tbl_email, tbl_event, tbl_pbi_platform_mailings, tbl_pbi_platform_events) and never co-occurs with EmailId in the same table. SharePoint has no person-key equivalent to TNumber. Cross-channel must therefore always run through the dimension tables tbl_email ↔ pages. (Q27)
+
+!3 Rule 2 — TNumber exists in only 2 tables. Person-level analytics are email-only.
+
+'''Person-level joins only possible via''':
+ * imep_bronze.tbl_email_receiver_status.TNumber
+ * imep_bronze.tbl_analytics_link.TNumber
+
+'''Join to HR''':
+{{{
+ON analytics_link.TNumber = tbl_hr_employee.T_NUMBER   -- both lowercase t######
+}}}
+
+'''Special cases''':
+ * tbl_hr_user.UbsId is UPPERCASE -> join with LOWER(UbsId) = LOWER(T_NUMBER)
+ * GPN comes from pageviews.user_gpn (8-digit) -> tbl_hr_employee.WORKER_ID is the bridge (no external source needed)
+
+'''Why''': TNumber appears in only two tables. For SharePoint person analytics you must resolve separately via sharepoint_gold.pbi_db_employeecontact (24M rows) or CDM — not TNumber-compatible without a bridge. (Q3, Q27)
+
+!3 Rule 3 — TrackingId match: SEG1–4, never SEG5
+
+TrackingId format: CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL (32 characters, 5 segments, UPPER).
+
+'''DO''':
+{{{
+-- For cross-channel match: only compare SEG1-4
+ON  array_join(slice(split(email.TrackingId, '-'), 1, 4), '-')
+  = array_join(slice(split(pages.UBSGICTrackingID, '-'), 1, 4), '-')
+}}}
+
+'''DON'T''':
+{{{
+-- WRONG: full string match
+ON email.TrackingId = pages.UBSGICTrackingID   -- only 6/1677 matches (Jaccard 0.004)
+}}}
+
+'''Why''': SEG5 encodes system ownership, not channel. iMEP: EMI/NLI/TWE. SharePoint: IAN/ITS/OPN/ANC. Full string match produces almost no matches, even though the same activity is semantically intended. (Q23)
+
+!3 Rule 4 — Gold is a CTAS full rebuild. Respect the refresh window.
+
+'''Refresh times (UTC)''':
+| '''Layer''' | '''Time''' | '''Pattern''' |
+| iMEP Bronze | 00:00 + 12:00 | MERGE Upsert |
+| SharePoint Bronze | 02:00 | MERGE (pages) + Append (pageviews, 7 bursts in 1 min) |
+| iMEP Gold | 00:23 + 12:25 | '''CTAS Full Rebuild''' ← critical |
+
+'''DO''':
+ * Dashboard queries between 00:35–11:55 and 12:35–23:55 UTC (safe window)
+ * For scheduled reports: 00:40 UTC or 12:40 UTC as earliest slot
+
+'''DON'T''':
+ * Dashboard scheduled refresh at 00:20–00:30 or 12:20–12:30 UTC
+ * Long transactions spanning these windows
+
+'''Why''': Gold tables are fully destroyed and rebuilt (CREATE OR REPLACE TABLE AS SELECT). Queries in the middle of the window can hit partial / inconsistent state. (Q28)
+
+!3 Rule 5 — Coverage reality: ~4% of pages, ~1.3% of mailings
+
+'''Mandatory caveats in every dashboard''':
+
+ 1 '''SharePoint side''': only 1,949 / 48,419 pages (~4%) have UBSGICTrackingID. Only this ~4% of the 84M interaction rows is pack-attributable. The remaining 96% = "untracked intranet activity" — separate section or transparently labelled.
+ 1 '''iMEP side''': only 986 / 73,930 mailings (1.3%) have TrackingId. However: strong uptrend (2024: 99 -> 2025: 637 -> 2026 YTD: 250). '''Default time range of the dashboard: from 2025 onwards.'''
+ 1 '''Site concentration''': 99.4% of tracked pages sit on one single site ("News and events"). If the dashboard filters globally -> recommendation to restrict to this site by default.
+
+'''Why''': without these caveats, stakeholders see massive absolute numbers and incorrect rate calculations. (Q22, Q24, Q25)
+
+!2 Quick Reference — Join Patterns
+
+!3 Pattern A: Per-Recipient-Event (Bronze chain, 533M-row truth)
+
+{{{
+SELECT e.TrackingId, rs.TNumber, al.LinkTypeEnum, al.CreationDate AS event_time, al.Agent
+FROM   imep_bronze.tbl_email e
+JOIN   imep_bronze.tbl_email_receiver_status rs ON rs.EmailId              = e.Id
+JOIN   imep_bronze.tbl_analytics_link       al ON al.EmailReceiverStatusId = rs.Id
+                                              AND al.EmailId               = e.Id
+WHERE  e.TrackingId IS NOT NULL
+  AND  al.IsActive  = 1
+}}}
+
+Full-detail grain, but 533M rows. Only for ad-hoc analyses.
+
+!3 Pattern B: Gold Consumption (when it must be fast)
+
+{{{
+SELECT *
+FROM   imep_gold.final
+WHERE  /* whatever filter */
+}}}
+
+520M rows, already denormalized, HR-enriched. '''Default for dashboard backends.'''
+
+!3 Pattern C: Cross-Channel Funnel (Pack-Level)
+
+{{{
+WITH pack AS (
+  SELECT DISTINCT
+         array_join(slice(split(UPPER(TrackingId), '-'), 1, 2), '-') AS tracking_pack_id,
+         TrackingId
+  FROM   imep_bronze.tbl_email
+  WHERE  TrackingId IS NOT NULL
+),
+email_side AS (
+  SELECT p.tracking_pack_id,
+         COUNT(DISTINCT rs.Id)              AS sent,
+         COUNT(DISTINCT al_open.Id)         AS opened,
+         COUNT(DISTINCT al_click.Id)        AS clicked
+  FROM   pack p
+  JOIN   imep_bronze.tbl_email e             ON e.TrackingId = p.TrackingId
+  LEFT JOIN imep_bronze.tbl_email_receiver_status rs ON rs.EmailId = e.Id
+  LEFT JOIN imep_bronze.tbl_analytics_link al_open  ON al_open.EmailId = e.Id  AND al_open.LinkTypeEnum = 'OPEN'
+  LEFT JOIN imep_bronze.tbl_analytics_link al_click ON al_click.EmailId = e.Id AND al_click.LinkTypeEnum = 'CLICK'
+  GROUP BY 1
+),
+sp_side AS (
+  SELECT array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id,
+         SUM(m.views)  AS page_views,
+         SUM(m.visits) AS page_visits
+  FROM   sharepoint_bronze.pages p
+  JOIN   sharepoint_gold.pbi_db_interactions_metrics m ON m.marketingPageId = p.pageUUID
+  WHERE  p.UBSGICTrackingID IS NOT NULL
+  GROUP BY 1
+)
+SELECT COALESCE(e.tracking_pack_id, s.tracking_pack_id) AS tracking_pack_id,
+       e.sent, e.opened, e.clicked,
+       s.page_views, s.page_visits
+FROM   email_side e
+FULL OUTER JOIN sp_side s ON s.tracking_pack_id = e.tracking_pack_id;
+}}}
+
+That is the funnel at pack level. '''FULL OUTER JOIN''', because many packs have only email or only intranet.
+
+!2 Footgun Alert
+
+| '''Footgun''' | '''Symptom''' | '''Fix''' |
+| Looking for TrackingId on engagement tables | column not found | TrackingId lives only on tbl_email, tbl_event, tbl_pbi_platform_mailings, tbl_pbi_platform_events |
+| Full string match of TrackingIds | 0 or near-0 matches | Compare SEG1-4 (see Rule 3) |
+| UbsId = T_NUMBER without case normalization | 0 matches | LOWER(UbsId) = LOWER(T_NUMBER) |
+| Dashboard refresh at 00:25 UTC | Partially empty Gold tables | Respect refresh windows (Rule 4) |
+| SUM(views) without TID filter | Inflated numbers | WHERE UBSGICTrackingID IS NOT NULL for attributed funnel |
+| COUNT(*) FROM imep_gold.final without filter | ~520M, timeout | Always constrain by time or filter with PartitionKey |
+| Mailing send time from tbl_email.CreationDate | Wrong timestamps | Send time lives in tbl_email_receiver_status.DateTime |
+| GICTrackingID vs UBSGICTrackingID confused | Schema-inconsistent | pages has UBSGICTrackingID, pageviews has GICTrackingID — both mean the same, but case variants occur |
+
+!2 Sources
+
+Every rule in this document traces back to a Genie session:
+ * Q1, Q27 — TrackingId location + Dimensional-vs-Factual
+ * Q3, Q3a/b — HR bridge (GPN↔TNumber via WORKER_ID)
+ * Q22 — 4% coverage blocker + FK chain
+ * Q23 — SEG5 divergence (channel ownership)
+ * Q24, Q25 — Adoption timeline + site concentration
+ * Q26 — Silver asymmetry
+ * Q27 — Join graph topology
+ * Q28 — Refresh cadence + CTAS windows
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Overview
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErCrossChannel
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.ImepBronzeEmailEvents
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.SharePointGoldToPages
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.CrossChannelViaTrackingId

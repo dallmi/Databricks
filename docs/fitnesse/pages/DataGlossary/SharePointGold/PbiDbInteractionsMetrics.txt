@@ -1,0 +1,150 @@
+!1 PbiDbInteractionsMetrics ('''sharepoint_gold.pbi_db_interactions_metrics''')
+
+'''Master interaction fact for SharePoint.''' 84M rows, 11 columns. Central table for PageView, Visit, Duration, and Comment metrics at Page × Date × Contact grain. '''Carries no direct TrackingID''' — cross-channel attribution always runs via marketingPageId -> pageUUID -> UBSGICTrackingID through sharepoint_bronze.pages. (Q22)
+
+!2 Meta
+| '''Layer'''          | Gold (Consumption) |
+| '''Source system'''  | SharePoint Analytics (aggregated from sharepoint_silver) |
+| '''Grain'''          | 1 row per marketingPageId × visitdatekey × viewingcontactid × referenceapplicationid |
+| '''Primary key'''    | Composite (likely — to be clarified via Q30) |
+| '''Cross-channel key''' | '''none directly''' — only via FK chain marketingPageId -> pageUUID -> UBSGICTrackingID |
+| '''Refresh'''        | Daily Gold build (exact cadence — Q28 follow-up) |
+| '''Rows'''           | '''~84M''' (from 2023) |
+| '''PII'''            | viewingcontactid (GUID) -> indirectly identifying |
+
+!2 Neighborhood Diagram
+
+!startuml
+skinparam linetype ortho
+hide circle
+
+entity "pbi_db_interactions_metrics" as im {
+  * marketingPageId : FK
+  --
+  visitdatekey : string
+  referenceapplicationid : string
+  views : bigint
+  viewingcontactid : string
+  flag : string
+  visits : bigint
+  durationsum : double
+  durationavg : double
+  commentss : bigint
+  marketingPageIdGuid : bigint
+}
+entity "pages" as pages {
+  * pageUUID : string <<PK>>
+  --
+  UBSGICTrackingID : string
+  PageURL : string
+}
+entity "tbl_email" as email {
+  * Id : string <<PK>>
+  --
+  TrackingId : string
+}
+entity "pbi_db_employeecontact" as ec {
+  * contactId : string <<PK>>
+  --
+  T_NUMBER : string
+}
+
+im    }o--|| pages : "marketingPageId = pageUUID"
+pages ||--o| email : "UBSGICTrackingID ↔ TrackingId (SEG1-4)"
+im    }o..|| ec    : "viewingcontactid = contactId (potential)"
+
+!enduml
+
+!2 Key Columns
+
+| '''Column'''              | '''Type''' | '''Sample''' | '''Role''' |
+| visitdatekey              | string      | 20230421     | '''Day key''' YYYYMMDD. Grain-determining. |
+| referenceapplicationid    | string      | 2            | Application reference (which system) |
+| marketingPageId           | string GUID | f94bc186-... | '''FK''' -> pages.pageUUID. Only cross-channel path. |
+| views                     | bigint      | 1            | PageView count |
+| viewingcontactid          | string GUID | 1254e21a-... | '''Person key''' — not TNumber, but bridge via pbi_db_employeecontact possible |
+| flag                      | string      | 1            | Meaning unclear — Q30 follow-up |
+| visits                    | bigint      | 1            | Distinct visit count (with dedup) |
+| durationsum               | double      | 7.72         | Time on page (seconds, summed) |
+| durationavg               | double      | 7.72         | Average duration |
+| commentss                 | bigint      | 0            | Comment count (typo in column name — '''commentss''' with double s) |
+| marketingPageIdGuid       | bigint      | NULL         | Always NULL — presumably legacy |
+
+CDM validation confirmed the mapping: sourceName: mailync_marketingpageid, dataFormat: Guid.
+
+!2 Primary Joins
+
+!3 Join to sharepoint_bronze.pages (N:1) — Standard lookup
+
+{{{
+SELECT m.*, p.UBSGICTrackingID, p.PageURL, p.SiteName
+FROM   sharepoint_gold.pbi_db_interactions_metrics m
+LEFT JOIN sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
+}}}
+
+'''LEFT JOIN''', otherwise you lose the ~96% of rows without a populated TrackingID.
+
+!3 Pack-level cross-channel funnel
+
+{{{
+SELECT array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id,
+       SUM(m.views)                  AS total_views,
+       COUNT(DISTINCT m.viewingcontactid) AS unique_viewers,
+       SUM(m.durationsum)            AS total_duration_sec
+FROM   sharepoint_gold.pbi_db_interactions_metrics m
+JOIN   sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
+WHERE  p.UBSGICTrackingID IS NOT NULL          -- mandatory filter
+  AND  m.visitdatekey >= '20250101'            -- default time window from 2025
+GROUP BY 1
+}}}
+
+!3 Potential SharePoint person bridge
+
+{{{
+-- UNVERIFIED — Q17/Q22 hypothesize this works, not yet tested
+SELECT m.*, ec.T_NUMBER
+FROM   sharepoint_gold.pbi_db_interactions_metrics m
+LEFT JOIN sharepoint_gold.pbi_db_employeecontact ec ON ec.contactId = m.viewingcontactid
+}}}
+
+If this works, we would have a TNumber for SharePoint views. '''Not yet validated.'''
+
+!2 Quality Caveats
+
+ * '''⚠️ No direct TrackingID''' — anyone searching with WHERE TrackingId = … will not find it. Always go via pages.UBSGICTrackingID.
+ * '''4% coverage blocker''' (critical!): only 1,949/48,419 pages have UBSGICTrackingID. Of 84M interaction rows, '''only ~3.3M are Pack-attributable''' (4%). The remaining 96% are "untracked intranet activity". The dashboard '''must''' explicitly label this section.
+ * '''viewingcontactid != TNumber''' — SharePoint-native person ID (GUID). Person-level attribution goes through pbi_db_employeecontact (still to validate).
+ * '''Column typo''': commentss (with double s). Do not correct it or every query breaks.
+ * '''marketingPageIdGuid''' is always NULL — ignore.
+ * '''Grain anomaly''': a page × date × contact can theoretically have multiple rows (through referenceapplicationid variations) — for page-date grain rollup use GROUP BY marketingPageId, visitdatekey + SUM(views).
+ * '''visitdatekey is a string''' — for time-range filters parse with CAST(visitdatekey AS date) or string compare visitdatekey >= '20250101'.
+
+!2 Lineage
+
+{{{
+sharepoint_bronze.customevents       -+
+sharepoint_bronze.pageviews          -|--> sharepoint_silver.webpagevisited  --> sharepoint_gold.pbi_db_interactions_metrics
+sharepoint_bronze.pagevisited_*      -+                                             (metric aggregation per page × date × contact)
+}}}
+
+Unlike iMEP email, Silver '''is''' used here in between (Q26 confirms). SharePoint uses the full Medallion pattern.
+
+!2 Sister Tables in the Same Schema
+
+For different grain requirements there are specialized Gold tables:
+
+| '''Table'''                            | '''Rows''' | '''Cols''' | '''When to use''' |
+| '''pbi_db_interactions_metrics'''      | 84M        | 11         | '''Default''' — everything in one table |
+| pbi_db_pageviewed_metric               | 84M        | 5          | View counts only, fast aggregation |
+| pbi_db_pagevisited_metric              | 81M        | 9          | Visit-oriented (with dedup) |
+| pbi_db_datewise_overview_fact_tbl      | 7.5M       | 31         | Pre-aggregated page × date × division, rolling windows |
+| pbi_db_90_days_interactions_metric     | 9M         | 11         | 90-day window, smaller, faster |
+
+Rule of thumb: ad-hoc -> interactions_metrics; dashboards with time rollups -> datewise_overview_fact_tbl; pure count queries -> pageviewed_metric.
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze.Pages
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErSharePointGold
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.SharePointGoldToPages
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract

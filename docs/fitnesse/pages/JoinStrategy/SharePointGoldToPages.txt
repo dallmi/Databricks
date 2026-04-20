@@ -1,0 +1,178 @@
+!1 Join Recipe — SharePoint Gold Metrics → Pages (TrackingID)
+
+The canonical way to enrich SharePoint interaction metrics with cross-channel attribution. '''Gold metric tables carry no TrackingID''' — attribution must run through pages as dimension.
+
+'''When to use''': any cross-channel analysis on the SharePoint side. Any dashboard that aggregates SP views per pack.
+
+!2 The Standard Chain
+
+{{{
+SELECT
+    -- TrackingID attribution from pages
+    p.UBSGICTrackingID  AS tracking_id,
+    p.UBSArticleDate    AS article_date,
+    p.PageURL,
+    p.PageTitle,
+
+    -- Site context
+    s.SiteName,
+    s.SiteUrl,
+
+    -- Metrics from Gold
+    m.visitdatekey,
+    SUM(m.views)                         AS views,
+    SUM(m.visits)                        AS visits,
+    SUM(m.durationsum)                   AS duration_sum_sec,
+    AVG(m.durationavg)                   AS duration_avg_sec,
+    COUNT(DISTINCT m.viewingcontactid)   AS unique_viewers,
+    SUM(m.commentss)                     AS comments
+
+FROM    sharepoint_gold.pbi_db_interactions_metrics m
+JOIN    sharepoint_bronze.pages                     p ON p.pageUUID = m.marketingPageId
+LEFT JOIN sharepoint_bronze.sites                   s ON s.SiteId   = p.SiteId
+
+WHERE   p.UBSGICTrackingID IS NOT NULL          -- Mandatory filter for attribution
+  AND   m.visitdatekey >= '20250101'            -- Default time range
+
+GROUP BY p.UBSGICTrackingID, p.UBSArticleDate, p.PageURL, p.PageTitle,
+         s.SiteName, s.SiteUrl, m.visitdatekey
+}}}
+
+!2 Variants
+
+!3 Variant A — Pack-Level aggregate (dashboard grain)
+
+{{{
+SELECT
+    array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id,
+    SUM(m.views)                       AS total_views,
+    SUM(m.visits)                      AS total_visits,
+    COUNT(DISTINCT m.viewingcontactid) AS unique_viewers,
+    SUM(m.durationsum)                 AS total_duration_sec
+FROM   sharepoint_gold.pbi_db_interactions_metrics m
+JOIN   sharepoint_bronze.pages                     p ON p.pageUUID = m.marketingPageId
+WHERE  p.UBSGICTrackingID IS NOT NULL
+  AND  m.visitdatekey >= '20250101'
+GROUP BY 1
+}}}
+
+!3 Variant B — Date × Division (pre-aggregated)
+
+Use pbi_db_datewise_overview_fact_tbl — much smaller (7.5M instead of 84M), already grouped by division and with rolling windows (7/14/21/28d):
+
+{{{
+SELECT
+    p.UBSGICTrackingID,
+    d.employeebusinessdivision,
+    d.visitdatekey,
+    d.page_div_date_views                 AS views_1d,
+    d.page_div_date_views_7d              AS views_7d,
+    d.page_div_date_views_14d             AS views_14d,
+    d.page_div_date_uniquevisitors        AS unique_viewers_1d,
+    d.page_div_date_uniquevisitors_7d     AS unique_viewers_7d
+FROM   sharepoint_gold.pbi_db_datewise_overview_fact_tbl d
+JOIN   sharepoint_bronze.pages                          p ON p.pageUUID = d.marketingPageId
+WHERE  p.UBSGICTrackingID IS NOT NULL
+  AND  d.visitdatekey >= '20250101'
+}}}
+
+!3 Variant C — View counts only (super fast)
+
+pbi_db_pageviewed_metric has only 5 columns, fastest metric table for pure view counts:
+
+{{{
+SELECT
+    p.UBSGICTrackingID,
+    v.visitdatekey,
+    SUM(v.views)                       AS views,
+    COUNT(DISTINCT v.viewingcontactid) AS unique_viewers
+FROM   sharepoint_gold.pbi_db_pageviewed_metric v
+JOIN   sharepoint_bronze.pages                  p ON p.pageUUID = v.marketingPageId
+WHERE  p.UBSGICTrackingID IS NOT NULL
+GROUP BY 1, 2
+}}}
+
+!3 Variant D — CTA clicks (alternative schema)
+
+For Call-to-Action attribution instead of page views:
+
+{{{
+SELECT
+    p.UBSGICTrackingID,
+    c.ctalabel,
+    SUM(c.clicks) AS total_clicks
+FROM   sharepoint_clicks_gold.pbi_db_ctalabel_intr_fact_gold c
+JOIN   sharepoint_bronze.pages                              p ON p.pageUUID = c.marketingPageId
+WHERE  p.UBSGICTrackingID IS NOT NULL
+GROUP BY 1, 2
+}}}
+
+!2 Gotchas
+
+!3 1. LEFT JOIN for unattributed pages
+
+If you also want to count "untracked" pages (the 96%), LEFT JOIN and COALESCE:
+
+{{{
+SELECT
+    COALESCE(p.UBSGICTrackingID, '(untracked)') AS tid_or_untracked,
+    SUM(m.views)
+FROM   sharepoint_gold.pbi_db_interactions_metrics m
+LEFT JOIN sharepoint_bronze.pages                  p ON p.pageUUID = m.marketingPageId
+GROUP BY 1
+}}}
+
+This way you see the tracked/untracked ratio in the dashboard.
+
+!3 2. visitdatekey is a string, not a date
+
+Format YYYYMMDD. For range filters, string compare is OK. For parsing: CAST(visitdatekey AS DATE) or to_date(visitdatekey, 'yyyyMMdd').
+
+!3 3. Column typo: commentss
+
+The double "s" in commentss is not a typo — that's what the column is called. '''Don't correct it.'''
+
+!3 4. viewingcontactid vs. user_gpn
+
+Gold facts carry viewingcontactid (GUID), not user_gpn. For person-level cross-channel:
+ * Option A: Bridge via pbi_db_employeecontact (not yet validated)
+ * Option B: Back to Bronze pageviews where user_gpn is available directly (more expensive)
+
+!3 5. Grain consistency between metric tables
+
+ * pbi_db_interactions_metrics = page × date × contact × app
+ * pbi_db_pageviewed_metric    = page × date × contact × app
+ * pbi_db_pagevisited_metric   = page × date × visit
+
+Don't blindly aggregate without understanding the grain. For equally grouped numbers across tables -> first GROUP BY page × date, then join.
+
+!3 6. No GICTrackingID on the Gold metrics
+
+If you find GICTrackingID filters on Gold in old dashboards / SQL files: '''not''' in Gold metrics. Only on sharepoint_bronze.pageviews and sharepoint_silver.webpage (with case variant gICTrackingID).
+
+!2 Performance Tuning
+
+ * '''Pre-filter on pages''': if you only need tracked pages, materialize the 1,949 pages with UBSGICTrackingID first, then join:
+
+{{{
+WITH tracked_pages AS (
+  SELECT pageUUID, UBSGICTrackingID FROM sharepoint_bronze.pages
+  WHERE  UBSGICTrackingID IS NOT NULL
+)
+SELECT tp.UBSGICTrackingID, SUM(m.views)
+FROM   sharepoint_gold.pbi_db_interactions_metrics m
+JOIN   tracked_pages                              tp ON tp.pageUUID = m.marketingPageId
+GROUP BY 1;
+}}}
+
+Reduces the join partner to ~4% of the pages size.
+
+ * '''datewise_overview_fact_tbl instead of interactions_metrics''' where possible — 10× smaller.
+ * '''Set a time filter''' — 84M rows × wide columns without filter = timeout risk.
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointGold.PbiDbInteractionsMetrics
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze.Pages
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErSharePointGold
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract

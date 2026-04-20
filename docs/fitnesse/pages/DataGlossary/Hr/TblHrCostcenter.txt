@@ -1,0 +1,54 @@
+!1 TblHrCostcenter ('''imep_bronze.tbl_hr_costcenter''')
+
+'''The org-dimension lookup.''' Maps ORGANIZATIONAL_UNIT to Region / Division / Area / Country. The only source for geographic-organizational aggregation in dashboards.
+
+!2 Meta
+| '''Layer'''          | Bronze (HR domain) |
+| '''Source system'''  | HR system -> CDC -> Delta |
+| '''Grain'''          | 1 row per Organizational Unit |
+| '''Primary key'''    | ORGANIZATIONAL_UNIT |
+| '''Refresh'''        | 2x/day (MERGE, Service Principal) |
+| '''Rows'''           | < 10K (cost-center list) |
+| '''PII'''            | No direct PII — organizational dimension |
+
+!2 Key Columns
+
+| '''Column'''            | '''Type''' | '''Role''' | '''Notes''' |
+| ORGANIZATIONAL_UNIT     | string     | '''PK'''   | Code such as CH-ZH-0041 |
+| REGION                  | string     |            | EMEA, Americas, APAC, Switzerland, ... |
+| DIVISION                | string     |            | Business area (e.g. Wealth Management, Group Insurance Management) |
+| AREA                    | string     |            | Finer than Division, coarser than Country |
+| COUNTRY                 | string     |            | ISO country code or plain text |
+
+!2 Sample Row
+
+{{{
+ORGANIZATIONAL_UNIT = "CH-ZH-0041"
+REGION              = "Switzerland"
+DIVISION            = "Wealth Management"
+AREA                = "Zurich"
+COUNTRY             = "CH"
+}}}
+
+!2 Primary Joins
+
+!3 HR (standard lookup)
+
+{{{
+SELECT hr.T_NUMBER, cc.REGION, cc.DIVISION, cc.COUNTRY
+FROM   imep_bronze.tbl_hr_employee   hr
+LEFT JOIN imep_bronze.tbl_hr_costcenter cc ON cc.ORGANIZATIONAL_UNIT = hr.ORGANIZATIONAL_UNIT
+}}}
+
+See !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment for complete patterns.
+
+!2 Quality Caveats
+
+ * '''Current state, no history''': cost centers can be reorganized. When a division is renamed, it propagates into '''all''' existing engagement rows after the next CTAS run of imep_gold.final.
+ * '''DIVISION values are not enumerated''' — free-form string. Dashboards must maintain their own dedup + case normalization + mapping table.
+ * '''66% NULL-Region problem''' (Q16/Q21): in the Tier-3 aggregates (tbl_pbi_mailings_region), up to 66% of rows have NULL region. Cause: the ORGANIZATIONAL_UNIT in engagement events was not listed in tbl_hr_costcenter at build time. Dashboards must allow for an "Unknown" bucket.
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrEmployee
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment

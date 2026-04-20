@@ -1,0 +1,100 @@
+!1 MultiChannelDataModel — Technical Knowledge Base
+
+Bronze -> (Silver) -> Gold data paths for iMEP (Email) and SharePoint (Intranet), plus cross-channel linking via TrackingId. Aimed at new engineer/analyst joiners — within 15 minutes it must be clear which table contains what and how to join them.
+
+!2 Where to start
+
+If you are '''new to the project''', read in this order:
+
+ 1 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract — the single-pager with Dos & Don'ts. Read this '''before''' you write any join.
+ 1 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErCrossChannel — the one-picture summary of how iMEP and SharePoint connect.
+ 1 The '''five core tables''' (see below) — 95% of the data you care about lives there.
+
+!2 The 5 Core Tables
+
+After these five cards you can answer most cross-channel questions independently:
+
+| '''Table'''                                         | '''Rows''' | '''Role''' |
+| TblEmail ('''imep_bronze.tbl_email''')              | 145K       | Mailing master with TrackingId — entry point for email analysis |
+| TblEmailReceiverStatus ('''imep_bronze.tbl_email_receiver_status''') | 293M       | Sends/Bounces per recipient (full-key hub #1) |
+| TblAnalyticsLink ('''imep_bronze.tbl_analytics_link''') | 533M       | Opens/Clicks per recipient × link (full-key hub #2) |
+| Final ('''imep_gold.final''')                       | 520M       | Denormalized email consumption endpoint, HR already joined |
+| PbiDbInteractionsMetrics ('''sharepoint_gold.pbi_db_interactions_metrics''') | 84M | SharePoint master interaction fact |
+
+Plus the cross-channel bridge:
+
+| '''Table''' | '''Rows''' | '''Role''' |
+| Pages ('''sharepoint_bronze.pages''') | 48K | Page inventory with UBSGICTrackingID — the only place cross-channel attribution happens |
+
+!2 Data Glossary — All Tables
+
+!3 iMEP Domain (Email + Events)
+
+'''Bronze''' — imep_bronze.*
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail — mailing master (145K)
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmailReceiverStatus — Sends/Bounces (293M)
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblAnalyticsLink — Opens/Clicks (533M)
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmailLinks — template URL inventory
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEvent — events (100K)
+
+'''Silver''' — imep_silver.* (events only! No email silver — see Q26)
+ * invitation, eventregistration (13.7M), event (84K) — cards pending
+
+'''Gold''' — imep_gold.*
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepGold.Final — denormalized email endpoint (520M)
+ * TblPbiPlatformMailings, TblPbiMailingsRegion, TblPbiMailingsDivision, TblPbiKpi — cards pending
+
+!3 SharePoint Domain (Intranet)
+
+'''Bronze''' — sharepoint_bronze.*
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze.Pages — inventory with TrackingID (48K, only 4% coverage)
+ * Pageviews, Customevents, Sites — cards pending
+
+'''Silver''' — sharepoint_silver.* — full medallion pattern, cards pending
+
+'''Gold''' — sharepoint_gold.*
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointGold.PbiDbInteractionsMetrics — master fact (84M)
+ * further gold metrics + employeecontact bridge — cards pending
+
+!3 HR Domain — imep_bronze.* (lives in iMEP, consumed by all)
+
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrEmployee — T_NUMBER + WORKER_ID (= GPN), 265K
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrCostcenter — Region/Division/Area/Country
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrUser — UbsId (uppercase variant)
+
+!2 ER Diagrams per Domain
+
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze — 4 iMEP bronze + 3 HR tables
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErSharePointBronze — pages × pageviews × customevents × sites
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepGold — final + tbl_pbi_* tier structure
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErSharePointGold — marketingPageId FK chain
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErCrossChannel — TrackingID bridge + Employee bridge
+
+!2 Canonical Join Recipes
+
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract — ⭐ read this first
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.ImepBronzeEmailEvents — 4-table bronze chain
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.SharePointGoldToPages — gold metrics via pageUUID
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment — TNumber ↔ GPN ↔ Region/Division
+ * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.CrossChannelViaTrackingId — SEG1-4 match
+
+!2 Five Core Findings Everyone Must Know
+
+These five facts are the '''hard constraints''' against which all cross-channel analyses must be built.
+
+!3 1. The cross-channel link is dimensional, not factual
+tbl_email.TrackingId <-> sharepoint_bronze.pages.UBSGICTrackingID — '''never''' via engagement tables (pageviews, tbl_analytics_link) directly. TrackingId is a dimension, not a fact key. (Q27)
+
+!3 2. Only ~4% of pages have a UBSGICTrackingID
+1,949 out of 48,419 pages. This means ~96% of SharePoint interactions are '''not''' attributable to a pack. The dashboard must make this explicit. (Q22)
+
+!3 3. TrackingId adoption has only been ramping up since 2024/25
+Only 986/73,930 mailings (1.3%) have a TrackingId. Default dashboard time window: from 2025 onward. (Q24)
+
+!3 4. Refresh cadence: 2x/day iMEP, 1x/day SharePoint
+ * iMEP Bronze MERGE: 00:00 + 12:00 UTC
+ * SharePoint Bronze: 02:00 UTC (pages MERGE, pageviews Append-WRITE)
+ * iMEP Gold CTAS: 00:23 + 12:25 UTC — '''no dashboard queries during these windows'''  (Q28)
+
+!3 5. Email skips Silver entirely
+imep_silver exists only for events. For email engagement there is '''no silver layer''' — imep_gold.final is the direct consumption endpoint (denormalized, HR-enriched). (Q26)

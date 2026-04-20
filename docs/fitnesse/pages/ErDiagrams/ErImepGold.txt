@@ -1,0 +1,173 @@
+!1 ER Diagram — iMEP Gold
+
+Gold topology for iMEP. '''5-tier architecture''' (Q16). All tables join via MailingId = tbl_pbi_platform_mailings.Id = tbl_email.Id back to the master. Tier assignments partially still to verify via Q29.
+
+!2 Tier Structure
+
+!startuml
+skinparam linetype ortho
+hide circle
+
+entity "tbl_pbi_platform_mailings" as master {
+  * Id : string <<PK>>
+  --
+  TrackingId : string
+  Title : string
+  Subject : string
+  ContentMetrics : int
+  ..
+  '''73K rows — Tier 1 master'''
+}
+
+entity "tbl_pbi_mailings_region" as region {
+  * MailingId : FK
+  --
+  Region : string
+  UniqueOpens : bigint
+  UniqueClicks : bigint
+  ..
+  73K rows
+}
+
+entity "tbl_pbi_mailings_division" as div {
+  * MailingId : FK
+  --
+  Division : string
+  UniqueOpens : bigint
+  UniqueClicks : bigint
+  ..
+  '''697K rows'''
+}
+
+entity "tbl_pbi_kpi" as kpi {
+  * MailingId : FK
+  --
+  measure : string
+  MailingReceiverStatus : string
+  value : bigint
+  ..
+  245K rows, pivoted
+}
+
+entity "tbl_pbi_analytics" as ana {
+  * MailingId : FK
+  ..
+  290K rows
+}
+
+entity "tbl_pbi_platform_events" as events {
+  * Id : string <<PK>>
+  --
+  TrackingId : string
+  RegistrationCount : bigint
+  ..
+  84K rows — event master
+}
+
+entity "final" as final {
+  * Id : string <<PK>>
+  --
+  MailingId : string
+  TrackingId : string
+  TNumber : string
+  LogStatus : string
+  Region : string
+  Division : string
+  ..
+  '''520M rows — denormalized consumption endpoint'''
+}
+
+entity "tbl_email" as bronze {
+  * Id : string <<PK>>
+  --
+  TrackingId : string
+}
+
+master ||--o{ region : "Id = MailingId"
+master ||--o{ div    : "Id = MailingId"
+master ||--o{ kpi    : "Id = MailingId (pivoted)"
+master ||--o{ ana    : "Id = MailingId"
+master ||--o{ events : "Id = MailingId"
+bronze ||--|| master : "Id = Id (1:1 CTAS)"
+final  }o..o{ master : "denormalized join contains Id"
+
+!enduml
+
+!2 Volumes & Refresh
+
+| '''Table'''                    | '''Rows'''  | '''Refresh'''              | '''Pattern''' |
+| '''final'''                    | '''~520M''' | '''2x/day @ ~00:23/12:25 UTC''' | '''CTAS Full Rebuild''' ⚠️ |
+| tbl_pbi_platform_mailings      | 73K         | 2x/day                      | CTAS |
+| tbl_pbi_platform_events        | 84K         | 2x/day                      | CTAS |
+| tbl_pbi_analytics              | 290K        | 2x/day                      | CTAS |
+| tbl_pbi_kpi                    | 245K        | 2x/day                      | CTAS |
+| tbl_pbi_mailings_region        | 73K         | 2x/day                      | CTAS |
+| tbl_pbi_mailings_division      | 697K        | 2x/day                      | CTAS |
+| (1 additional)                 | 1,384K      | 2x/day                      | CTAS |
+
+'''All Gold tables are completely rebuilt via CTAS — no incrementality.''' Refresh window: 00:23 and 12:25 UTC (see Q28).
+
+!2 Two Parallel Data Paths
+
+!3 Path 1: Master-Detail (Tier 1 → Tier 2/3)
+{{{
+tbl_email (Bronze)
+    |  [1:1 CTAS]
+    v
+tbl_pbi_platform_mailings (Tier 1, 73K)
+    |
+    +--> tbl_pbi_mailings_region    (aggregated × Region)
+    +--> tbl_pbi_mailings_division  (aggregated × Division)
+    +--> tbl_pbi_kpi                (pivoted measures)
+    +--> tbl_pbi_analytics
+}}}
+'''When to use''': aggregated metrics per Mailing × Dimension. Smaller, faster than final.
+
+!3 Path 2: Denormalized Event Stream (final)
+{{{
+tbl_email                           -+
+tbl_email_receiver_status           -|--[CTAS Full Rebuild]--> final (520M)
+tbl_analytics_link                  -|
+tbl_hr_employee + tbl_hr_costcenter -+
+}}}
+'''When to use''': event-level queries with HR context, without manual joining. Default for dashboards.
+
+!2 The Pivoted tbl_pbi_kpi — Caution when Aggregating
+
+tbl_pbi_kpi is '''not''' wide format. Instead:
+
+| '''MailingId''' | '''measure''' | '''MailingReceiverStatus''' | '''value''' |
+| a1b2c3…         | OpenCount     | Open                         | 1523        |
+| a1b2c3…         | ClickCount    | Click                        | 189         |
+| a1b2c3…         | SentCount     | Sent                         | 8500        |
+
+For dashboard consumption pivot it:
+
+{{{
+SELECT MailingId,
+       MAX(CASE WHEN measure = 'SentCount'  THEN value END) AS sent,
+       MAX(CASE WHEN measure = 'OpenCount'  THEN value END) AS opened,
+       MAX(CASE WHEN measure = 'ClickCount' THEN value END) AS clicked
+FROM   imep_gold.tbl_pbi_kpi
+GROUP BY MailingId
+}}}
+
+!2 NULL Semantics in Tier-3 Aggregates (Q21)
+
+In tbl_pbi_mailings_region and _division:
+ * UniqueOpens NULL ~28-35% — mailings without a single open event in the region. NOT a data error.
+ * UniqueClicks NULL ~66-81% — mailings without clicks in the region. Click rate is naturally lower than open rate.
+ * Match rate Mailing ↔ Tier-3: 72-98% — not all mailings have Tier-3 entries at all.
+
+Semantic NULLs, not defects. Use COALESCE(value, 0) for aggregations.
+
+!2 Open Verification Points (Q29/Q30)
+
+ * Exact tier layout — which table belongs to which tier. Q29 (shape analysis) maps this out.
+ * Label confusion: final vs. tbl_pbi_platform_mailings — which carries the 520M rows? Q30 clarifies via DESCRIBE EXTENDED.
+ * Column mapping in final — which Bronze column lands where. Relevant for lineage docs.
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepGold.Final
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract

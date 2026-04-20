@@ -1,0 +1,189 @@
+!1 ER Diagram — SharePoint Gold
+
+Gold topology for SharePoint. '''The FK chain runs via marketingPageId''' — all Gold metric tables reference back to sharepoint_bronze.pages.pageUUID. '''No direct TrackingID on the Gold facts!''' Cross-channel attribution always goes via pages.
+
+!2 FK Chain — the Central Path
+
+!startuml
+skinparam linetype ortho
+hide circle
+
+entity "pages" as pages {
+  * pageUUID : string <<PK>>
+  --
+  UBSGICTrackingID : string
+  PageURL : string
+  ..
+  '''48K — THE DIMENSION'''
+  '''only 4% have TrackingID ⚠️'''
+}
+
+entity "pbi_db_interactions_metrics" as im {
+  * marketingPageId : FK
+  --
+  visitdatekey : string
+  viewingcontactid : string
+  views : bigint
+  visits : bigint
+  durationsum : double
+  commentss : bigint
+  ..
+  '''84M — Master Fact'''
+}
+
+entity "pbi_db_pageviewed_metric" as pvm {
+  * marketingPageId : FK
+  --
+  visitdatekey : string
+  viewingcontactid : string
+  views : bigint
+  ..
+  84M — lightweight 5 cols
+}
+
+entity "pbi_db_pagevisited_metric" as pvsm {
+  * marketingPageId : FK
+  --
+  visits : bigint
+  durationsum : double
+  visitedPageId : string
+  ..
+  81M — visit-oriented
+}
+
+entity "pbi_db_datewise_overview_fact_tbl" as dw {
+  * marketingPageId : FK
+  --
+  visitdatekey : string
+  employeebusinessdivision : string
+  page_div_date_views_7d : bigint
+  page_div_date_views_14d : bigint
+  ..
+  7.5M — page × date × division
+}
+
+entity "pbi_db_90_days_interactions_metric" as ninety {
+  * marketingPageId : FK
+  --
+  views_90d : bigint
+  ..
+  9M — 90-day window
+}
+
+entity "pbi_db_employeecontact" as ec {
+  * contactId : string <<PK>>
+  --
+  T_NUMBER : string
+  ..
+  '''24M — potential T-Number bridge'''
+}
+
+entity "pbi_db_page_visitedkey_view" as pvkv {
+  * visitkey : string <<PK>>
+  ..
+  76M — visit-key list
+}
+
+entity "tbl_email" as email {
+  * Id : string <<PK>>
+  --
+  TrackingId : string
+}
+
+im    }o--|| pages : "marketingPageId = pageUUID"
+pvm   }o--|| pages : "marketingPageId = pageUUID"
+pvsm  }o--|| pages : "marketingPageId = pageUUID"
+dw    }o--|| pages : "marketingPageId = pageUUID"
+ninety }o--|| pages : "marketingPageId = pageUUID"
+pvkv  ||..|| im    : "visit-key filter"
+ec    }o..o{ im    : "contactId = viewingcontactid (bridge)"
+pages }o--|| email : "UBSGICTrackingID ↔ TrackingId (SEG1-4)"
+
+!enduml
+
+!2 Volumes & Use Cases
+
+| '''Table'''                          | '''Rows''' | '''Cols''' | '''Use Case''' |
+| pbi_db_interactions_metrics          | '''84M'''  | 11         | '''Default''' — Views + Visits + Duration + Comments in one table |
+| pbi_db_pageviewed_metric             | 84M        | 5          | View counts only, super fast |
+| pbi_db_pagevisited_metric            | 81M        | 9          | Visit-oriented (with dedup) |
+| pbi_db_datewise_overview_fact_tbl    | '''7.5M''' | 31         | Pre-aggregated page × date × division, rolling windows (7/14/21/28d) |
+| pbi_db_90_days_interactions_metric   | 9M         | 11         | 90-day window, small, for short-term dashboards |
+| pbi_db_page_visitedkey_view          | 76M        | 1          | Visit-key filter view |
+| pbi_db_employeecontact               | '''24M'''  | 17         | '''Potential person bridge''' (viewingcontactid ↔ T_NUMBER) |
+
+Plus sharepoint_clicks_gold.pbi_db_ctalabel_intr_fact_gold (3M) for CTA click attribution.
+
+!2 Three Critical Rules
+
+!3 Rule 1 — Gold metrics without a pages JOIN are unattributed
+
+{{{
+-- WRONG — only raw numbers without cross-channel context
+SELECT SUM(views) FROM sharepoint_gold.pbi_db_interactions_metrics;
+
+-- RIGHT — attribution via TrackingID
+SELECT p.UBSGICTrackingID, SUM(m.views) AS views
+FROM   sharepoint_gold.pbi_db_interactions_metrics m
+JOIN   sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
+WHERE  p.UBSGICTrackingID IS NOT NULL
+GROUP BY p.UBSGICTrackingID
+}}}
+
+!3 Rule 2 — ~96% of rows are "untracked"
+
+Only 4% of pages have a TrackingID. Of 84M interaction rows, '''~80M are unattributable'''. The dashboard must make this explicit — e.g. two separate sections.
+
+!3 Rule 3 — viewingcontactid ≠ TNumber
+
+SharePoint-native person ID is a GUID (viewingcontactid), not TNumber. For cross-channel joins with iMEP person data either:
+ * pbi_db_employeecontact as bridge (Q17 hypothesis, not yet validated)
+ * or fall back to sharepoint_bronze.pageviews.user_gpn + iMEP HR bridge
+
+!2 Alternative Path — CTA Clicks
+
+For call-to-action attribution there is a separate schema:
+
+!startuml
+skinparam linetype ortho
+hide circle
+
+entity "pbi_db_ctalabel_intr_fact_gold" as cta {
+  * marketingPageId : FK
+  --
+  ctalabel : string
+  clicks : bigint
+  ..
+  3M rows
+}
+entity "pages" as p {
+  * pageUUID : string <<PK>>
+}
+
+cta }o--|| p : "marketingPageId = pageUUID"
+
+!enduml
+
+Usable for "Which CTA button on which page was clicked how often".
+
+!2 All Paths Lead Through pages
+
+'''None of the Gold metric tables carry GICTrackingID or UBSGICTrackingID directly.''' Deliberate normalization — the TrackingID lives only on the dimension.
+
+{{{
+Any sharepoint_gold.pbi_db_* metric
+              |
+              |  marketingPageId
+              v
+sharepoint_bronze.pages
+              |
+              |  UBSGICTrackingID (if populated)
+              v
+Cross-channel match to imep_bronze.tbl_email.TrackingId (SEG1-4)
+}}}
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointGold.PbiDbInteractionsMetrics
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze.Pages
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.SharePointGoldToPages

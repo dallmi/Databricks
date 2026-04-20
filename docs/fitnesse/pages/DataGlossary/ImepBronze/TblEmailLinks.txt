@@ -1,0 +1,64 @@
+!1 TblEmailLinks ('''imep_bronze.tbl_email_links''')
+
+'''Template URL inventory.''' Which links a mailing template contains. '''Not''' for funnel metrics — use tbl_analytics_link for that. Lean schema (10 columns), static template definition.
+
+!2 Meta
+| '''Layer'''          | Bronze |
+| '''Source system'''  | iMEP (SQL Server) -> CDC -> Delta |
+| '''Grain'''          | 1 row per URL per email template |
+| '''Primary key'''    | Id |
+| '''FK'''             | EmailId -> tbl_email.Id |
+| '''Refresh'''        | 2x/day @ 00:00/12:00 UTC (MERGE) |
+| '''Rows'''           | medium order — several links per mailing × 145K mailings |
+
+!2 Key Columns
+
+| '''Column'''     | '''Type''' | '''Role'''            | '''Notes''' |
+| Id               | string     | PK                    | Unique per template link |
+| EmailId          | string     | FK -> tbl_email.Id    | Which mailing |
+| ElementValueId   | string     |                       | Template element reference |
+| Url              | string     |                       | Plain-text URL |
+| LinkLabel        | string     |                       | Display label of the link |
+
+!2 Distinction: tbl_email_links vs tbl_analytics_link
+
+| | '''tbl_email_links''' | '''tbl_analytics_link''' |
+| '''What''' | Template definition (static) | Event fact (dynamic) |
+| '''Grain''' | Per link per mailing template | Per click/open event |
+| '''Rows''' | Low (~mailings × ~5 links) | '''533M''' |
+| '''For''' | "Which URLs are in mailing X?" | "Who clicked which link when?" |
+
+'''The most common point of confusion.''' Mnemonic: _links = template, analytics_ = fact.
+
+!2 Primary Joins
+
+!3 To tbl_email (N:1) — Mailing context
+
+{{{
+SELECT el.Url, el.LinkLabel, e.TrackingId, e.Title
+FROM   imep_bronze.tbl_email_links el
+JOIN   imep_bronze.tbl_email        e ON e.Id = el.EmailId
+WHERE  e.TrackingId IS NOT NULL
+}}}
+
+!3 To tbl_analytics_link (N:1 via ElementValueId) — Click attribution per link
+
+{{{
+-- Hypothetical — exact join key via ElementValueId to be verified (Q30)
+SELECT el.Url, COUNT(al.Id) AS clicks
+FROM   imep_bronze.tbl_email_links     el
+LEFT JOIN imep_bronze.tbl_analytics_link al ON al.EmailId = el.EmailId
+                                             AND al.LinkTypeEnum = 'CLICK'
+GROUP BY el.Url
+}}}
+
+!2 Quality Caveats
+
+ * '''No direct FK to tbl_analytics_link''': click events reference EmailId and TNumber, but not directly tbl_email_links.Id. Link-specific click attribution has to go via ElementValueId or URL match — '''not yet validated''' (Q30 follow-up).
+ * '''Static schema''': URL does not change after publication. Redirect resolution (e.g. shortlinks) happens externally (newsletter tool) and is not visible here.
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblAnalyticsLink
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze

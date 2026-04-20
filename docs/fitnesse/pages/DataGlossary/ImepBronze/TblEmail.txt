@@ -158,8 +158,8 @@ GROUP BY 1, 2, 3
 
 !2 Cross References
 
-!see .ClarityDashboard.ErDiagrams.ErImepBronze
-!see .ClarityDashboard.JoinStrategy.StrategyContract
-!see .ClarityDashboard.JoinStrategy.ImepBronzeEmailEvents
-!see .ClarityDashboard.DataGlossary.ImepBronze.TblEmailReceiverStatus
-!see .ClarityDashboard.DataGlossary.ImepBronze.TblAnalyticsLink
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.ImepBronzeEmailEvents
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmailReceiverStatus
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblAnalyticsLink

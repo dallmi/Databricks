@@ -1,0 +1,182 @@
+!1 Join Recipe — Cross-Channel via TrackingId (SEG1-4 Match)
+
+The complete cross-channel chain between iMEP (email) and SharePoint (intranet). '''Dimensional''', not factual — must run through tbl_email.TrackingId ↔ sharepoint_bronze.pages.UBSGICTrackingID. Full string match produces almost 0 matches; '''SEG1-4 match is mandatory'''.
+
+'''When to use''': any dashboard view that attributes mailings to page views. Any "Email -> Landing Page" funnel analysis.
+
+!2 The Rule in One Line
+
+{{{
+array_join(slice(split(UPPER(email.TrackingId),        '-'), 1, 4), '-')
+=
+array_join(slice(split(UPPER(pages.UBSGICTrackingID), '-'), 1, 4), '-')
+}}}
+
+'''Why SEG1-4 and not all 5?''' SEG5 encodes system ownership:
+ * iMEP: EMI / NLI / TWE
+ * SharePoint: IAN / ITS / OPN / ANC
+
+Full string match: '''6 out of 1677 matches''' (Jaccard 0.004). SEG1-4 match: 54 attributable packs (Q23/Q24).
+
+!2 The Canonical Cross-Channel Funnel (Pack-Level)
+
+Full SQL you would run in a dashboard — delivers per pack: email sends/opens/clicks '''and''' SharePoint views/visits.
+
+{{{
+WITH
+-- 1. Normalized email pack key
+email_packs AS (
+  SELECT
+      e.Id                                                             AS mailing_id,
+      e.TrackingId,
+      array_join(slice(split(UPPER(e.TrackingId), '-'), 1, 2), '-')    AS tracking_pack_id,
+      array_join(slice(split(UPPER(e.TrackingId), '-'), 1, 4), '-')    AS seg_1_4
+  FROM   imep_bronze.tbl_email e
+  WHERE  e.TrackingId IS NOT NULL
+),
+
+-- 2. Email-side aggregates
+email_side AS (
+  SELECT
+      ep.tracking_pack_id,
+      ep.seg_1_4,
+      COUNT(DISTINCT rs.Id)                                                            AS sends,
+      COUNT(DISTINCT CASE WHEN al.LinkTypeEnum = 'OPEN'  THEN al.TNumber END)          AS unique_opens,
+      COUNT(DISTINCT CASE WHEN al.LinkTypeEnum = 'CLICK' THEN al.TNumber END)          AS unique_clicks
+  FROM   email_packs ep
+  LEFT JOIN imep_bronze.tbl_email_receiver_status rs ON rs.EmailId = ep.mailing_id
+  LEFT JOIN imep_bronze.tbl_analytics_link         al ON al.EmailReceiverStatusId = rs.Id
+                                                      AND al.IsActive = 1
+  GROUP BY ep.tracking_pack_id, ep.seg_1_4
+),
+
+-- 3. Normalized SP pack key
+sp_packs AS (
+  SELECT
+      p.pageUUID,
+      p.UBSGICTrackingID,
+      array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id,
+      array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 4), '-') AS seg_1_4
+  FROM   sharepoint_bronze.pages p
+  WHERE  p.UBSGICTrackingID IS NOT NULL
+),
+
+-- 4. SharePoint-side aggregates
+sp_side AS (
+  SELECT
+      sp.tracking_pack_id,
+      sp.seg_1_4,
+      SUM(m.views)                         AS total_views,
+      SUM(m.visits)                        AS total_visits,
+      SUM(m.durationsum)                   AS total_duration_sec,
+      COUNT(DISTINCT m.viewingcontactid)   AS unique_viewers
+  FROM   sp_packs sp
+  JOIN   sharepoint_gold.pbi_db_interactions_metrics m ON m.marketingPageId = sp.pageUUID
+  WHERE  m.visitdatekey >= '20250101'
+  GROUP BY sp.tracking_pack_id, sp.seg_1_4
+)
+
+-- 5. FULL OUTER JOIN — Packs can be email-only OR page-only
+SELECT
+    COALESCE(e.tracking_pack_id, s.tracking_pack_id) AS tracking_pack_id,
+    e.sends, e.unique_opens, e.unique_clicks,
+    s.total_views, s.total_visits, s.unique_viewers, s.total_duration_sec,
+    CASE
+      WHEN e.tracking_pack_id IS NOT NULL AND s.tracking_pack_id IS NOT NULL THEN 'both'
+      WHEN e.tracking_pack_id IS NOT NULL                                    THEN 'email_only'
+      ELSE                                                                        'sp_only'
+    END                                              AS coverage_status
+
+FROM        email_side e
+FULL OUTER JOIN sp_side s ON s.seg_1_4 = e.seg_1_4
+ORDER BY tracking_pack_id;
+}}}
+
+!2 Variants
+
+!3 Variant A — Only "both" packs (true cross-channel attribution)
+
+If you only want the packs where both channels have data (real funnel possible):
+
+{{{
+-- Same CTEs as above, then:
+SELECT e.tracking_pack_id, e.sends, e.unique_opens, e.unique_clicks,
+       s.total_views, s.unique_viewers
+FROM   email_side e
+INNER JOIN sp_side s ON s.seg_1_4 = e.seg_1_4
+}}}
+
+Expected result size: ~54 packs (Q24).
+
+!3 Variant B — Activity-Level instead of Pack-Level (SEG1-3)
+
+If you want to break it down even finer (per individual activity, not per pack):
+
+{{{
+-- Key becomes SEG1-3 instead of SEG1-2
+array_join(slice(split(UPPER(TrackingId), '-'), 1, 3), '-')
+}}}
+
+!3 Variant C — Surface untracked SP activity as "noise"
+
+{{{
+-- Before the FULL OUTER JOIN, in sp_side:
+SELECT '(untracked)' AS seg_1_4, SUM(views), SUM(visits), ...
+FROM   sharepoint_gold.pbi_db_interactions_metrics m
+LEFT JOIN sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
+WHERE  p.UBSGICTrackingID IS NULL
+
+UNION ALL
+
+-- regular sp_side query
+}}}
+
+Shows "unattributed intranet activity" alongside attributed funnel.
+
+!2 Gotchas
+
+!3 1. UPPER() on both sides is mandatory
+
+Q23 confirms: format is UPPER & clean on both sides. Still apply UPPER() as defensive code — you don't want to lose 90% of your matches over a single lowercase edge case.
+
+!3 2. TRIM() as insurance
+
+Whitespace in tracking IDs is rare, but not ruled out in legacy data:
+
+{{{
+array_join(slice(split(UPPER(TRIM(TrackingId)), '-'), 1, 4), '-')
+}}}
+
+!3 3. SEG1-4, not SEG1-5
+
+'''The most important footgun of the entire project.''' SEG5 belongs to the system (iMEP vs SP), not the activity. Never full-string match.
+
+!3 4. FULL OUTER JOIN, not INNER
+
+Most packs have only email data or only page data. Only ~54 packs are "both". INNER JOIN loses 90%+ of the packs — then the dashboard has only a tiny subset as its basis.
+
+!3 5. Pack grain is SEG1-2 (Cluster + Pack-Number)
+
+When you aggregate at pack level, the key is CLUSTER-PACKNUMBER (e.g. QRREP-0000058). Activity level is SEG1-3 (with date). Dashboard default: '''Pack-Level'''.
+
+!3 6. TrackingId is not a time attribute
+
+TrackingId does contain SEG3 = date (YYMMDD), but that is the activity '''creation''' time, not the send/view time. For temporal filters use rs.DateTime / m.visitdatekey.
+
+!3 7. Pre-2025 coverage is thin
+
+Default time filter from 2025-01-01 for iMEP, 20250101 for SP. Before 2025, TrackingId adoption is < 20% — funnel numbers become unreliable.
+
+!2 Expected Magnitudes (Q24/Q25)
+
+Based on the coverage findings:
+ * Email packs with TrackingId (from 2025): ~54
+ * SP packs with TrackingId (from 2024-09): ~83 (all on the single site "News and events")
+ * '''Overlap''': ~54 packs — the cross-channel dashboard universe.
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErCrossChannel
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze.Pages

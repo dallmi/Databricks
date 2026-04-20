@@ -1,0 +1,49 @@
+!1 TblHrUser ('''imep_bronze.tbl_hr_user''')
+
+Additional employee metadata — primarily '''Town'''. Carries '''UbsId''' as the '''UPPERCASE''' variant of the T-Number. Only join if you need Town or similar — for Region/Division, tbl_hr_employee + tbl_hr_costcenter are sufficient.
+
+!2 Meta
+| '''Layer'''          | Bronze (HR domain) |
+| '''Source system'''  | HR system -> CDC -> Delta |
+| '''Grain'''          | 1 row per employee |
+| '''Primary key'''    | UbsId |
+| '''Refresh'''        | 2x/day (MERGE) |
+| '''PII'''            | Directly identifying (UbsId + Town) |
+
+!2 Key Columns
+
+| '''Column'''   | '''Type''' | '''Role''' | '''Notes''' |
+| UbsId          | string     | PK         | '''UPPERCASE''' T###### (e.g. T100200) — case difference vs. T_NUMBER! |
+| Town           | string     |            | Office location (e.g. Zurich, Wollerau) |
+
+Additional columns exist (Emergency Contact, etc.) — irrelevant for analytics.
+
+!2 Sample Row
+
+{{{
+UbsId = "T100200"
+Town  = "Zurich"
+}}}
+
+!2 Primary Joins
+
+!3 tbl_hr_employee (case normalization!)
+
+{{{
+SELECT hr.T_NUMBER, u.UbsId, u.Town
+FROM   imep_bronze.tbl_hr_employee hr
+JOIN   imep_bronze.tbl_hr_user      u ON LOWER(u.UbsId) = LOWER(hr.T_NUMBER)
+}}}
+
+'''Important''': apply LOWER() on both sides. T_NUMBER is lowercase (t100200), UbsId is UPPERCASE (T100200) — direct comparison returns 0 matches.
+
+!2 Quality Caveats
+
+ * '''Case inconsistency between UbsId and T_NUMBER''' — the most common HR footgun. Always apply LOWER().
+ * '''Subset of tbl_hr_employee''' — tbl_hr_user typically contains fewer or equal rows than tbl_hr_employee. Someone in tbl_hr_employee is not necessarily in tbl_hr_user.
+ * '''Town is a free-form string''' — maintain a dedup/mapping table for location aggregation.
+
+!2 Cross References
+
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrEmployee
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment
