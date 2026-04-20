@@ -1,0 +1,165 @@
+!1 TblEmail ('''imep_bronze.tbl_email''')
+
+The master table for all iMEP mailings. Single source of the '''TrackingId''' per mailing — every downstream engagement table (receiver_status, analytics_link, email_links) references back via EmailId = Id. Cross-channel analyses start here.
+
+!2 Meta
+| '''Layer'''         | Bronze                                                            |
+| '''Source system''' | iMEP (SQL Server) -> CDC -> Delta                                 |
+| '''Grain'''         | 1 row per Mailing (template definition, not per recipient)        |
+| '''Primary key'''   | Id                                                                |
+| '''Cross-channel''' | TrackingId (32-char, 5 segments)                                  |
+| '''Refresh'''       | 2x/day @ 00:00 + 12:00 UTC (MERGE full-table upsert, Service Principal) |
+| '''Rows'''          | ~145K (Nov 2020 - Apr 2026)                                       |
+| '''PII'''           | CreatedBy = TNumber of author, indirectly identifying              |
+
+!2 Neighborhood Diagram
+
+!startuml
+skinparam linetype ortho
+hide circle
+
+entity "tbl_email" as email {
+  * Id : string <<PK>>
+  --
+  TrackingId : string
+  Title : string
+  Subject : string
+  CreatedBy : FK
+  CreationDate : timestamp
+}
+
+entity "tbl_email_receiver_status" as rs {
+  * Id : string <<PK>>
+  --
+  EmailId : FK
+  TNumber : FK
+  Receiver : string
+  Status : int
+  LogStatus : string
+  DateTime : timestamp
+}
+
+entity "tbl_analytics_link" as al {
+  * Id : string <<PK>>
+  --
+  EmailId : FK
+  EmailReceiverStatusId : FK
+  TNumber : FK
+  LinkTypeEnum : string
+  Agent : string
+  IsActive : int
+  CreationDate : timestamp
+}
+
+entity "tbl_email_links" as links {
+  * Id : string <<PK>>
+  --
+  EmailId : FK
+  Url : string
+  LinkLabel : string
+}
+
+entity "tbl_hr_employee" as hr {
+  * T_NUMBER : string <<PK>>
+  --
+  WORKER_ID : string
+  ORGANIZATIONAL_UNIT : string
+}
+
+email ||--o{ rs    : "Id = EmailId"
+email ||--o{ al    : "Id = EmailId"
+email ||--o{ links : "Id = EmailId (template)"
+email }o--|| hr    : "CreatedBy = T_NUMBER"
+rs    ||--o{ al    : "Id = EmailReceiverStatusId"
+
+!enduml
+
+!2 Key Columns
+| '''Column'''    | '''Type'''  | '''Role'''            | '''Notes''' |
+| Id              | string      | PK                    | GUID, join target for all iMEP children |
+| TrackingId      | string      | Cross-channel join    | CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL, UPPER & clean, 32 chars. Only 1.3% populated. |
+| Title           | string      | Description           | Internal name, not the subject line |
+| Subject         | string      | Description           | Email subject visible to recipient |
+| CreatedBy       | string      | FK -> tbl_hr_employee | TNumber lowercase ('t100200'), NOT GPN |
+| CreationDate    | timestamp   | Temporal              | Template creation time, NOT send time |
+
+Full schema: run !- DESCRIBE imep_bronze.tbl_email -! in Databricks.
+
+!2 Sample Row
+{{{
+Id            = "0a3f6c2e-..."
+TrackingId    = "QRREP-0000058-240709-0000060-EMI"
+Title         = "Q2 Investor Update — DE"
+Subject       = "Ihr Quartalsbericht zum Q2 2024"
+CreatedBy     = "t100200"
+CreationDate  = 2024-07-08 14:22:31
+}}}
+
+!2 Primary Joins
+
+!3 Join to tbl_email_receiver_status (1:N) — Sends / Bounces
+{{{
+SELECT e.TrackingId, rs.TNumber, rs.DateTime, rs.LogStatus
+FROM   imep_bronze.tbl_email e
+JOIN   imep_bronze.tbl_email_receiver_status rs ON rs.EmailId = e.Id
+WHERE  e.TrackingId IS NOT NULL
+}}}
+
+!3 Join to tbl_analytics_link (1:N) — Opens / Clicks
+{{{
+SELECT e.TrackingId, al.TNumber, al.LinkTypeEnum, al.CreationDate AS event_time
+FROM   imep_bronze.tbl_email e
+JOIN   imep_bronze.tbl_analytics_link al ON al.EmailId = e.Id
+WHERE  al.IsActive = 1
+}}}
+
+!3 Join to imep_gold.tbl_pbi_platform_mailings (1:1) — Pre-aggregated Master
+Same Id, enriched with content metrics. Consumption-ready table.
+
+!2 Quality Caveats
+
+ * '''TrackingId NULL-rate''': Not every mailing is tracked. For cross-channel attribution set !- WHERE TrackingId IS NOT NULL -!. Only 986/73,930 mailings (1.3%) have TrackingId, but adoption ramping up fast (2024: 99, 2025: 637, 2026 YTD: 250).
+ * '''TrackingId format''': Always 32 chars, 5 segments separated by '-', UPPER. SEG5 encodes system ownership, not medium — for cross-channel match use SEG1-4 only.
+ * '''Cross-channel path''': TrackingId is a '''dimension''', not a fact key — never co-occurs with EmailId in the same table. Cross-channel goes via tbl_email.TrackingId <-> sharepoint_bronze.pages.UBSGICTrackingID, NOT via engagement rows.
+ * '''CreationDate != send time''': For actual send time, use tbl_email_receiver_status.DateTime.
+ * '''CreatedBy format''': lowercase 't######'. Joins against tbl_hr_user.UbsId need LOWER(UbsId).
+
+!2 Lineage (Bronze -> Gold; No Silver for Email!)
+
+Email engagement skips the silver layer entirely. iMEP has confirmed this as an architectural choice (Q26). imep_silver exists only for events (invitation, eventregistration, event), not email.
+
+!startuml
+skinparam linetype ortho
+rectangle "imep_bronze.tbl_email" as bronze
+rectangle "imep_gold.tbl_pbi_platform_mailings\n(master, 1:1 to bronze.Id)" as master
+rectangle "imep_gold.final\n(denormalized, ~520M rows,\nCTAS 2x/day)" as final
+rectangle "imep_gold.<tier-3 engagement>\n(aggregates per Mailing x Region/Division)" as tier3
+
+bronze --> master : "CTAS 2x/day"
+bronze --> final : "denormalized join\nwith receiver_status + analytics_link"
+master --> tier3 : "join via lowercase mailingid"
+!enduml
+
+!2 Bronze -> Silver -> Gold Transformation Rule
+
+Build pack-level dimension from tbl_email (for silver.dim_pack or ad-hoc queries):
+
+{{{
+SELECT
+  SPLIT(TrackingId, '-')[0] AS cluster,
+  SPLIT(TrackingId, '-')[1] AS pack_number,
+  CONCAT(SPLIT(TrackingId, '-')[0], '-', SPLIT(TrackingId, '-')[1]) AS tracking_pack_id,
+  MIN(CreationDate) AS pack_created_at,
+  COUNT(DISTINCT Id) AS mailing_count
+FROM imep_bronze.tbl_email
+WHERE TrackingId IS NOT NULL
+GROUP BY 1, 2, 3
+}}}
+
+!2 Cross References
+
+!see .CrossChannelAnalytics.ErDiagrams.ErImepBronze
+!see .CrossChannelAnalytics.JoinStrategy.StrategyContract
+!see .CrossChannelAnalytics.JoinStrategy.ImepBronzeEmailEvents
+!see .CrossChannelAnalytics.DataGlossary.ImepBronze.TblEmailReceiverStatus
+!see .CrossChannelAnalytics.DataGlossary.ImepBronze.TblAnalyticsLink

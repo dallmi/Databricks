@@ -1,0 +1,158 @@
+!1 ER Diagram — iMEP Bronze Layer
+
+Complete bronze topology for iMEP (email engagement + HR linkage). This is the source-of-truth view of how the raw tables relate. All downstream gold consumption (imep_gold.final, tier-3 aggregates) derives from these tables.
+
+!2 Full Bronze Topology
+
+!startuml
+skinparam linetype ortho
+hide circle
+
+entity "tbl_email" as email {
+  * Id : string <<PK>>
+  --
+  TrackingId : string
+  Title : string
+  Subject : string
+  CreatedBy : FK
+  CreationDate : timestamp
+  ..
+  145K rows
+}
+
+entity "tbl_email_receiver_status" as rs {
+  * Id : string <<PK>>
+  --
+  EmailId : FK
+  TNumber : FK
+  Receiver : string
+  LogStatus : string
+  EmailLanguage : string
+  DateTime : timestamp
+  ..
+  '''293M rows — HUB #1'''
+}
+
+entity "tbl_analytics_link" as al {
+  * Id : string <<PK>>
+  --
+  EmailId : FK
+  EmailReceiverStatusId : FK
+  TNumber : FK
+  Agent : string
+  LinkTypeEnum : string
+  CurrentLanguage : string
+  IsActive : int
+  CreationDate : timestamp
+  ..
+  '''533M rows — HUB #2'''
+}
+
+entity "tbl_email_links" as links {
+  * Id : string <<PK>>
+  --
+  EmailId : FK
+  ElementValueId : string
+  Url : string
+  LinkLabel : string
+}
+
+entity "tbl_email_components" as comp {
+  * Id : string <<PK>>
+  --
+  EmailId : FK
+  ..
+  3.3M rows
+}
+
+entity "tbl_email_template_images" as img {
+  * Id : string <<PK>>
+  --
+  EmailId : FK
+  ..
+  1.7M rows
+}
+
+entity "tbl_event" as event {
+  * Id : string <<PK>>
+  --
+  TrackingId : string
+  Title : string
+  EventDate : timestamp
+  ..
+  100K rows
+}
+
+entity "tbl_hr_employee" as hr {
+  * T_NUMBER : string <<PK>>
+  --
+  WORKER_ID : string
+  ALTERNATE_WORKER_ID : string
+  ORGANIZATIONAL_UNIT : FK
+  ..
+  265K rows
+}
+
+entity "tbl_hr_costcenter" as cc {
+  * ORGANIZATIONAL_UNIT : string <<PK>>
+  --
+  DIVISION : string
+  AREA : string
+  REGION : string
+  COUNTRY : string
+}
+
+entity "tbl_hr_user" as user {
+  * UbsId : string <<PK>>
+  --
+  Town : string
+}
+
+email ||--o{ rs    : "Id = EmailId"
+email ||--o{ al    : "Id = EmailId"
+email ||--o{ links : "Id = EmailId (template)"
+email ||--o{ comp  : "Id = EmailId"
+email ||--o{ img   : "Id = EmailId"
+rs    ||--o{ al    : "Id = EmailReceiverStatusId"
+rs    }o--|| hr    : "TNumber = T_NUMBER"
+al    }o--|| hr    : "TNumber = T_NUMBER"
+hr    }o--|| cc    : "ORGANIZATIONAL_UNIT"
+hr    }o--|| user  : "LOWER(T_NUMBER) = LOWER(UbsId)"
+
+!enduml
+
+!2 Volumes & Refresh Cadence
+
+| '''Table'''                        | '''Rows'''  | '''Refresh'''              | '''Pattern'''                   |
+| tbl_email_receiver_status          | '''293M''' | 2x/day @ 00:00/12:00 UTC   | MERGE full-table upsert         |
+| tbl_analytics_link                 | '''533M''' | 2x/day @ 00:00/12:00 UTC   | MERGE '''incremental''' (3.7-8.5K/run) |
+| tbl_email                          | 145K       | 2x/day @ 00:00/12:00 UTC   | MERGE full-table upsert         |
+| tbl_hr_employee                    | 265K       | 2x/day                     | MERGE full-table upsert         |
+| tbl_email_components               | 3.3M       | 2x/day                     | MERGE                           |
+| tbl_email_template_images          | 1.7M       | 2x/day                     | MERGE                           |
+| tbl_event                          | 100K       | 2x/day                     | MERGE                           |
+
+!2 Three Join Patterns in This Domain
+
+!3 1. Mailing-centric (starts from tbl_email)
+For "what happened to mailing X?". See !see .CrossChannelAnalytics.JoinStrategy.ImepBronzeEmailEvents.
+
+!3 2. Person-centric (starts from tbl_hr_employee)
+For "which engagement events did person X have?". Only possible via the two hub tables (tbl_email_receiver_status, tbl_analytics_link). '''SharePoint side has no equivalent person key.'''
+
+!3 3. HR enrichment (from any TNumber-bearing table)
+For "enrich my engagement fact with Region/Division". See !see .CrossChannelAnalytics.JoinStrategy.HrEnrichment.
+
+!2 Key Observations
+
+ * '''Two full-key hubs''': Only tbl_email_receiver_status and tbl_analytics_link carry Id + EmailId + TNumber simultaneously. These are the only tables with '''person-level engagement granularity'''.
+ * '''TrackingId scope''': In Bronze only on tbl_email and tbl_event. '''Never''' on engagement tables — always fetch via tbl_email.Id = EmailId.
+ * '''tbl_email_links vs tbl_analytics_link''': Don't confuse. tbl_email_links = template URL inventory (static). tbl_analytics_link = event fact table (open/click). Most common mistake.
+ * '''HR join chain''': engagement-table -> tbl_hr_employee -> tbl_hr_costcenter (via ORGANIZATIONAL_UNIT). tbl_hr_user adds Town only; not needed for Region/Division.
+
+!2 Cross References
+
+!see .CrossChannelAnalytics.DataGlossary.ImepBronze.TblEmail
+!see .CrossChannelAnalytics.DataGlossary.ImepBronze.TblEmailReceiverStatus
+!see .CrossChannelAnalytics.DataGlossary.ImepBronze.TblAnalyticsLink
+!see .CrossChannelAnalytics.JoinStrategy.StrategyContract
