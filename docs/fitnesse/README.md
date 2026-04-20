@@ -6,6 +6,21 @@
 
 ## POC — What is here
 
+## Local HTML preview (verify before upload)
+
+Before pushing anything to the corporate wiki, render the pages locally to catch formatting issues, broken PlantUML, or bad cross-references:
+
+```bash
+python3 scripts/fitnesse_preview_build.py
+open docs/fitnesse/preview/index.html
+```
+
+Generates one HTML file per page plus a sidebar navigation that mirrors the target FitNesse hierarchy. PlantUML diagrams render via the public PlantUML server (`plantuml.com/plantuml/svg/...`) so your local machine needs internet but no Java/plantuml.jar install. The corp machine never runs this — only your local verification workflow.
+
+Output is gitignored under `docs/fitnesse/preview/`. Re-run the script after every edit to refresh.
+
+---
+
 ## Automated upload (recommended)
 
 A Python script uploads all pages + containers in one run:
