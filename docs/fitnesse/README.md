@@ -11,18 +11,27 @@
 A Python script uploads all pages + containers in one run:
 
 ```bash
+# Set your FitNesse location once — the script never ships internal URLs
+export FITNESSE_URL=http://<fitnesse-host>:<port>
+export FITNESSE_PARENT_PATH=FrontPage.<Your.Parent.Path>
+
 # Dry run — prints the plan without touching FitNesse
 python3 scripts/fitnesse_upload.py --dry-run
 
-# Live upload (requires network access to the FitNesse instance)
+# Live upload
 python3 scripts/fitnesse_upload.py
+```
 
-# Override defaults when the FitNesse endpoint differs
+Or pass everything inline (handy for one-off runs):
+
+```bash
 python3 scripts/fitnesse_upload.py \
-  --base-url http://<fitnesse-host>:8200 \
-  --parent-path FrontPage.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard \
+  --base-url http://<fitnesse-host>:<port> \
+  --parent-path FrontPage.<Your.Parent.Path> \
   --root-name MultiChannelDataModel
 ```
+
+**The script does not bake in the FitNesse URL** — internal infrastructure details stay out of the repo. Set `FITNESSE_URL` and `FITNESSE_PARENT_PATH` in your shell profile (e.g. `~/.zshrc` or a local `.env` that's gitignored) and the script picks them up automatically.
 
 Uses only Python stdlib (no `pip install` needed). 30 pages upload in ~15 seconds. Anonymous HTTP POST — no auth required inside the corp network.
 

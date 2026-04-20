@@ -8,19 +8,25 @@ external dependencies. Ships a --dry-run mode that prints the plan without
 touching FitNesse.
 
 Usage:
+    # Provide the FitNesse URL via --base-url or FITNESSE_URL env var
+    export FITNESSE_URL=http://<fitnesse-host>:<port>
     python3 scripts/fitnesse_upload.py --dry-run
     python3 scripts/fitnesse_upload.py
 
-Override defaults when the corp FitNesse sits somewhere else:
+Override other defaults as needed:
     python3 scripts/fitnesse_upload.py \\
-        --base-url http://<fitnesse-host>:8200 \\
-        --parent-path FrontPage.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard \\
+        --base-url http://<fitnesse-host>:<port> \\
+        --parent-path <FrontPage.Parent.Path> \\
         --root-name MultiChannelDataModel
+
+The base URL is intentionally not baked into the source file to keep
+internal infrastructure out of the public repo.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 import urllib.parse
@@ -28,9 +34,9 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-DEFAULT_BASE_URL = "http://<fitnesse-host>:8200"
-DEFAULT_PARENT_PATH = "FrontPage.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard"
-DEFAULT_ROOT_NAME = "MultiChannelDataModel"
+DEFAULT_BASE_URL = os.environ.get("FITNESSE_URL", "")
+DEFAULT_PARENT_PATH = os.environ.get("FITNESSE_PARENT_PATH", "")
+DEFAULT_ROOT_NAME = os.environ.get("FITNESSE_ROOT_NAME", "MultiChannelDataModel")
 
 # Order of upload — containers first (so !see links resolve as we add leaves).
 # Empty-content items get a minimal description; leaves read from disk.
@@ -133,9 +139,10 @@ def read_content(pages_dir: Path, source: str | None, sub_path: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Upload Cross-Channel KB to FitNesse.")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL,
+                        help="FitNesse base URL, e.g. http://host:port. Defaults to $FITNESSE_URL.")
     parser.add_argument("--parent-path", default=DEFAULT_PARENT_PATH,
-                        help="Dotted FitNesse path of the existing parent page.")
+                        help="Dotted FitNesse path of the existing parent page. Defaults to $FITNESSE_PARENT_PATH.")
     parser.add_argument("--root-name", default=DEFAULT_ROOT_NAME,
                         help="Name of the root page that will be created under parent-path.")
     parser.add_argument("--pages-dir", default="docs/fitnesse/pages",
@@ -147,6 +154,13 @@ def main() -> int:
     parser.add_argument("--stop-on-error", action="store_true",
                         help="Abort on the first HTTP error (default: continue).")
     args = parser.parse_args()
+
+    if not args.base_url:
+        print("ERROR: --base-url not provided (and FITNESSE_URL env var is empty).", file=sys.stderr)
+        return 2
+    if not args.parent_path:
+        print("ERROR: --parent-path not provided (and FITNESSE_PARENT_PATH env var is empty).", file=sys.stderr)
+        return 2
 
     pages_dir = Path(args.pages_dir)
     if not pages_dir.is_dir():
