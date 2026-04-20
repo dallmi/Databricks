@@ -16,11 +16,11 @@ Unified Bronze -> (Silver) -> Gold data paths for iMEP (Email) and SharePoint (I
 Each domain has a dedicated container page with per-table cards (schema, sample rows, joins, quality caveats).
 
 | '''Section''' | '''Scope''' | '''Link''' |
-| HR | Employee master + cost-center dimension (shared across iMEP and SharePoint) | !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr |
-| iMEP Bronze | Email mailings, send events, open/click events, template inventory, event master | !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze |
-| iMEP Gold | Denormalized email fact ('''final''', 520M) plus tier-1/2/3 aggregates | !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepGold |
-| SharePoint Bronze | Page inventory (with TrackingID) + raw page-view / custom-event interaction streams | !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze |
-| SharePoint Gold | Master interaction fact ('''pbi_db_interactions_metrics''', 84M) + specialized grain tables | !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointGold |
+| HR | Employee master + cost-center dimension (shared across iMEP and SharePoint) | [[open][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr]] |
+| iMEP Bronze | Email mailings, send events, open/click events, template inventory, event master | [[open][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze]] |
+| iMEP Gold | Denormalized email fact ('''final''', 520M) plus tier-1/2/3 aggregates | [[open][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepGold]] |
+| SharePoint Bronze | Page inventory (with TrackingID) + raw page-view / custom-event interaction streams | [[open][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze]] |
+| SharePoint Gold | Master interaction fact ('''pbi_db_interactions_metrics''', 84M) + specialized grain tables | [[open][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointGold]] |
 
 !3 2.2 Key terms
 

@@ -80,22 +80,25 @@ PLAN: list[tuple[str, str | None]] = [
     ("DataGlossary.SharePointGold.PbiDbInteractionsMetrics", "DataGlossary/SharePointGold/PbiDbInteractionsMetrics.txt"),
 ]
 
-CONTAINER_STUB = """!1 {name}
-
-Container page grouping the {name} section of the MultiChannelDataModel knowledge base.
+CONTAINER_STUB = """!1 !-{name}-!
 
 {subsection_hint}
+
+!contents -R1
 """
 
+# Hints deliberately avoid CamelCase WikiWords (SharePoint, MultiChannelDataModel, TblHrEmployee, …)
+# because FitNesse auto-links every WikiWord and shows [?] when the page is not in the
+# current scope. Schema names like imep_bronze / sharepoint_gold are snake_case and safe.
 SUBSECTION_HINT = {
-    "DataGlossary":            "See subfolders !see .ImepBronze, !see .ImepGold, !see .SharePointBronze, !see .SharePointGold, !see .Hr for per-domain table cards.",
-    "Diagrams":              "Five domain-scoped entity-relationship diagrams covering iMEP Bronze, iMEP Gold, SharePoint Bronze, SharePoint Gold, and the Cross-Channel bridge.",
-    "JoinStrategy":            "Start with !see .StrategyContract for the five hard rules, then consult the canonical recipes for iMEP Bronze, SharePoint Gold, HR enrichment, and cross-channel joins.",
-    "DataGlossary.ImepBronze": "iMEP bronze tables: TblEmail, TblEmailReceiverStatus, TblAnalyticsLink, TblEmailLinks, TblEvent.",
-    "DataGlossary.ImepGold":   "iMEP gold tables: Final (520M consumption endpoint) plus tier-1/2/3 aggregates.",
-    "DataGlossary.SharePointBronze": "SharePoint bronze tables: Pages (cross-channel dimension), Pageviews, Customevents.",
-    "DataGlossary.SharePointGold":   "SharePoint gold metrics: PbiDbInteractionsMetrics (84M master fact) plus specialized grain-specific tables.",
-    "DataGlossary.Hr":               "HR dimension tables: TblHrEmployee (master + GPN bridge), TblHrCostcenter (Region/Division), TblHrUser (UbsId).",
+    "DataGlossary":            "Per-domain table cards (imep_bronze, imep_gold, sharepoint_bronze, sharepoint_gold, and HR). Sub-folders listed below.",
+    "Diagrams":                "Five domain-scoped entity-relationship diagrams plus the cross-channel bridge. Listed below.",
+    "JoinStrategy":            "Canonical join recipes. Start with the Strategy Contract for the five hard rules, then pick the recipe that matches the query. Listed below.",
+    "DataGlossary.ImepBronze": "Tables in the imep_bronze schema: email master, send/open/click events, template inventory, event master. Listed below.",
+    "DataGlossary.ImepGold":   "Tables in the imep_gold schema: the 520M-row consumption endpoint plus tier-1/2/3 aggregates. Listed below.",
+    "DataGlossary.SharePointBronze": "Tables in the sharepoint_bronze schema: page inventory (with TrackingID), page-views, custom events. Listed below.",
+    "DataGlossary.SharePointGold":   "Tables in the sharepoint_gold schema: the 84M-row master interaction fact plus specialized grain tables. Listed below.",
+    "DataGlossary.Hr":               "HR dimension tables: employee master (with GPN bridge), cost-center (Region/Division), and the UbsId variant. Listed below.",
 }
 
 
