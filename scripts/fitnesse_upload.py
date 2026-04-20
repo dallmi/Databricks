@@ -38,6 +38,11 @@ DEFAULT_BASE_URL = os.environ.get("FITNESSE_URL", "")
 DEFAULT_PARENT_PATH = os.environ.get("FITNESSE_PARENT_PATH", "")
 DEFAULT_ROOT_NAME = os.environ.get("FITNESSE_ROOT_NAME", "MultiChannelDataModel")
 
+# Resolve the pages directory relative to the script itself, not the CWD,
+# so the script works from any working directory.
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_PAGES_DIR = SCRIPT_DIR.parent / "docs" / "fitnesse" / "pages"
+
 # Order of upload — containers first (so !see links resolve as we add leaves).
 # Empty-content items get a minimal description; leaves read from disk.
 PLAN: list[tuple[str, str | None]] = [
@@ -145,15 +150,41 @@ def main() -> int:
                         help="Dotted FitNesse path of the existing parent page. Defaults to $FITNESSE_PARENT_PATH.")
     parser.add_argument("--root-name", default=DEFAULT_ROOT_NAME,
                         help="Name of the root page that will be created under parent-path.")
-    parser.add_argument("--pages-dir", default="docs/fitnesse/pages",
-                        help="Local directory holding the .txt source files.")
+    parser.add_argument("--pages-dir", default=str(DEFAULT_PAGES_DIR),
+                        help=f"Local directory holding the .txt source files "
+                             f"(default: {DEFAULT_PAGES_DIR}).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print the plan without sending any POSTs.")
     parser.add_argument("--delay", type=float, default=0.3,
                         help="Seconds to sleep between requests (default: 0.3).")
     parser.add_argument("--stop-on-error", action="store_true",
                         help="Abort on the first HTTP error (default: continue).")
+    parser.add_argument("--only", action="append", default=[], metavar="SUB_PATH",
+                        help=("Upload only entries whose sub-path matches exactly. "
+                              "Repeatable. Use '.' for the root page (Overview). "
+                              "Example: --only DataGlossary.ImepGold.Final"))
+    parser.add_argument("--list", action="store_true",
+                        help="Print all available sub-paths and exit (useful with --only).")
     args = parser.parse_args()
+
+    if args.list:
+        print("Available sub-paths (use with --only; '.' = root/Overview):")
+        for sub, source in PLAN:
+            label = sub if sub else "."
+            kind = "content" if source else "container"
+            print(f"  {label:<58} ({kind})")
+        return 0
+
+    plan = PLAN
+    if args.only:
+        wanted = {"" if o == "." else o for o in args.only}
+        known = {sub for sub, _ in PLAN}
+        unknown = wanted - known
+        if unknown:
+            print(f"ERROR: unknown sub-path(s): {sorted(unknown)}", file=sys.stderr)
+            print("       run with --list to see all available sub-paths.", file=sys.stderr)
+            return 2
+        plan = [(sub, src) for sub, src in PLAN if sub in wanted]
 
     if not args.base_url:
         print("ERROR: --base-url not provided (and FITNESSE_URL env var is empty).", file=sys.stderr)
@@ -167,15 +198,17 @@ def main() -> int:
         print(f"ERROR: pages directory not found: {pages_dir}", file=sys.stderr)
         return 2
 
-    total = len(PLAN)
-    print(f"Plan: {total} pages under {args.parent_path}.{args.root_name}")
+    total = len(plan)
+    print(f"Plan: {total} page{'s' if total != 1 else ''} under {args.parent_path}.{args.root_name}")
     print(f"Base URL: {args.base_url}")
     print(f"Source:   {pages_dir.resolve()}")
     print(f"Mode:     {'DRY RUN' if args.dry_run else 'LIVE UPLOAD'}")
+    if args.only:
+        print(f"Filter:   --only {', '.join(args.only)}")
     print()
 
     ok, failed = 0, 0
-    for idx, (sub, source) in enumerate(PLAN, start=1):
+    for idx, (sub, source) in enumerate(plan, start=1):
         page_path = build_fitnesse_path(args.parent_path, args.root_name, sub)
         url = build_url(args.base_url, page_path)
         try:
