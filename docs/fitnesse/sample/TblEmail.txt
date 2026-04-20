@@ -89,8 +89,8 @@ Full schema: run !- DESCRIBE imep_bronze.tbl_email -! in Databricks.
 {{{
 Id            = "0a3f6c2e-..."
 TrackingId    = "QRREP-0000058-240709-0000060-EMI"
-Title         = "Q2 Investor Update — DE"
-Subject       = "Ihr Quartalsbericht zum Q2 2024"
+Title         = "Q2 Investor Update - DE"
+Subject       = "Your quarterly report for Q2 2024"
 CreatedBy     = "t100200"
 CreationDate  = 2024-07-08 14:22:31
 }}}
@@ -158,8 +158,8 @@ GROUP BY 1, 2, 3
 
 !2 Cross References
 
-!see .CrossChannelAnalytics.ErDiagrams.ErImepBronze
-!see .CrossChannelAnalytics.JoinStrategy.StrategyContract
-!see .CrossChannelAnalytics.JoinStrategy.ImepBronzeEmailEvents
-!see .CrossChannelAnalytics.DataGlossary.ImepBronze.TblEmailReceiverStatus
-!see .CrossChannelAnalytics.DataGlossary.ImepBronze.TblAnalyticsLink
+!see .ClarityDashboard.ErDiagrams.ErImepBronze
+!see .ClarityDashboard.JoinStrategy.StrategyContract
+!see .ClarityDashboard.JoinStrategy.ImepBronzeEmailEvents
+!see .ClarityDashboard.DataGlossary.ImepBronze.TblEmailReceiverStatus
+!see .ClarityDashboard.DataGlossary.ImepBronze.TblAnalyticsLink

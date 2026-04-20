@@ -1,28 +1,28 @@
 # FitNesse Integration — Proof of Concept
 
-> **Zweck**: Die Git-basierte Knowledge Base (`docs/tables/`, `docs/diagrams/`, `docs/joins/`) in FitNesse spiegeln, damit das Team im Corporate-Wiki navigieren kann. Dieses Verzeichnis enthält **Copy-paste-fertige Wiki-Pages** für FitNesse.
+> **Purpose**: Mirror the Git-based knowledge base (`docs/tables/`, `docs/diagrams/`, `docs/joins/`) into FitNesse so the team can navigate it in the corporate wiki. This directory contains **copy-paste-ready wiki pages** for FitNesse.
 
 ---
 
-## POC — Was hier liegt
+## POC — What is here
 
-Zwei Beispiel-Pages, die direkt in FitNesse einfügbar sind:
+Two sample pages that can be pasted directly into FitNesse:
 
-| File | FitNesse-Page-Name | Zweck |
+| File | FitNesse page name | Purpose |
 |---|---|---|
-| [sample/TblEmail.txt](sample/TblEmail.txt) | `.CrossChannelAnalytics.DataGlossary.ImepBronze.TblEmail` | Data-Glossary-Eintrag für eine Tabelle |
-| [sample/ErImepBronze.txt](sample/ErImepBronze.txt) | `.CrossChannelAnalytics.ErDiagrams.ErImepBronze` | ER-Diagramm via PlantUML |
+| [sample/TblEmail.txt](sample/TblEmail.txt) | `.ClarityDashboard.DataGlossary.ImepBronze.TblEmail` | Data-glossary entry for a table |
+| [sample/ErImepBronze.txt](sample/ErImepBronze.txt) | `.ClarityDashboard.ErDiagrams.ErImepBronze` | ER diagram via PlantUML |
 
-**So copy-pastest du**:
-1. In FitNesse eine neue Page anlegen (nach der Hierarchy unten)
-2. Inhalt der `.txt`-Datei in den Edit-Mode kopieren
-3. Save → FitNesse rendert das PlantUML + die Tabellen automatisch
+**How to copy-paste**:
+1. Create a new page in FitNesse (following the hierarchy below)
+2. Copy the content of the `.txt` file into edit mode
+3. Save -> FitNesse automatically renders the PlantUML and tables
 
 ---
 
-## Voraussetzung — FitNesse PlantUML-Plugin
+## Prerequisite — FitNesse PlantUML plugin
 
-Damit `!startuml / !enduml`-Blöcke gerendert werden, braucht deine FitNesse-Instanz das **PlantUML-Plugin**. Prüfe mit dieser Test-Page:
+For `!startuml / !enduml` blocks to render, your FitNesse instance needs the **PlantUML plugin**. Check with this test page:
 
 ```
 !1 PlantUML Test
@@ -33,19 +33,21 @@ entity Test {
 !enduml
 ```
 
-- **Rendert als Diagramm** → Plugin aktiv, wir können loslegen
-- **Zeigt Rohtext** → Plugin fehlt, IT ansprechen (PlantUML ist bei FitNesse-Enterprise-Setups Standard)
+- **Renders as a diagram** -> plugin active, we can proceed
+- **Shows raw text** -> plugin missing, contact IT (PlantUML is standard in FitNesse enterprise setups)
 
 ---
 
-## Vorgeschlagene FitNesse-Hierarchie
+## Suggested FitNesse hierarchy
+
+Root: **`.ClarityDashboard`** — a new top-level WikiWord under which the entire Cross-Channel KB lives. Sits parallel to the existing `.EmployeeEngagement` branch; keeps our tree clean and navigable without mixing into the broader Marketing-Ecosystem hierarchy.
 
 ```
-.CrossChannelAnalytics
-├── .Overview                         [Landing page, analog zu knowledge_base.md]
+.ClarityDashboard
+├── .Overview                         [Landing page, analogous to knowledge_base.md]
 ├── .DataGlossary
 │   ├── .ImepBronze
-│   │   ├── .TblEmail                 [← unsere POC-Page]
+│   │   ├── .TblEmail                 [<- our POC page]
 │   │   ├── .TblEmailReceiverStatus
 │   │   ├── .TblAnalyticsLink
 │   │   ├── .TblEmailLinks
@@ -64,7 +66,7 @@ entity Test {
 │       ├── .TblHrCostcenter
 │       └── .TblHrUser
 ├── .ErDiagrams
-│   ├── .ErImepBronze                 [← unsere POC-Page]
+│   ├── .ErImepBronze                 [<- our POC page]
 │   ├── .ErSharePointBronze
 │   ├── .ErImepGold
 │   ├── .ErSharePointGold
@@ -77,53 +79,53 @@ entity Test {
     └── .CrossChannelViaTrackingId
 ```
 
-FitNesse-Convention: Page-Namen sind **CamelCase WikiWords** ohne Unterstriche — deshalb `TblEmail` statt `tbl_email`.
+FitNesse convention: page names are **CamelCase WikiWords** without underscores — hence `TblEmail` rather than `tbl_email`.
 
 ---
 
-## Mapping MD → FitNesse-Markup
+## Mapping MD -> FitNesse markup
 
-Die bestehenden MD-Docs übersetzen sich fast 1:1. Hier die wichtigsten Substitutionen:
+The existing MD docs translate almost 1:1. The main substitutions:
 
 | MD | FitNesse |
 |---|---|
 | `# H1` | `!1 H1` |
 | `## H2` | `!2 H2` |
 | `### H3` | `!3 H3` |
-| `**bold**` | `'''bold'''` (drei Apostrophe) |
-| `*italic*` | `''italic''` (zwei Apostrophe) |
-| `` `code` `` | `!- code -!` oder `{{{code}}}` |
+| `**bold**` | `'''bold'''` (three apostrophes) |
+| `*italic*` | `''italic''` (two apostrophes) |
+| `` `code` `` | `!- code -!` or `{{{code}}}` |
 | `[Text](url)` | `[[Text][url]]` |
-| `[[.Page]]`-Link | `.CrossChannelAnalytics.DataGlossary.ImepBronze.TblEmail` |
-| \`\`\`mermaid / \`\`\` | `!startuml / !enduml` (Diagramm neu in PlantUML) |
-| `- item` | `  * item` (mit führenden Spaces) |
-| Markdown-Table | FitNesse-Table `\| col1 \| col2 \|` (ohne Separator-Zeile!) |
+| `[[.Page]]` link | `.ClarityDashboard.DataGlossary.ImepBronze.TblEmail` |
+| \`\`\`mermaid / \`\`\` | `!startuml / !enduml` (diagram re-authored in PlantUML) |
+| `- item` | `  * item` (with leading spaces) |
+| Markdown table | FitNesse table `\| col1 \| col2 \|` (no separator row!) |
 
-Cross-References im Corporate-Style: `!see .CrossChannelAnalytics.JoinStrategy.StrategyContract`.
+Cross-references in corporate style: `!see .ClarityDashboard.JoinStrategy.StrategyContract`.
 
 ---
 
-## PlantUML ER-Syntax — Cheat Sheet
+## PlantUML ER syntax — cheat sheet
 
-PlantUML unterstützt ER-Diagramme nativ. Hier die Mapping-Tabelle Mermaid → PlantUML:
+PlantUML supports ER diagrams natively. Mapping table Mermaid -> PlantUML:
 
-| Mermaid | PlantUML | Bedeutung |
+| Mermaid | PlantUML | Meaning |
 |---|---|---|
-| `A \|\|--o{ B` | `A \|\|--o{ B` | 1:N (beide identisch) |
+| `A \|\|--o{ B` | `A \|\|--o{ B` | 1:N (both identical) |
 | `A \|\|--\|\| B` | `A \|\|--\|\| B` | 1:1 |
 | `A }o--\|\| B` | `A }o--\|\| B` | N:1 |
-| `A }o..o{ B` | `A }o..o{ B` | Unsicher/optional |
-| `A { string col PK }` | `entity A { * col : string <<PK>> }` | Entity mit Spalten |
+| `A }o..o{ B` | `A }o..o{ B` | Uncertain / optional |
+| `A { string col PK }` | `entity A { * col : string <<PK>> }` | Entity with columns |
 
-Cardinality-Marker sind zwischen Mermaid und PlantUML **identisch** — die Konvertierung der Entity-Blöcke ist der einzige Unterschied.
+Cardinality markers are **identical** between Mermaid and PlantUML — the conversion of the entity blocks is the only difference.
 
 ---
 
-## Nächste Schritte nach POC-Verifikation
+## Next steps after POC verification
 
-Wenn die POC-Pages sauber rendern, können wir:
+If the POC pages render cleanly, we can:
 
-1. **Option B**: Alle 5 ER-Diagramme + 25 Data-Glossary-Pages + 5 Join-Recipes als `.txt`-Files ausrollen (~35 Files)
-2. **Optional**: Ein Python-Generator, der aus den MD-Docs automatisch die FitNesse-Pages erzeugt — synchronisiert den Git-Stand mit FitNesse bei jedem Update
+1. **Option B**: Roll out all 5 ER diagrams + 25 data-glossary pages + 5 join recipes as `.txt` files (~35 files)
+2. **Optional**: A Python generator that automatically produces the FitNesse pages from the MD docs — syncs the Git state with FitNesse on every update
 
-Aktuell ist A komplett. Feedback bitte, ob PlantUML bei euch rendert und das Format trifft.
+Option A is complete. Feedback welcome on whether PlantUML renders in your environment and whether the format hits the mark.
