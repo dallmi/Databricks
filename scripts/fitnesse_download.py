@@ -50,9 +50,11 @@ from fitnesse_upload import (  # noqa: E402  (import-after-sys-path)
     DEFAULT_BASE_URL,
     DEFAULT_PARENT_PATH,
     DEFAULT_ROOT_NAME,
+    DEFAULT_PAGES_DIR,
 )
 
-DEFAULT_BACKUP_ROOT = SCRIPT_DIR.parent / "docs" / "fitnesse" / "backup"
+# Backup lives as a sibling of the pages directory configured in fitnesse_upload.py.
+DEFAULT_BACKUP_ROOT = Path(DEFAULT_PAGES_DIR).parent / "backup"
 
 TEXTAREA_RE = re.compile(
     r'<textarea[^>]*name="pageContent"[^>]*>(.*?)</textarea>',

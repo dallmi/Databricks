@@ -39,9 +39,14 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-from fitnesse_upload import DEFAULT_BASE_URL, DEFAULT_PARENT_PATH  # noqa: E402
+from fitnesse_upload import (  # noqa: E402
+    DEFAULT_BASE_URL,
+    DEFAULT_PARENT_PATH,
+    DEFAULT_PAGES_DIR,
+)
 
-DEFAULT_BACKUP_ROOT = SCRIPT_DIR.parent / "docs" / "fitnesse" / "backup"
+# Backup lives as a sibling of the pages directory configured in fitnesse_upload.py.
+DEFAULT_BACKUP_ROOT = Path(DEFAULT_PAGES_DIR).parent / "backup"
 
 
 def head_check(url: str, timeout: int = 15) -> tuple[int, str]:
