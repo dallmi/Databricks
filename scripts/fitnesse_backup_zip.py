@@ -132,6 +132,27 @@ def main() -> int:
         size = download(url, out_file)
     except urllib.error.HTTPError as e:
         print(f"ERROR: HTTP {e.code}: {e.reason}", file=sys.stderr)
+        if e.fp is not None:
+            try:
+                body = e.read().decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                body = ""
+            if body.strip():
+                print("Response body (first 1500 chars):", file=sys.stderr)
+                print(body[:1500], file=sys.stderr)
+        # Diagnostic: try the page itself without ?responder=zip to prove the path exists
+        plain_url = f"{args.base_url.rstrip('/')}/{args.parent_path}"
+        print(f"\nDiagnostic: try the plain page URL to confirm the path is reachable:",
+              file=sys.stderr)
+        print(f"  curl -I \"{plain_url}\"", file=sys.stderr)
+        print(f"  If that returns 200, the ZIP responder is disabled or named differently "
+              "on this FitNesse instance.", file=sys.stderr)
+        # Remove the empty/partial file
+        if out_file.exists():
+            try:
+                out_file.unlink()
+            except OSError:
+                pass
         return 4
     except urllib.error.URLError as e:
         print(f"ERROR: {e}", file=sys.stderr)
