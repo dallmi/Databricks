@@ -61,7 +61,7 @@ Medallion structure per domain. Note the asymmetry: SharePoint uses the full Bro
 | Silver | Events only — invitation, eventregistration, event | webpagevisited, pageviewed, pagevisited | — |
 | Gold | '''final''' (520M atomic fact), tbl_pbi_platform_mailings / _events, tier-1/2/3 aggregates | '''pbi_db_interactions_metrics''' (84M atomic fact), tier-1/2/3 grain-specific tables | — |
 
-See !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.CrossChannel for the end-to-end visual.
+See the [[Cross-Channel ER diagram][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.CrossChannel]] for the end-to-end visual.
 
 !2 6. The 5 Core Tables
 
@@ -81,19 +81,19 @@ Plus the cross-channel bridge:
 
 !2 7. ER Diagrams per Domain
 
- * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.ImepBronze — iMEP Bronze + HR neighborhood
- * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.SharePointBronze — pages x pageviews x customevents x sites
- * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.ImepGold — final + tbl_pbi_* tier structure
- * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.SharePointGold — marketingPageId FK chain
- * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.CrossChannel — TrackingID bridge + Employee bridge
+ * [[iMEP Bronze][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.ImepBronze]] — iMEP Bronze + HR neighborhood
+ * [[SharePoint Bronze][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.SharePointBronze]] — pages x pageviews x customevents x sites
+ * [[iMEP Gold][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.ImepGold]] — final + tbl_pbi_* tier structure
+ * [[SharePoint Gold][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.SharePointGold]] — marketingPageId FK chain
+ * [[Cross-Channel][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.CrossChannel]] — TrackingID bridge + Employee bridge
 
 !2 8. Canonical Join Recipes
 
- * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract — ⭐ read this first
- * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.ImepBronzeEmailEvents — 4-table bronze chain
- * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.SharePointGoldToPages — gold metrics via pageUUID
- * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment — TNumber <-> GPN <-> Region/Division
- * !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.CrossChannelViaTrackingId — Pack-Level (SEG1-2)
+ * [[Strategy Contract][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract]] — ⭐ read this first
+ * [[iMEP Bronze Email Events][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.ImepBronzeEmailEvents]] — 4-table bronze chain
+ * [[SharePoint Gold to Pages][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.SharePointGoldToPages]] — gold metrics via pageUUID
+ * [[HR Enrichment][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment]] — TNumber <-> GPN <-> Region/Division
+ * [[Cross-Channel via TrackingId][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.CrossChannelViaTrackingId]] — Pack-Level (SEG1-2)
 
 !2 9. Key Findings Everyone Must Know
 
@@ -138,4 +138,4 @@ All 114 Delta tables are External, spread across '''3 ADLS accounts''' (iMEP-Bro
 
 !2 Sources
 
-Genie sessions supporting this page: Q1, Q22, Q24, Q26, Q27, Q28, Q29, Q30. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.
+Genie sessions supporting this page: Q1, Q22, Q24, Q26, Q27, Q28, Q29, Q30. Full catalog: [[Sources][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources]].
