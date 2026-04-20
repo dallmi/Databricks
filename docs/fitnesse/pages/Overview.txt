@@ -39,8 +39,8 @@ Each domain has a dedicated container page with per-table cards (schema, sample 
 !2 3. References
 
 | '''Title''' | '''Type''' | '''Link''' |
-| CPlan GIC Tracking Clarity Dashboard | Parent FitNesse page | !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard |
-| Sources — Genie sessions Q1 … Q30 | Internal traceability index | !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources |
+| CPlan GIC Tracking Clarity Dashboard | Parent FitNesse page | [[open][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard]] |
+| Sources — Genie sessions Q1 … Q30 | Internal traceability index | [[open][.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources]] |
 | BRD Cross-Channel Analytics | Business requirements document | link |
 | iMEP Team Space | Upstream team (email engagement pipelines) | link |
 | SharePoint Analytics Team Space | Upstream team (intranet interactions) | link |
