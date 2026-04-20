@@ -414,6 +414,81 @@ Ziel: Die letzten Schema-Details und Volume-Checks, die wir brauchen, um den kon
 
 ---
 
+## F — Pipeline-Lineage ohne Unity Catalog (Q26-Q30)
+
+> **Kontext 2026-04-20**: Wir haben weder UC-Lineage-Graph noch `system.access.table_lineage`. Bronze → Gold Pipeline-Struktur muss rein aus SQL gegen Hive Metastore + Delta-Table-Metadaten rekonstruiert werden. Ziel: Data-Card-Lineage-Sektionen (siehe `docs/tables/`) mit echten Transformations-Jobs und Refresh-Cadence füllen — statt Annahmen.
+
+### Q26 — Silver-Existenz über Schema-Naming (OP-lineage-a)
+
+> *Run `SHOW DATABASES` (or `SHOW SCHEMAS`). List every schema whose name contains any of: "silver", "stage", "staging", "curated", "std", "standardized", "int", "intermediate", "harmonized", "conformed", "enriched". For each match, return schema name and `COUNT(*)` of tables via `SHOW TABLES IN <schema>`. If none exist, confirm that bronze writes directly to gold with no intermediate layer.*
+
+→ Erwartet: Klarheit, ob eine dedizierte Silver-Schicht existiert oder iMEP/SharePoint direkt Bronze→Gold transformieren.
+
+### Q27 — Lineage über Column-Fingerprint (OP-lineage-b)
+
+> *Across ALL schemas in the workspace, find every table that contains at least one of these columns (case-insensitive match on column name): `Id`, `EmailId`, `mailingid`, `MailingId`, `TrackingId`, `UBSGICTrackingID`, `GICTrackingID`, `TNumber`, `T_NUMBER`, `WORKER_ID`.*
+>
+> *For each hit return: schema, table, matching_columns, row_count, MIN/MAX of the earliest timestamp column (`CreationDate`, `DateTime`, `ModifiedDate`, `_ingestion_ts`, or similar).*
+>
+> *Goal: reconstruct join-key relationships between bronze and gold purely from column overlap + row counts.*
+
+→ Erwartet: Implizite Lineage-Karte via gemeinsamer Join-Keys, inkl. Hinweis, welche Tabellen zueinander "gehören".
+
+### Q28 — Pipeline-Hinweise aus Delta-History (OP-lineage-c)
+
+> *For each of these tables run `DESCRIBE HISTORY` and return the last 10 operations (timestamp, operation, userName, operationParameters, operationMetrics.numOutputRows):*
+>
+> - `imep_bronze.tbl_email`
+> - `imep_bronze.tbl_email_receiver_status`
+> - `imep_bronze.tbl_analytics_link`
+> - `imep_gold.tbl_pbi_platform_mailings`
+> - `sharepoint_bronze.pages`
+> - `sharepoint_bronze.pageviews`
+> - *plus any Tier-3 engagement table identified in `imep_gold`*
+>
+> *From this I need: refresh cadence (how often), operation type (MERGE / INSERT / COPY INTO / WRITE), the service-principal or user that writes, and whether the write pattern looks like batch or streaming.*
+
+→ Erwartet: Für jede Tabelle eine Schätzung von Refresh-Frequenz + Writer-Identität + Batch/Streaming-Charakter.
+
+### Q29 — Tier-Struktur aus Tabellen-Shape ableiten (OP-lineage-d)
+
+> *For every table in `imep_gold` AND `sharepoint_gold`, return:*
+>
+> - *table name*
+> - *all column names (comma-separated)*
+> - *row count*
+> - *`COUNT(DISTINCT <id-like column>)` for each of: `Id`, `mailingid`, `pageUUID`, `TrackingId`, `UBSGICTrackingID` (whichever exist)*
+> - *presence of dimension columns (`Region`, `Division`, `Area`, `Country`, `Language`, `LinkType`) as boolean flags*
+> - *presence of metric columns (`UniqueOpens`, `UniqueClicks`, `Views`, `TimeOnSite`) as boolean flags*
+>
+> *Goal: bucket tables by grain (per-mailing, per-mailing×dim, per-recipient, per-page, per-page×day) to infer the tier structure from data shape alone.*
+
+→ Erwartet: Tier-Zuordnung jeder Gold-Tabelle ohne auf UC-Metadaten angewiesen zu sein.
+
+### Q30 — Tabellen-Properties & Storage-Location (OP-lineage-e)
+
+> *For every table in `imep_bronze`, `imep_gold`, `sharepoint_bronze`, `sharepoint_gold`, run `DESCRIBE EXTENDED` and return the Detailed Table Information block — specifically:*
+>
+> - *`Location` (ADLS / S3 path)*
+> - *`Owner` / `Created By`*
+> - *`Created Time`*
+> - *`Last Access` / `Last Modified`*
+> - *`Comment`*
+> - *`Table Properties` (all rows)*
+> - *`Partition columns`*
+> - *`Table type` (MANAGED / EXTERNAL)*
+>
+> *The ADLS path often encodes the producing pipeline name (e.g. `/mnt/imep/jobs/tier3-engagement-merge/…`) — I want to grep those paths for pipeline identifiers.*
+
+→ Erwartet: ADLS-Pfade, die Pipeline-Namen verraten, + Table-Comments, die hoffentlich die Transformation beschreiben.
+
+**Was Genie NICHT beantworten kann** (per Workspace-UI oder REST-API zu klären):
+- Job-Definitionen & Scheduler → Jobs-UI bzw. `/api/2.1/jobs/list`
+- Notebook-Inhalte (die eigentliche Transformations-SQL) → Workspace-Browser
+- Service-Principal → Job-Mapping → Workspace-Admin-Bereich
+
+---
+
 ## Nutzungshinweise
 
 1. **Reihenfolge**: Q1 und Q3 zuerst — sie entscheiden, ob das Modell überhaupt baubar ist. Q19/Q20 am Schluss als Validierung.
