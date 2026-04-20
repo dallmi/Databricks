@@ -1,14 +1,14 @@
-# ER-Diagramm — Cross-Channel Bridge
+# ER Diagram — Cross-Channel Bridge
 
-> Die **einzige Brücke** zwischen iMEP (Email) und SharePoint (Intranet). Läuft über **TrackingId ↔ UBSGICTrackingID** auf der Dimensions-Ebene (`tbl_email` ↔ `pages`), **niemals** über Engagement-Facts direkt. Plus die Employee-Bridge über `tbl_hr_employee.WORKER_ID`.
+> The **only bridge** between iMEP (Email) and SharePoint (Intranet). Runs via **TrackingId ↔ UBSGICTrackingID** at the dimensional level (`tbl_email` ↔ `pages`), **never** through engagement facts directly. Plus the Employee bridge via `tbl_hr_employee.WORKER_ID`.
 
 ---
 
-## Die gesamte Cross-Channel-Architektur in einem Bild
+## The entire cross-channel architecture in one picture
 
 ```mermaid
 erDiagram
-    tbl_email                 ||..|| pages                         : "TrackingId ↔ UBSGICTrackingID (SEG1-4 match)"
+    tbl_email                 ||..|| pages                         : "TrackingId ↔ UBSGICTrackingID (Pack / SEG1-2)"
     tbl_email                 ||--o{ tbl_email_receiver_status     : "Id = EmailId"
     tbl_email_receiver_status ||--o{ tbl_analytics_link            : "Id = EmailReceiverStatusId"
     tbl_email_receiver_status }o--|| tbl_hr_employee               : "TNumber = T_NUMBER"
@@ -62,46 +62,48 @@ erDiagram
 
 ---
 
-## Die zwei Bridges
+## The two bridges
 
-### Bridge 1: TrackingID (Campaign-Level)
+### Bridge 1: TrackingID (campaign-level)
 
-**Wo?**: `tbl_email.TrackingId` ↔ `sharepoint_bronze.pages.UBSGICTrackingID`
+**Where?**: `tbl_email.TrackingId` ↔ `sharepoint_bronze.pages.UBSGICTrackingID`
 
-**Grain**: Pack (Cluster + Pack-Number), optional Activity (SEG1-3).
+**Grain**: **Pack (SEG1-2 = Cluster + Pack number)**. The pack bundles all activities of a campaign — email, intranet page, newsletter, etc. — regardless of their individual dates and channel codes.
 
-**Match-Logik**:
+**Match logic**:
 ```sql
--- SEG1-4 matchen, SEG5 (System-Ownership) ignorieren
-ON  array_join(slice(split(UPPER(email.TrackingId),         '-'), 1, 4), '-')
-  = array_join(slice(split(UPPER(pages.UBSGICTrackingID),  '-'), 1, 4), '-')
+-- Match on pack level (SEG1-2); ignore everything after (date/activity/channel)
+ON  array_join(slice(split(UPPER(email.TrackingId),         '-'), 1, 2), '-')
+  = array_join(slice(split(UPPER(pages.UBSGICTrackingID),  '-'), 1, 2), '-')
 ```
 
-**Coverage-Reality**:
-- iMEP-Seite: 986/73,930 Mailings (1.3%) haben TrackingId
-- SP-Seite: 1,949/48,419 Pages (4%) haben TrackingID
-- **Realistische Pack-Schnittmenge**: 54 Packs (Q24) — der Dashboard-Universum
+**Why not match more narrowly?** Email and intranet page of the same pack typically run on different days (SEG3), with different activity sequencing (SEG4), and on a different channel (SEG5). Only pack-level finds the activities that belong together semantically.
 
-### Bridge 2: Employee-Identity (Person-Level)
+**Coverage reality**:
+- iMEP side: 986/73,930 mailings (1.3%) have a TrackingId
+- SP side: 1,949/48,419 pages (4%) have a TrackingID
+- **Realistic pack intersection**: 54 packs — the dashboard universe
 
-**Wo?**: `tbl_hr_employee.WORKER_ID` (iMEP) ↔ `sharepoint_bronze.pageviews.user_gpn` (SharePoint)
+### Bridge 2: Employee identity (person-level)
 
-**Beide sind GPN** im Format `00100200` (8-digit). `WORKER_ID` in HR, `user_gpn` in SP-Bronze.
+**Where?**: `tbl_hr_employee.WORKER_ID` (iMEP) ↔ `sharepoint_bronze.pageviews.user_gpn` (SharePoint)
 
-**Alternative** (noch nicht validiert): `sharepoint_gold.pbi_db_employeecontact` führt `T_NUMBER` direkt — könnte ein kürzerer Weg sein als der GPN-Umweg.
+**Both are GPN** in `00100200` format (8-digit). `WORKER_ID` in HR, `user_gpn` in SP Bronze.
+
+**Alternative** (not yet validated): `sharepoint_gold.pbi_db_employeecontact` carries `T_NUMBER` directly — could be a shorter path than the GPN detour.
 
 ---
 
-## Warum **nicht** direkter Engagement-Join?
+## Why **no** direct engagement join?
 
-Eine häufige Fehlannahme: "Kann ich `tbl_analytics_link.TNumber` direkt mit irgendwas in SharePoint joinen, um zu sehen, ob dieselbe Person die Email geöffnet UND die Page gelesen hat?"
+A common misconception: "Can I join `tbl_analytics_link.TNumber` directly against something in SharePoint to see whether the same person opened the email AND read the page?"
 
-**Antwort**: Nicht direkt, weil:
+**Answer**: not directly, because:
 
-1. **SharePoint trägt kein TNumber** (Q27) — nur `user_gpn` oder `viewingcontactid`
-2. **Engagement-Tables tragen keine TrackingID** in beiden Domains
+1. **SharePoint carries no TNumber** — only `user_gpn` or `viewingcontactid`
+2. **Engagement tables carry no TrackingID** in either domain
 
-Der korrekte Weg:
+The correct path:
 
 ```
 tbl_analytics_link.TNumber
@@ -113,17 +115,17 @@ tbl_hr_employee.WORKER_ID  (= GPN)
 pageviews.pageId
         │ JOIN sharepoint_bronze.pages.pageUUID
         ▼
-pages.UBSGICTrackingID  (wenn vorhanden)
-        │ SEG1-4 compare
+pages.UBSGICTrackingID  (if present)
+        │ SEG1-2 (pack) compare
         ▼
 tbl_email.TrackingId
 ```
 
-Das ist eine **5-hop-Kette**. In der Praxis macht man das nicht Row-für-Row, sondern auf Pack-Ebene aggregiert (siehe [cross_channel_via_tracking_id.md](../joins/cross_channel_via_tracking_id.md)).
+This is a **5-hop chain**. In practice you do not run it row-by-row but aggregated at pack level (see [cross_channel_via_tracking_id.md](../joins/cross_channel_via_tracking_id.md)).
 
 ---
 
-## Der kanonische Cross-Channel-Funnel
+## The canonical cross-channel funnel
 
 ```mermaid
 flowchart LR
@@ -144,32 +146,38 @@ flowchart LR
     class F event;
 ```
 
-**Der rot markierte Übergang** ist der einzige Cross-Channel-Moment — und er ist **dimensional** (via TrackingID auf `pages`), nicht factual.
+**The transition marked in red** is the only cross-channel moment — and it is **dimensional** (via TrackingID on `pages`), not factual.
 
 ---
 
-## Typische Funnel-Zahlen (aus Q24/Q25/Q22)
+## Typical funnel numbers
 
 ```
-1.000 Mailings sent      (aus dem 1.3%-Getracked-Universum, ab 2025)
+1,000 mailings sent      (from the 1.3%-tracked universe, from 2025)
   │
-  │ ~22% open rate (Q21)
+  │ ~22% open rate
   ▼
-  220 Opens
+  220 opens
   │
-  │ ~1.8% click rate (Q21)
+  │ ~1.8% click rate
   ▼
-   18 Clicks
-  │ ↓ Cross-Channel-Bruch (nur 4% attribuierbar auf SP-Seite)
+   18 clicks
+  │ ↓ cross-channel break (only 4% attributable on the SP side)
   ▼
-    X Page Views  (stark variabel, abhängig von Site-Coverage)
+    X page views  (highly variable, depends on site coverage)
 ```
 
 ---
 
-## Referenzen
+## References
 
-- [join_strategy_contract.md](../joins/join_strategy_contract.md) — Regel 1 + 5
-- [cross_channel_via_tracking_id.md](../joins/cross_channel_via_tracking_id.md) — Full-SQL-Recipe
-- [hr_enrichment.md](../joins/hr_enrichment.md) — GPN-Bridge
+- [join_strategy_contract.md](../joins/join_strategy_contract.md) — rules 1 + 5
+- [cross_channel_via_tracking_id.md](../joins/cross_channel_via_tracking_id.md) — full SQL recipe
+- [hr_enrichment.md](../joins/hr_enrichment.md) — GPN bridge
 - Memory: `imep_join_graph_q27_findings.md`, `tracking_id_format_q23.md`, `tracking_id_volume_q24.md`
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q21](../sources.md#q21), [Q22](../sources.md#q22), [Q24](../sources.md#q24), [Q25](../sources.md#q25), [Q27](../sources.md#q27). See [sources.md](../sources.md) for the full index.

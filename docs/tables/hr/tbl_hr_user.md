@@ -1,15 +1,14 @@
 # `imep_bronze.tbl_hr_user`
 
-> Zusätzliche Employee-Metadaten — vor allem **Town**. Führt `UbsId` als **UPPERCASE**-Variante der T-Number. Nur joinen, wenn du Town o.ä. brauchst — für Region/Division reicht `tbl_hr_employee` + `tbl_hr_costcenter`.
+> Additional employee metadata — primarily **Town**. Carries `UbsId` as the **UPPERCASE** variant of the T-Number. Only join when you need Town or similar — for Region/Division `tbl_hr_employee` + `tbl_hr_costcenter` is sufficient.
 
 | | |
 |---|---|
-| **Layer** | Bronze (HR-Domain) |
-| **Source system** | HR-System → CDC → Delta |
+| **Layer** | Bronze (HR domain) |
+| **Source system** | HR system -> Change Data Capture (CDC) -> Delta Bronze |
 | **Grain** | 1 row per Employee |
 | **Primary key** | `UbsId` |
-| **Refresh** | 2×/Tag (MERGE) |
-| **PII** | Direkt identifizierend (UbsId + Town) |
+| **Write pattern** | MERGE |
 
 ---
 
@@ -17,10 +16,10 @@
 
 | Column | Type | Role | Notes |
 |---|---|---|---|
-| `UbsId` | string | PK | **UPPERCASE** `T######` (z.B. `T100200`) — Case-differenz zu `T_NUMBER`! |
-| `Town` | string | | Office-Standort (z.B. `Zurich`, `Wollerau`) |
+| `UbsId` | string | PK | **UPPERCASE** `T######` (e.g. `T100200`) — case difference vs. `T_NUMBER`! |
+| `Town` | string | | Office location (e.g. `Zurich`, `Wollerau`) |
 
-Weitere Spalten existieren (Emergency Contact, etc.) — für Analytics irrelevant.
+Further columns exist (Emergency Contact, etc.) — irrelevant for analytics.
 
 ---
 
@@ -35,7 +34,7 @@ Town  = "Zurich"
 
 ## Primary joins
 
-### → `tbl_hr_employee` (Case-Normalisierung!)
+### -> `tbl_hr_employee` (case normalization!)
 
 ```sql
 SELECT hr.T_NUMBER, u.UbsId, u.Town
@@ -43,19 +42,25 @@ FROM   imep_bronze.tbl_hr_employee hr
 JOIN   imep_bronze.tbl_hr_user      u ON LOWER(u.UbsId) = LOWER(hr.T_NUMBER)
 ```
 
-**Wichtig**: `LOWER()` auf beiden Seiten. `T_NUMBER` ist lowercase (`t100200`), `UbsId` ist UPPERCASE (`T100200`) — direkter Vergleich ergibt 0 Treffer.
+**Important**: `LOWER()` on both sides. `T_NUMBER` is lowercase (`t100200`), `UbsId` is UPPERCASE (`T100200`) — a direct comparison returns 0 matches.
 
 ---
 
 ## Quality caveats
 
-- **Case-Inkonsistenz zwischen `UbsId` und `T_NUMBER`** — der häufigste HR-Footgun. Immer `LOWER()` anwenden.
-- **Subset von `tbl_hr_employee`** — `tbl_hr_user` enthält typischerweise weniger oder gleich viele Rows als `tbl_hr_employee`. Wer in `tbl_hr_employee` steht, muss nicht unbedingt in `tbl_hr_user` sein.
-- **Town ist freier String** — für Standort-Aggregation Dedup/Mapping-Tabelle pflegen.
+- **Case inconsistency between `UbsId` and `T_NUMBER`** — the most common HR pitfall. Always apply `LOWER()`.
+- **Subset of `tbl_hr_employee`** — `tbl_hr_user` typically contains fewer or equal rows compared to `tbl_hr_employee`. Anyone in `tbl_hr_employee` is not necessarily in `tbl_hr_user`.
+- **Town is a free-form string** — maintain dedup/mapping table for location aggregation.
 
 ---
 
-## Referenzen
+## References
 
-- [tbl_hr_employee.md](tbl_hr_employee.md) — Haupt-HR-Tabelle
+- [tbl_hr_employee.md](tbl_hr_employee.md) — Main HR table
 - [hr_enrichment.md](../../joins/hr_enrichment.md)
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q3](../../sources.md#q3), [Q3b](../../sources.md#q3b). See [sources.md](../../sources.md) for the full directory.

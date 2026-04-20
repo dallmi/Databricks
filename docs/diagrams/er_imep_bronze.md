@@ -1,10 +1,10 @@
-# ER-Diagramm — `imep_bronze.*`
+# ER Diagram — `imep_bronze.*`
 
-> Erweiterte Version von Section 2 des [architecture_diagram.md](../architecture_diagram.md). Zeigt die vollständige Bronze-Topologie für iMEP mit allen Join-Keys, Row-Counts und Cross-Links zu HR.
+> Extended version of Section 2 of [architecture_diagram.md](../architecture_diagram.md). Shows the full Bronze topology for iMEP with every join key, row count, and cross-link to HR.
 
 ---
 
-## Vollständige Bronze-Topologie
+## Full Bronze topology
 
 ```mermaid
 erDiagram
@@ -18,7 +18,7 @@ erDiagram
     tbl_analytics_link        }o--|| tbl_hr_employee           : "TNumber = T_NUMBER"
     tbl_hr_employee           }o--|| tbl_hr_costcenter         : "ORGANIZATIONAL_UNIT"
     tbl_hr_employee           }o--|| tbl_hr_user               : "LOWER(T_NUMBER) = LOWER(UbsId)"
-    tbl_event                 ||--o{ tbl_email_receiver_status : "? (Q30 to verify)"
+    tbl_event                 ||--o{ tbl_email_receiver_status : "? (to verify)"
 
     tbl_email {
         string Id PK "145K rows"
@@ -32,7 +32,7 @@ erDiagram
         string Id PK "293M rows — HUB #1"
         string EmailId FK
         string TNumber FK
-        string Receiver "PII"
+        string Receiver
         int Status
         string LogStatus "Sent/Open/Bounce"
         string EmailLanguage
@@ -93,47 +93,53 @@ erDiagram
 
 ---
 
-## Volumina & Refresh-Cadence
+## Volumes & Write Patterns
 
-| Tabelle | Rows | Refresh | Pattern |
-|---|---|---|---|
-| `tbl_email_receiver_status` | **293M** | 2×/Tag @ 00:00/12:00 UTC | MERGE full-table upsert (27-72M/run) |
-| `tbl_analytics_link` | **533M** | 2×/Tag @ 00:00/12:00 UTC | MERGE **incremental** (3.7-8.5K/run) |
-| `tbl_email` | 145K | 2×/Tag @ 00:00/12:00 UTC | MERGE full-table upsert |
-| `tbl_hr_employee` | 265K | 2×/Tag | MERGE full-table upsert |
-| `tbl_email_components` | 3.3M | 2×/Tag | MERGE |
-| `tbl_email_template_images` | 1.7M | 2×/Tag | MERGE |
-| `tbl_event` | 100K | 2×/Tag | MERGE |
+| Table | Rows | Pattern |
+|---|---|---|
+| `tbl_email_receiver_status` | **293M** | MERGE full-table upsert (27-72M/run) |
+| `tbl_analytics_link` | **533M** | MERGE **incremental** (3.7-8.5K/run) |
+| `tbl_email` | 145K | MERGE full-table upsert |
+| `tbl_hr_employee` | 265K | MERGE full-table upsert |
+| `tbl_email_components` | 3.3M | MERGE |
+| `tbl_email_template_images` | 1.7M | MERGE |
+| `tbl_event` | 100K | MERGE |
 
 ---
 
-## Drei Join-Typen in dieser Domain
+## Three join types in this domain
 
 ### 1. Mailing-centric (starts from `tbl_email`)
 
-Für "Was passierte mit dem Mailing X?". Siehe [imep_bronze_email_events.md](../joins/imep_bronze_email_events.md).
+For "what happened to mailing X?". See [imep_bronze_email_events.md](../joins/imep_bronze_email_events.md).
 
 ### 2. Person-centric (starts from `tbl_hr_employee`)
 
-Für "Welche Engagement-Events hatte Person X?". Nur möglich über die beiden Hub-Tabellen `tbl_email_receiver_status` und `tbl_analytics_link` — **SharePoint-Seite hat keinen äquivalenten Person-Key** (Q27).
+For "which engagement events did person X have?". Only possible via the two hub tables `tbl_email_receiver_status` and `tbl_analytics_link` — **the SharePoint side has no equivalent person key**.
 
-### 3. HR-Enrichment (from any TNumber-bearing table)
+### 3. HR enrichment (from any TNumber-bearing table)
 
-Für "Reichere meinen Engagement-Fact um Region/Division an". Siehe [hr_enrichment.md](../joins/hr_enrichment.md).
-
----
-
-## Wichtige Beobachtungen
-
-- **Zwei Full-Key-Hubs**: Nur `tbl_email_receiver_status` und `tbl_analytics_link` führen gleichzeitig `Id + EmailId + TNumber` (Q27). Das sind die einzigen Tabellen mit **person-level engagement granularity**.
-- **`TrackingId`-Scope**: In Bronze nur auf `tbl_email` und `tbl_event`. **Nie** auf Engagement-Tabellen. Wenn du eine TrackingId in einem Join brauchst, musst du sie über `tbl_email.Id = EmailId` herzholen.
-- **`tbl_email_links` vs `tbl_analytics_link`**: Nicht verwechseln. `tbl_email_links` ist das Template-URL-Inventory (statisch), `tbl_analytics_link` die Event-Fact-Table (Open/Click).
-- **HR-Link-Reihenfolge**: Engagement-Tabelle → `tbl_hr_employee` → `tbl_hr_costcenter` (via `ORGANIZATIONAL_UNIT`). `tbl_hr_user` bietet zusätzliche Felder (Town), nicht notwendig für Region/Division.
+For "enrich my engagement fact with Region/Division". See [hr_enrichment.md](../joins/hr_enrichment.md).
 
 ---
 
-## Referenzen
+## Key observations
 
-- [Section 2 in architecture_diagram.md](../architecture_diagram.md) — Originalversion
+- **Two full-key hubs**: only `tbl_email_receiver_status` and `tbl_analytics_link` carry `Id + EmailId + TNumber` simultaneously. These are the only tables with **person-level engagement granularity**.
+- **`TrackingId` scope**: in Bronze only on `tbl_email` and `tbl_event`. **Never** on engagement tables. If you need a TrackingId in a join, you have to bring it in via `tbl_email.Id = EmailId`.
+- **`tbl_email_links` vs. `tbl_analytics_link`**: do not confuse them. `tbl_email_links` is the template URL inventory (static); `tbl_analytics_link` is the event fact table (Open/Click).
+- **HR link order**: engagement table → `tbl_hr_employee` → `tbl_hr_costcenter` (via `ORGANIZATIONAL_UNIT`). `tbl_hr_user` offers additional fields (Town); not required for Region/Division.
+
+---
+
+## References
+
+- [Section 2 in architecture_diagram.md](../architecture_diagram.md) — original version
 - [Join Strategy Contract](../joins/join_strategy_contract.md)
-- Card per Tabelle: [tbl_email](../tables/imep/tbl_email.md), [tbl_email_receiver_status](../tables/imep/tbl_email_receiver_status.md), [tbl_analytics_link](../tables/imep/tbl_analytics_link.md)
+- Card per table: [tbl_email](../tables/imep/tbl_email.md), [tbl_email_receiver_status](../tables/imep/tbl_email_receiver_status.md), [tbl_analytics_link](../tables/imep/tbl_analytics_link.md)
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q27](../sources.md#q27), [Q30](../sources.md#q30). See [sources.md](../sources.md) for the full index.

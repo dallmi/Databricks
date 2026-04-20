@@ -1,22 +1,21 @@
 # `imep_bronze.tbl_analytics_link`
 
-> **Open & Click Events** pro Empfänger × Link × Interaktion. Eine Row pro Event. **Grösste Bronze-Tabelle im Projekt** (533M Rows) und einzige iMEP-Tabelle mit **echt inkrementellem** Write-Pattern (3.7–8.5k Rows pro MERGE-Zyklus). Zusammen mit `tbl_email_receiver_status` einer der beiden Full-Key-Fact-Hubs.
+> **Open & Click events** per recipient × link × interaction. One row per event. **Largest Bronze table in the project** (533M rows) and the only iMEP table with a **truly incremental** write pattern (3.7–8.5k rows per MERGE cycle). Together with `tbl_email_receiver_status`, one of the two full-key fact hubs.
 
 | | |
 |---|---|
 | **Layer** | Bronze |
-| **Source system** | iMEP (SQL Server) → CDC → Delta |
-| **Grain** | 1 row per Event (Open oder Click) pro Empfänger × Mailing × Link |
+| **Source system** | iMEP (SQL Server) → Change Data Capture (CDC) → Delta Bronze |
+| **Grain** | 1 row per event (Open or Click) per recipient × mailing × link |
 | **Primary key** | `Id` |
 | **FK** | `EmailId` → `tbl_email.Id`; `EmailReceiverStatusId` → `tbl_email_receiver_status.Id`; `TNumber` → `tbl_hr_employee.T_NUMBER` |
-| **Refresh** | **2×/Tag @ 00:00 und 12:00 UTC** (MERGE **inkrementell**, Service Principal) — Q28 |
-| **Approx row count** | **533M** (Q27-Stand 2026-04-20, Timespan Nov 2020 – Apr 2026) |
-| **Per-MERGE delta** | **3.7–8.5K rows** (echt inkrementell — nur neue Click-Events) |
-| **PII** | `TNumber` → indirekt identifizierend |
+| **Write pattern** | MERGE **incremental** (Service Principal) |
+| **Approx row count** | **533M** (as of 2026-04-20, timespan Nov 2020 – Apr 2026) |
+| **Per-MERGE delta** | **3.7–8.5K rows** (truly incremental — only new click events) |
 
 ---
 
-## Neighborhood — direkte Joins mit Keys
+## Neighborhood — direct joins with keys
 
 ```mermaid
 erDiagram
@@ -57,17 +56,17 @@ erDiagram
 
 | Column | Type | Role | Notes |
 |---|---|---|---|
-| `Id` | string | **PK** | GUID, eindeutig pro Event |
-| `EmailId` | string | **FK** → `tbl_email.Id` | Mailing-Referenz |
-| `EmailReceiverStatusId` | string | **FK** → `tbl_email_receiver_status.Id` | Bridge zum Send-Event (→ TNumber, Receiver) |
-| `TNumber` | string | **FK** → `tbl_hr_employee.T_NUMBER` | Lowercase, doppelt zur Receiver-Status-Tabelle |
-| `Agent` | string | Device/Client | z.B. `desktop`, `mobile`, Mail-Client-String |
-| `LinkTypeEnum` | string | **Event-Type** | `OPEN` (Mail geöffnet) oder `CLICK` (Link angeklickt) |
+| `Id` | string | **PK** | GUID, unique per event |
+| `EmailId` | string | **FK** → `tbl_email.Id` | Mailing reference |
+| `EmailReceiverStatusId` | string | **FK** → `tbl_email_receiver_status.Id` | Bridge to the send event (→ TNumber, receiver) |
+| `TNumber` | string | **FK** → `tbl_hr_employee.T_NUMBER` | Lowercase, redundant with the receiver-status table |
+| `Agent` | string | Device/Client | e.g. `desktop`, `mobile`, mail-client string |
+| `LinkTypeEnum` | string | **Event type** | `OPEN` (mail opened) or `CLICK` (link clicked) |
 | `CurrentLanguage` | string | Localization | `DE`/`EN`/… |
-| `IsActive` | int | Soft-Delete-Flag | **Immer `WHERE IsActive = 1`** filtern |
-| `CreationDate` | timestamp | **Event time** | Wann ist Open/Click passiert |
+| `IsActive` | int | Soft-delete flag | **Always filter `WHERE IsActive = 1`** |
+| `CreationDate` | timestamp | **Event time** | When the Open/Click happened |
 
-Weitere 13 Spalten (siehe Q2-Schema-Check — insgesamt 22 Spalten). Geo-Info, IP-Hash etc.
+Further 13 columns (see schema check — 22 columns in total). Geo info, IP hash etc.
 
 ---
 
@@ -89,7 +88,7 @@ CreationDate            = 2024-07-09 09:34:12
 
 ## Primary joins
 
-### → Pattern A: Open/Click-Funnel pro Mailing
+### → Pattern A: Open/Click funnel per mailing
 
 ```sql
 SELECT e.TrackingId,
@@ -103,7 +102,7 @@ WHERE  al.IsActive = 1
 GROUP BY e.TrackingId
 ```
 
-### → Pattern B: Send-to-Event-Tracing
+### → Pattern B: Send-to-event tracing
 
 ```sql
 SELECT rs.TNumber, rs.DateTime AS send_time, al.LinkTypeEnum, al.CreationDate AS event_time,
@@ -114,7 +113,7 @@ JOIN   imep_bronze.tbl_analytics_link         al ON al.EmailReceiverStatusId = r
 WHERE  al.IsActive = 1
 ```
 
-### → Pattern C: Device/Agent-Breakdown
+### → Pattern C: Device/Agent breakdown
 
 ```sql
 SELECT al.Agent, COUNT(*) AS events
@@ -129,44 +128,50 @@ ORDER BY events DESC
 
 ## Quality caveats
 
-- **Grösste Tabelle im Projekt — 533M Rows.** Queries **immer** zeitlich einschränken (`WHERE CreationDate >= …`) oder per `EmailId`/`TrackingId` filtern. Full-Scan = Timeout-Risiko.
-- **`IsActive = 1` IMMER setzen** — sonst mischen sich Soft-Deleted-Events in die Zahlen.
-- **Echt inkrementell**: Pro 12h-Zyklus nur 3.7–8.5k neue Rows. Das heisst: Backfill-Anomalien sind unwahrscheinlich, Delta-History ist aber riesig (110+ Write-Operations alleine für Bronze laut Q28).
-- **`LinkTypeEnum`-Werte**: Nur `OPEN` und `CLICK` sind verlässlich. Andere Werte (falls vorhanden) zuerst validieren.
-- **`TNumber` redundant** zu `tbl_email_receiver_status.TNumber` — bei Joins auf beide Tabellen kann man eine der Spalten droppen.
-- **Agent-Werte sind freier String** — keine kanonische Enum-Liste. Für Device-Analytics erst Mapping-Logic definieren (desktop/mobile/tablet).
+- **Largest table in the project — 533M rows.** Queries **must always** be time-constrained (`WHERE CreationDate >= …`) or filtered by `EmailId`/`TrackingId`. Full scan = timeout risk.
+- **Always apply `IsActive = 1`** — otherwise soft-deleted events slip into the numbers.
+- **Truly incremental**: Only 3.7–8.5k new rows per 12h cycle. This means backfill anomalies are unlikely, but Delta history is huge (110+ write operations for Bronze alone).
+- **`LinkTypeEnum` values**: Only `OPEN` and `CLICK` are reliable. Any other values (if present) must be validated first.
+- **`TNumber` redundant** with `tbl_email_receiver_status.TNumber` — when joining both tables you can drop one of the columns.
+- **Agent values are a free-form string** — no canonical enum list. For device analytics, define a mapping logic first (desktop/mobile/tablet).
 
 ---
 
 ## Lineage — Bronze → Gold
 
-> Skippt Silver (Q26). Einer der drei Bronze-Inputs für `imep_gold.final`.
+> Skips Silver. One of the three Bronze inputs for `imep_gold.final`.
 
 ```
 imep_bronze.tbl_analytics_link  ────┐
 imep_bronze.tbl_email_receiver_status  ┼──► imep_gold.final (~520M rows,
-imep_bronze.tbl_email                  ┘                    CTAS 2×/day)
+imep_bronze.tbl_email                  ┘                    Full Rebuild)
 ```
 
-Events werden auch in die Tier-3-Aggregate (`tbl_pbi_kpi` pivot: OpenCount/ClickCount, `_region`, `_division`) per `GROUP BY MailingId × Dimension` aggregiert.
+Events also feed the Tier-3 aggregates (`tbl_pbi_kpi` pivot: OpenCount/ClickCount, `_region`, `_division`) via `GROUP BY MailingId × Dimension`.
 
 ---
 
-## Inkrementalitäts-Anomalie — why this matters
+## Incrementality anomaly — why this matters
 
-`tbl_analytics_link` ist die **einzige** iMEP-Bronze-Tabelle mit echtem Incremental-MERGE (Q28). Das hat Implikationen:
+`tbl_analytics_link` is the **only** iMEP Bronze table with a truly incremental MERGE. Implications:
 
-- Gesamtgrösse wächst nur durch neue Events — keine Re-Ingestion alter Daten
-- **Delta-History bleibt interpretierbar** (jeder Eintrag = eine echte Mini-Batch)
-- Für Streaming-artige Dashboards (Live-Click-Through-Rate) ist das die beste verfügbare Quelle
+- Total size grows only through new events — no re-ingestion of old data
+- **Delta history stays interpretable** (each entry = one real mini-batch)
+- For streaming-style dashboards (live click-through rate) this is the best available source
 
-Trotzdem kein echtes Streaming — Batches sind 12h-gepuffert.
+Still not true streaming — batches are buffered 12h.
 
 ---
 
-## Referenzen
+## References
 
-- ER-Diagramm Section 2: [../../architecture_diagram.md](../../architecture_diagram.md)
+- ER diagram Section 2: [../../architecture_diagram.md](../../architecture_diagram.md)
 - Join Strategy Contract: [../../joins/join_strategy_contract.md](../../joins/join_strategy_contract.md)
-- Canonical Bronze-Join-Kette: [../../joins/imep_bronze_email_events.md](../../joins/imep_bronze_email_events.md) *(pending)*
-- Genie-Findings: `memory/imep_join_graph_q27_findings.md`, `memory/imep_pipeline_ops_q28_findings.md`
+- Canonical Bronze join chain: [../../joins/imep_bronze_email_events.md](../../joins/imep_bronze_email_events.md) *(pending)*
+- Genie findings: `memory/imep_join_graph_q27_findings.md`, `memory/imep_pipeline_ops_q28_findings.md`
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q2](../../sources.md#q2), [Q26](../../sources.md#q26), [Q27](../../sources.md#q27), [Q28](../../sources.md#q28). See [sources.md](../../sources.md) for the full index.

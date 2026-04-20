@@ -121,16 +121,16 @@ hr    }o--|| user  : "LOWER(T_NUMBER) = LOWER(UbsId)"
 
 !enduml
 
-!2 Volumes & Refresh Cadence
+!2 Volumes & Write Pattern
 
-| '''Table'''                        | '''Rows'''  | '''Refresh'''              | '''Pattern'''                   |
-| tbl_email_receiver_status          | '''293M''' | 2x/day @ 00:00/12:00 UTC   | MERGE full-table upsert         |
-| tbl_analytics_link                 | '''533M''' | 2x/day @ 00:00/12:00 UTC   | MERGE '''incremental''' (3.7-8.5K/run) |
-| tbl_email                          | 145K       | 2x/day @ 00:00/12:00 UTC   | MERGE full-table upsert         |
-| tbl_hr_employee                    | 265K       | 2x/day                     | MERGE full-table upsert         |
-| tbl_email_components               | 3.3M       | 2x/day                     | MERGE                           |
-| tbl_email_template_images          | 1.7M       | 2x/day                     | MERGE                           |
-| tbl_event                          | 100K       | 2x/day                     | MERGE                           |
+| '''Table'''                        | '''Rows'''  | '''Pattern'''                   |
+| tbl_email_receiver_status          | '''293M''' | MERGE full-table upsert (27-72M/run) |
+| tbl_analytics_link                 | '''533M''' | MERGE '''incremental''' (3.7-8.5K/run) |
+| tbl_email                          | 145K       | MERGE full-table upsert |
+| tbl_hr_employee                    | 265K       | MERGE full-table upsert |
+| tbl_email_components               | 3.3M       | MERGE |
+| tbl_email_template_images          | 1.7M       | MERGE |
+| tbl_event                          | 100K       | MERGE |
 
 !2 Three Join Patterns in This Domain
 
@@ -156,3 +156,9 @@ For "enrich my engagement fact with Region/Division". See !see .EmployeeEngageme
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmailReceiverStatus
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblAnalyticsLink
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q27, Q30. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

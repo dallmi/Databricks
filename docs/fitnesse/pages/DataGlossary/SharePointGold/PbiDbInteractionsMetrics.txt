@@ -1,17 +1,16 @@
 !1 PbiDbInteractionsMetrics ('''sharepoint_gold.pbi_db_interactions_metrics''')
 
-'''Master interaction fact for SharePoint.''' 84M rows, 11 columns. Central table for PageView, Visit, Duration, and Comment metrics at Page × Date × Contact grain. '''Carries no direct TrackingID''' — cross-channel attribution always runs via marketingPageId -> pageUUID -> UBSGICTrackingID through sharepoint_bronze.pages. (Q22)
+'''Master interaction fact for SharePoint.''' 84M rows, 11 columns. Central table for PageView, Visit, Duration, and Comment metrics at Page × Date × Contact grain. '''Carries no direct TrackingID''' — cross-channel attribution always runs via marketingPageId -> pageUUID -> UBSGICTrackingID through sharepoint_bronze.pages.
 
 !2 Meta
-| '''Layer'''          | Gold (Consumption) — '''Tier 0 (Atomic Interaction Fact)''' (Q29) |
+| '''Layer'''          | Gold (Consumption) — '''Tier 0 (Atomic Interaction Fact)''' |
 | '''Source system'''  | SharePoint Analytics (aggregated from sharepoint_silver) |
 | '''Grain'''          | 1 row per marketingPageId × visitdatekey × viewingcontactid × referenceapplicationid |
 | '''Primary key'''    | Composite (marketingPageId + visitdatekey + viewingcontactid + referenceapplicationid) |
 | '''Cross-channel key''' | '''none directly''' — only via FK chain marketingPageId -> pageUUID -> UBSGICTrackingID |
-| '''Refresh'''        | Daily Gold build via Notebook-CTAS (Spark 3.2.1), no managed pipeline (Q30) |
-| '''Rows'''           | '''~84M''', 35,544 distinct pages (Q29) |
-| '''Physical storage''' | External Delta, ADLS path abfss://gold@<gold-acc>/.../employee_analytics/pbi_db_interactions_metrics, '''no partitioning''' (Q30) → full-scan risk |
-| '''PII'''            | viewingcontactid (GUID) -> indirectly identifying |
+| '''Write pattern''' | Notebook-basierter Full Rebuild (Spark 3.2.1), no managed pipeline |
+| '''Rows'''           | '''~84M''', 35,544 distinct pages |
+| '''Physical storage''' | External Delta, ADLS path abfss://gold@<gold-acc>/.../employee_analytics/pbi_db_interactions_metrics, '''no partitioning''' → full-scan risk |
 
 !2 Neighborhood Diagram
 
@@ -51,7 +50,7 @@ entity "pbi_db_employeecontact" as ec {
 }
 
 im    }o--|| pages : "marketingPageId = pageUUID"
-pages ||--o| email : "UBSGICTrackingID ↔ TrackingId (SEG1-4)"
+pages ||--o| email : "UBSGICTrackingID ↔ TrackingId (Pack / SEG1-2)"
 im    }o..|| ec    : "viewingcontactid = contactId (potential)"
 
 !enduml
@@ -64,7 +63,7 @@ im    }o..|| ec    : "viewingcontactid = contactId (potential)"
 | marketingPageId           | string GUID | f94bc186-... | '''FK''' -> pages.pageUUID. Only cross-channel path. |
 | views                     | bigint      | 1            | PageView count |
 | viewingcontactid          | string GUID | 1254e21a-... | '''Person key''' — not TNumber, but bridge via pbi_db_employeecontact possible |
-| flag                      | string      | 1            | Meaning unclear — Q30 follow-up |
+| flag                      | string      | 1            | Meaning unclear follow-up |
 | visits                    | bigint      | 1            | Distinct visit count (with dedup) |
 | durationsum               | double      | 7.72         | Time on page (seconds, summed) |
 | durationavg               | double      | 7.72         | Average duration |
@@ -102,7 +101,7 @@ GROUP BY 1
 !3 Potential SharePoint person bridge
 
 {{{
--- UNVERIFIED — Q17/Q22 hypothesize this works, not yet tested
+-- UNVERIFIED — hypothesized from earlier findings, not yet tested
 SELECT m.*, ec.T_NUMBER
 FROM   sharepoint_gold.pbi_db_interactions_metrics m
 LEFT JOIN sharepoint_gold.pbi_db_employeecontact ec ON ec.contactId = m.viewingcontactid
@@ -128,7 +127,7 @@ sharepoint_bronze.pageviews          -|--> sharepoint_silver.webpagevisited  -->
 sharepoint_bronze.pagevisited_*      -+                                             (metric aggregation per page × date × contact)
 }}}
 
-Unlike iMEP email, Silver '''is''' used here in between (Q26 confirms). SharePoint uses the full Medallion pattern.
+Unlike iMEP email, Silver '''is''' used here in between (confirms). SharePoint uses the full Medallion pattern.
 
 !2 Sister Tables in the Same Schema
 
@@ -146,6 +145,12 @@ Rule of thumb: ad-hoc -> interactions_metrics; dashboards with time rollups -> d
 !2 Cross References
 
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze.Pages
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErSharePointGold
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.SharePointGold
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.SharePointGoldToPages
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q17, Q22, Q26, Q29, Q30. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

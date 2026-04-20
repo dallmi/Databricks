@@ -1,14 +1,14 @@
 # Join Recipe — iMEP Bronze Email Events
 
-> Die kanonische Bronze-Kette für alle per-Empfänger-Event-Analysen. **4 Tabellen**, Grain = 1 Row pro Event pro Empfänger pro Mailing. Das ist die Wahrheit bevor Gold sie denormalisiert.
+> The canonical Bronze chain for all per-recipient event analyses. **4 tables**, grain = 1 row per event per recipient per mailing. This is the truth before Gold denormalizes it.
 
-**Wann nutzen**: Ad-hoc-Analysen, Debugging, Fälle wo `imep_gold.final` nicht die richtige Auflösung hat (z.B. brauchst du eine Bronze-Spalte, die nicht in Gold landet).
+**When to use**: Ad-hoc analyses, debugging, cases where `imep_gold.final` lacks the right resolution (e.g. you need a Bronze column that doesn't land in Gold).
 
-**Nicht nutzen** für: Dashboard-Backends — da ist `imep_gold.final` schneller und bereits HR-enriched.
+**Do not use** for: dashboard backends — there `imep_gold.final` is faster and already HR-enriched.
 
 ---
 
-## Die kanonische 4-Tabellen-Kette
+## The canonical 4-table chain
 
 ```sql
 SELECT
@@ -17,20 +17,20 @@ SELECT
     e.Title,
     e.Subject,
 
-    -- Recipient context (von receiver_status)
+    -- Recipient context (from receiver_status)
     rs.TNumber,
     rs.Receiver,
     rs.EmailLanguage,
     rs.DateTime         AS send_time,
     rs.LogStatus        AS send_status,
 
-    -- Event context (von analytics_link)
+    -- Event context (from analytics_link)
     al.LinkTypeEnum     AS event_type,
     al.CreationDate     AS event_time,
     al.Agent            AS device_agent,
     al.CurrentLanguage,
 
-    -- HR-Enrichment (separat per Join)
+    -- HR enrichment (separate join)
     hr.WORKER_ID        AS gpn,
     cc.REGION,
     cc.DIVISION,
@@ -45,18 +45,18 @@ LEFT JOIN imep_bronze.tbl_analytics_link        al ON al.EmailReceiverStatusId =
 LEFT JOIN imep_bronze.tbl_hr_employee           hr ON hr.T_NUMBER             = rs.TNumber
 LEFT JOIN imep_bronze.tbl_hr_costcenter         cc ON cc.ORGANIZATIONAL_UNIT  = hr.ORGANIZATIONAL_UNIT
 
-WHERE   e.TrackingId IS NOT NULL                   -- Cross-Channel-Filter
-  AND   rs.DateTime >= '2025-01-01'                -- Default-Zeitraum (Q24 adoption ramp)
-  AND   rs.LogStatus IN ('Sent', 'Open')           -- je nach Analyse anpassen
+WHERE   e.TrackingId IS NOT NULL                   -- cross-channel filter
+  AND   rs.DateTime >= '2025-01-01'                -- default window (adoption ramp)
+  AND   rs.LogStatus IN ('Sent', 'Open')           -- tune per analysis
 ```
 
 ---
 
-## Varianten
+## Variants
 
-### Variante A — Nur Sends (ohne Open/Click)
+### Variant A — Sends only (no Open/Click)
 
-Wenn du nur wissen willst, **wer hat welches Mailing bekommen** (Bounce-Analyse etc.):
+When you only want to know **who received which mailing** (bounce analysis etc.):
 
 ```sql
 SELECT e.TrackingId, rs.TNumber, rs.LogStatus, rs.DateTime
@@ -65,11 +65,11 @@ JOIN   imep_bronze.tbl_email_receiver_status  rs ON rs.EmailId = e.Id
 WHERE  e.TrackingId IS NOT NULL
 ```
 
-→ 293M Rows total. Pro Mailing × Empfänger eine Row. `tbl_analytics_link` wird nicht benötigt, wenn nur Send-Events interessant sind.
+→ 293M rows total. One row per mailing × recipient. `tbl_analytics_link` is not needed when only send events matter.
 
-### Variante B — Nur Opens/Clicks (Fact-only)
+### Variant B — Opens/Clicks only (fact-only)
 
-Wenn Send-Kontext nicht interessiert:
+When send context doesn't matter:
 
 ```sql
 SELECT al.EmailId, al.TNumber, al.LinkTypeEnum, al.CreationDate, al.Agent
@@ -78,11 +78,11 @@ WHERE  al.IsActive = 1
   AND  al.CreationDate >= '2025-01-01'
 ```
 
-→ 533M Rows. Am teuersten — unbedingt Zeit-Filter setzen.
+→ 533M rows. Most expensive — set a time filter.
 
-### Variante C — Pack-Level-Aggregate
+### Variant C — Pack-level aggregates
 
-Für Dashboard-Numbers (nicht per-event):
+For dashboard numbers (not per event):
 
 ```sql
 WITH mail AS (
@@ -105,48 +105,54 @@ GROUP BY mail.tracking_pack_id
 
 ---
 
-## Gotchas
+## Pitfalls
 
-### 1. `al.IsActive = 1` IMMER filtern
+### 1. ALWAYS filter `al.IsActive = 1`
 
-Ohne diesen Filter ziehst du Soft-Deleted-Events in die Zahlen. Dashboards werden zu hoch.
+Without this filter you pull soft-deleted events into the numbers. Dashboards come out too high.
 
-### 2. Doppel-FK zwischen `analytics_link` und `receiver_status`
+### 2. Dual FK between `analytics_link` and `receiver_status`
 
-`tbl_analytics_link` hat **beide** `EmailId` und `EmailReceiverStatusId` als FK. Beide im Join-Condition verwenden — sonst fährst du Cartesian-Risk, falls ein Empfänger mehrere Send-Events hatte (selten, aber möglich bei Retries).
+`tbl_analytics_link` carries **both** `EmailId` and `EmailReceiverStatusId` as FKs. Use both in the join condition — otherwise you run Cartesian risk if a recipient had multiple send events (rare, but possible on retries).
 
-### 3. `tbl_analytics_link` nur für OPEN + CLICK, nicht für Sends
+### 3. `tbl_analytics_link` is for OPEN + CLICK only, not Sends
 
-Sends leben in `tbl_email_receiver_status`, nicht in `tbl_analytics_link`. Eine häufige Verwechslung.
+Sends live in `tbl_email_receiver_status`, not in `tbl_analytics_link`. A common confusion.
 
 ### 4. `rs.DateTime` vs `al.CreationDate`
 
-- `rs.DateTime` = wann wurde gesendet
-- `al.CreationDate` = wann wurde geöffnet/geklickt
+- `rs.DateTime` = when it was sent
+- `al.CreationDate` = when it was opened / clicked
 
-Für Time-to-Open-Analysen: `DATEDIFF(second, rs.DateTime, al.CreationDate)`.
+For time-to-open analyses: `DATEDIFF(second, rs.DateTime, al.CreationDate)`.
 
-### 5. HR-Join ist `N:1`, aber kann sich ändern
+### 5. HR join is `N:1`, but can change
 
-`tbl_hr_employee` wird 2×/Tag upserted. Region/Division sind **aktuell**, nicht historisch. Für "Wer war am Tag X in welcher Division" braucht's `imep_bronze.tbl_hr_employee_history` (falls existent) oder Snapshot-Merge.
+`tbl_hr_employee` is upserted via MERGE (snapshot replace). Region/Division are **current**, not historical. For "who was in which Division on day X", you need `imep_bronze.tbl_hr_employee_history` (if it exists) or a snapshot merge.
 
-### 6. `TrackingId` nur auf `tbl_email`
+### 6. `TrackingId` only on `tbl_email`
 
-Nicht auf `receiver_status` oder `analytics_link` suchen — die tragen's nicht. Immer via `e.Id = EmailId` herholen.
-
----
-
-## Performance-Tuning
-
-- **Zeitfilter vorne**: `rs.DateTime >= '...'` als erste WHERE-Clause → Partition-Pruning wenn vorhanden
-- **TrackingId-Pre-Filter**: `WHERE e.TrackingId IS NOT NULL` reduziert die Start-Menge auf ~1.3% der Mailings
-- **`LEFT JOIN` auf `tbl_analytics_link`**, nicht `INNER JOIN`: Sonst verlierst du Mailings, die nie geöffnet wurden
-- **Cache auf Pack-Level-Aggregaten**: Wenn du den gleichen Funnel 10× am Tag pullst, materialisieren in eine lokale View
+Do not look for it on `receiver_status` or `analytics_link` — they don't carry it. Always fetch via `e.Id = EmailId`.
 
 ---
 
-## Referenzen
+## Performance tuning
 
-- Volle Field-Liste pro Tabelle: [tbl_email.md](../tables/imep/tbl_email.md), [tbl_email_receiver_status.md](../tables/imep/tbl_email_receiver_status.md), [tbl_analytics_link.md](../tables/imep/tbl_analytics_link.md)
-- ER-Diagramm: [er_imep_bronze.md](../diagrams/er_imep_bronze.md)
-- Regeln: [join_strategy_contract.md](join_strategy_contract.md)
+- **Time filter up front**: `rs.DateTime >= '...'` as the first WHERE clause → partition pruning where available
+- **TrackingId pre-filter**: `WHERE e.TrackingId IS NOT NULL` cuts the starting set to ~1.3% of mailings
+- **`LEFT JOIN` on `tbl_analytics_link`**, not `INNER JOIN`: otherwise you drop mailings that were never opened
+- **Cache on Pack-level aggregates**: if you pull the same funnel 10× a day, materialize into a local view
+
+---
+
+## References
+
+- Full field list per table: [tbl_email.md](../tables/imep/tbl_email.md), [tbl_email_receiver_status.md](../tables/imep/tbl_email_receiver_status.md), [tbl_analytics_link.md](../tables/imep/tbl_analytics_link.md)
+- ER diagram: [er_imep_bronze.md](../diagrams/er_imep_bronze.md)
+- Rules: [join_strategy_contract.md](join_strategy_contract.md)
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q2](../sources.md#q2), [Q24](../sources.md#q24), [Q27](../sources.md#q27). See [sources.md](../sources.md) for the full index.

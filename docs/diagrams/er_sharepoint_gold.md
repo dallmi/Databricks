@@ -1,25 +1,25 @@
-# ER-Diagramm — `sharepoint_gold.*`
+# ER Diagram — `sharepoint_gold.*`
 
-> Gold-Topologie für SharePoint. **Strikte 4-Tier-Hierarchie** (Q29, 20 Tabellen + 3 Video-Sub-Domain + 2 Views). Die FK-Kette läuft über `marketingPageId` — alle Gold-Metric-Tables referenzieren zurück zu `sharepoint_bronze.pages.pageUUID`. **Keine direkte TrackingID auf den Gold-Facts!** Cross-Channel-Attribution geht immer über `pages`.
+> Gold topology for SharePoint. **Strict 4-tier hierarchy** (20 tables + 3 Video sub-domain + 2 views). The FK chain runs through `marketingPageId` — all Gold metric tables reference back to `sharepoint_bronze.pages.pageUUID`. **No direct TrackingID on the Gold facts!** Cross-channel attribution always runs through `pages`.
 
 ---
 
-## 4-Tier-Hierarchie (Q29)
+## 4-Tier Hierarchy
 
-| Tier | Rolle | # Tabellen | Vertreter |
+| Tier | Role | # Tables | Representatives |
 |---|---|---|---|
-| **Tier 0 — Atomic Interaction Facts** | Per-Visitor × Page × Date | **4** | `pbi_db_interactions_metrics` (84M), `pageviewed_metric` (84M), `pagevisited_metric` (81M), `90_days_interactions_metric` (9M) |
-| **Tier 1 — Pre-Aggregated Overview** | Rolling Windows (7/14/21/28d) über Page × Date × Division | **3** | `datewise_overview_fact_tbl` (7.5M, 27 cols) |
+| **Tier 0 — Atomic Interaction Facts** | Per-visitor × Page × Date | **4** | `pbi_db_interactions_metrics` (84M), `pageviewed_metric` (84M), `pagevisited_metric` (81M), `90_days_interactions_metric` (9M) |
+| **Tier 1 — Pre-Aggregated Overview** | Rolling windows (7/14/21/28d) across Page × Date × Division | **3** | `datewise_overview_fact_tbl` (7.5M, 27 cols) |
 | **Tier 2 — Engagement / Social Signals** | Likes, Comments, CTA | **3** | `pageliked_metric` (400K), `pagecommented_metric` (500K), `page_like_int_fact` (30K) |
-| **Tier 3 — Dimension Tables** | Person + Page + Calendar + Referrer | **~7** | `employeecontact` (24.3M, potentielle Person-Bridge), `website_page_inventory`, `calendar`, `referer_application` |
+| **Tier 3 — Dimension Tables** | Person + Page + Calendar + Referrer | **~7** | `employeecontact` (24.3M, potential Person bridge), `website_page_inventory`, `calendar`, `referer_application` |
 
-**Plus Video Sub-Domain (3 Tabellen)** — die einzigen Tabellen im System, die über eine **managed Declarative Pipeline** laufen (Spark 3.5.2/4.0.0, ChangeDataFeed enabled, proper comments). Der Rest ist Notebook-CTAS (Spark 3.2.1). Siehe Q30.
+**Plus Video sub-domain (3 tables)** — the only tables in the system running through a **managed Declarative Pipeline** (Spark 3.5.2/4.0.0, ChangeDataFeed enabled, proper comments). The rest is notebook-based Full Rebuild (Spark 3.2.1).
 
 **Plus 2 Views** (no physical storage): `pbi_db_page_visitedkey_view`, `pbi_db_website_page_view`.
 
 ---
 
-## FK-Kette — der zentrale Weg
+## FK Chain — the central path
 
 ```mermaid
 erDiagram
@@ -30,7 +30,7 @@ erDiagram
     pbi_db_90_days_interactions_metric }o--|| pages : "marketingPageId = pageUUID"
     pbi_db_page_visitedkey_view        ||..|| pbi_db_interactions_metrics : "visit-key filter"
     pbi_db_employeecontact             }o..o{ pbi_db_interactions_metrics : "contactId = viewingcontactid (bridge)"
-    pages                              }o--|| tbl_email : "UBSGICTrackingID ↔ TrackingId via SEG1-4"
+    pages                              }o--|| tbl_email : "UBSGICTrackingID ↔ TrackingId via SEG1-2"
 
     pages {
         string pageUUID PK "48K — THE DIMENSION"
@@ -84,31 +84,31 @@ erDiagram
 
 ---
 
-## Volumina & Use-Cases
+## Volumes & Use-Cases
 
-| Tabelle | Rows | Cols | Use-Case |
+| Table | Rows | Cols | Use-Case |
 |---|---|---|---|
-| `pbi_db_interactions_metrics` | **84M** | 11 | **Default** — Views + Visits + Duration + Comments in einer Tabelle |
-| `pbi_db_pageviewed_metric` | 84M | 5 | Nur View-Counts, superschnell für fast aggregation |
-| `pbi_db_pagevisited_metric` | 81M | 9 | Visit-oriented mit Dedup-Logik |
-| `pbi_db_datewise_overview_fact_tbl` | **7.5M** | 31 | Pre-aggregated page × date × division, Rolling Windows (7/14/21/28d) |
-| `pbi_db_90_days_interactions_metric` | 9M | 11 | 90-Tage-Window, klein für Short-Term-Dashboards |
-| `pbi_db_page_visitedkey_view` | 76M | 1 | Visit-Key-Filter-View (nur GUID-Liste) |
-| `pbi_db_employeecontact` | **24M** | 17 | **Potentielle Person-Bridge** (viewingcontactid ↔ T_NUMBER) |
+| `pbi_db_interactions_metrics` | **84M** | 11 | **Default** — Views + Visits + Duration + Comments in a single table |
+| `pbi_db_pageviewed_metric` | 84M | 5 | View counts only, very fast for fast aggregation |
+| `pbi_db_pagevisited_metric` | 81M | 9 | Visit-oriented with dedup logic |
+| `pbi_db_datewise_overview_fact_tbl` | **7.5M** | 31 | Pre-aggregated page × date × division, rolling windows (7/14/21/28d) |
+| `pbi_db_90_days_interactions_metric` | 9M | 11 | 90-day window, small for short-term dashboards |
+| `pbi_db_page_visitedkey_view` | 76M | 1 | Visit-key filter view (GUID list only) |
+| `pbi_db_employeecontact` | **24M** | 17 | **Potential Person bridge** (viewingcontactid ↔ T_NUMBER) |
 
-Plus `sharepoint_clicks_gold.pbi_db_ctalabel_intr_fact_gold` (3M) für CTA-Click-Attribution.
+Plus `sharepoint_clicks_gold.pbi_db_ctalabel_intr_fact_gold` (3M) for CTA click attribution.
 
 ---
 
-## Drei kritische Regeln
+## Three critical rules
 
-### Regel 1 — Gold-Metriken ohne `pages`-JOIN sind unattribuiert
+### Rule 1 — Gold metrics without `pages` JOIN are unattributed
 
 ```sql
--- FALSCH — ergibt nur Rohzahlen ohne Cross-Channel-Context
+-- WRONG — yields only raw counts without cross-channel context
 SELECT SUM(views) FROM sharepoint_gold.pbi_db_interactions_metrics;
 
--- RICHTIG — ermöglicht Attribution via TrackingID
+-- RIGHT — enables attribution via TrackingID
 SELECT p.UBSGICTrackingID, SUM(m.views) AS views
 FROM   sharepoint_gold.pbi_db_interactions_metrics m
 JOIN   sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
@@ -116,22 +116,22 @@ WHERE  p.UBSGICTrackingID IS NOT NULL
 GROUP BY p.UBSGICTrackingID
 ```
 
-### Regel 2 — ~96% der Rows sind "untracked"
+### Rule 2 — ~96% of rows are "untracked"
 
-Nur 4% der Pages haben TrackingID. Das heisst: Von 84M Interaction-Rows sind **~80M unattribuierbar**. Dashboard muss das explizit machen — z.B. zwei getrennte Sektionen.
+Only 4% of pages have a TrackingID. That means: out of 84M interaction rows, **~80M are unattributable**. The dashboard must make this explicit — e.g. two separate sections.
 
-### Regel 3 — `viewingcontactid` ≠ TNumber
+### Rule 3 — `viewingcontactid` ≠ TNumber
 
-Die SharePoint-native Person-ID ist ein GUID (`viewingcontactid`), nicht TNumber. Für Cross-Channel-Joins mit iMEP-Person-Daten braucht's entweder:
+The SharePoint-native person ID is a GUID (`viewingcontactid`), not TNumber. For cross-channel joins with iMEP person data you need either:
 
-- **`pbi_db_employeecontact`** als Bridge (Q17 hypothesiert, noch nicht validiert)
-- oder Rückgriff auf `sharepoint_bronze.pageviews.user_gpn` + iMEP-HR-Bridge
+- **`pbi_db_employeecontact`** as a bridge (hypothesised, not yet validated)
+- or fall back to `sharepoint_bronze.pageviews.user_gpn` + the iMEP HR bridge
 
 ---
 
-## Alternative-Path — CTA-Clicks
+## Alternative path — CTA clicks
 
-Für Call-to-Action-spezifische Attribution gibt es ein separates Schema:
+For call-to-action specific attribution there is a separate schema:
 
 ```mermaid
 erDiagram
@@ -144,13 +144,13 @@ erDiagram
     }
 ```
 
-Nutzbar z.B. für "Welcher CTA-Button auf welcher Page wurde wie oft geklickt".
+Usable for example for "Which CTA button on which page was clicked how often".
 
 ---
 
-## Alle Wege führen über `pages`
+## All paths lead through `pages`
 
-**Keine der Gold-Metric-Tables trägt `GICTrackingID` oder `UBSGICTrackingID` direkt.** Das ist bewusste Normalisierung — die TrackingID lebt nur auf der Dimension.
+**None of the Gold metric tables carry `GICTrackingID` or `UBSGICTrackingID` directly.** This is deliberate normalization — the TrackingID lives only on the dimension.
 
 ```
 Any sharepoint_gold.pbi_db_* metric
@@ -161,27 +161,33 @@ sharepoint_bronze.pages
               │
               │ UBSGICTrackingID (if populated)
               ▼
-Cross-channel match to imep_bronze.tbl_email.TrackingId (SEG1-4)
+Cross-channel match to imep_bronze.tbl_email.TrackingId (SEG1-2)
 ```
 
 ---
 
-## Physical Storage (Q30)
+## Physical Storage
 
-**Zwei Pipeline-Familien** in SharePoint Gold — ersichtlich an ADLS-Pfaden:
+**Two pipeline families** in SharePoint Gold — visible in the ADLS paths:
 
-- **Family 1 "Employee Analytics" (16 Tabellen)** — `abfss://gold@<gold-acc>/.../employee_analytics/pbi_db_*`, Spark 3.2.1, Notebook-CTAS, keine Pipeline-Metadata
-- **Family 2 "Video Analytics" (3 Tabellen)** — `abfss://gold@<gold-acc>/.../sharepoint_gold/sharepoint_gold/pbi_db_*`, Spark 3.5.2/4.0.0, managed Declarative Pipeline (`pipelines.pipelineId`), ChangeDataFeed enabled, proper table comments
+- **Family 1 "Employee Analytics" (16 tables)** — `abfss://gold@<gold-acc>/.../employee_analytics/pbi_db_*`, Spark 3.2.1, notebook-based Full Rebuild, no pipeline metadata
+- **Family 2 "Video Analytics" (3 tables)** — `abfss://gold@<gold-acc>/.../sharepoint_gold/sharepoint_gold/pbi_db_*`, Spark 3.5.2/4.0.0, managed Declarative Pipeline (`pipelines.pipelineId`), ChangeDataFeed enabled, proper table comments
 
-**Gold-Co-Location mit iMEP Gold**: beide Schemas liegen im selben ADLS-Gold-Account → Cross-Channel-Joins inside Fabric/Spark ohne Cross-Account-Auth.
+**Gold co-location with iMEP Gold**: both schemas sit in the same ADLS Gold account → cross-channel joins inside Fabric/Spark without cross-account auth.
 
-**⚠️ Zero Partitioning** auf allen 20 Tabellen — `interactions_metrics` (84M) + `pageviewed_metric` (84M) werden bei jeder Query ohne Datums-Filter voll gescannt.
+**⚠️ Zero partitioning** on all 20 tables — `interactions_metrics` (84M) + `pageviewed_metric` (84M) are fully scanned on every query without a date filter.
 
 ---
 
-## Referenzen
+## References
 
-- [pbi_db_interactions_metrics.md](../tables/sharepoint_gold/pbi_db_interactions_metrics.md) — Haupt-Fact-Card
-- [pages.md](../tables/sharepoint/pages.md) — Die Dimension
-- [sharepoint_gold_to_pages.md](../joins/sharepoint_gold_to_pages.md) — Join-Recipe
+- [pbi_db_interactions_metrics.md](../tables/sharepoint_gold/pbi_db_interactions_metrics.md) — main fact card
+- [pages.md](../tables/sharepoint/pages.md) — the dimension
+- [sharepoint_gold_to_pages.md](../joins/sharepoint_gold_to_pages.md) — join recipe
 - Memory: `sharepoint_gold_inventory.md`, `sharepoint_gold_schemas_q22.md`
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q17](../sources.md#q17), [Q29](../sources.md#q29), [Q30](../sources.md#q30). See [sources.md](../sources.md) for the full index.

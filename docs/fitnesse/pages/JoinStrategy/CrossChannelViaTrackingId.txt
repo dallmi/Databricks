@@ -1,22 +1,28 @@
-!1 Join Recipe — Cross-Channel via TrackingId (SEG1-4 Match)
+!1 Join Recipe — Cross-Channel via TrackingId (Pack-Level / SEG1-2 Match)
 
-The complete cross-channel chain between iMEP (email) and SharePoint (intranet). '''Dimensional''', not factual — must run through tbl_email.TrackingId ↔ sharepoint_bronze.pages.UBSGICTrackingID. Full string match produces almost 0 matches; '''SEG1-4 match is mandatory'''.
+The complete cross-channel chain between iMEP (email) and SharePoint (intranet). '''Dimensional''', not factual — must run through tbl_email.TrackingId ↔ sharepoint_bronze.pages.UBSGICTrackingID. Match level is the '''Pack''' (SEG1-2) — neither full-string nor SEG1-4 match works.
 
 '''When to use''': any dashboard view that attributes mailings to page views. Any "Email -> Landing Page" funnel analysis.
 
 !2 The Rule in One Line
 
 {{{
-array_join(slice(split(UPPER(email.TrackingId),        '-'), 1, 4), '-')
+array_join(slice(split(UPPER(email.TrackingId),        '-'), 1, 2), '-')
 =
-array_join(slice(split(UPPER(pages.UBSGICTrackingID), '-'), 1, 4), '-')
+array_join(slice(split(UPPER(pages.UBSGICTrackingID), '-'), 1, 2), '-')
 }}}
 
-'''Why SEG1-4 and not all 5?''' SEG5 encodes system ownership:
- * iMEP: EMI / NLI / TWE
- * SharePoint: IAN / ITS / OPN / ANC
+'''Why SEG1-2 (Pack) and not the complete TrackingId?'''
 
-Full string match: '''6 out of 1677 matches''' (Jaccard 0.004). SEG1-4 match: 54 attributable packs (Q23/Q24).
+TrackingId structure: CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL
+
+ * '''SEG1 (Cluster) + SEG2 (Pack-Number)''' = campaign group, shared across all activities in the pack
+ * SEG3 (date) + SEG4 (activity sequence) = specific to each individual activity
+ * SEG5 (channel) = Email/Newsletter/Article/… — each system uses its own vocabulary (iMEP: EMI/NLI/TWE; SharePoint: IAN/ITS/OPN/ANC)
+
+'''Business reality''': a campaign might start with an email on 2024-07-09 and the matching intranet page only goes live on 2024-07-15. Different SEG3 (date), different SEG4 (activity sequence), different SEG5 (channel) — '''but the same pack'''. Only SEG1-2 matches the semantically related activities.
+
+Full-string match: 6/1677 matches (Jaccard 0.004). Pack-level match: ~54 attributable packs.
 
 !2 The Canonical Cross-Channel Funnel (Pack-Level)
 
@@ -24,22 +30,20 @@ Full SQL you would run in a dashboard — delivers per pack: email sends/opens/c
 
 {{{
 WITH
--- 1. Normalized email pack key
+-- 1. Normalized email pack key (SEG1-2)
 email_packs AS (
   SELECT
-      e.Id                                                             AS mailing_id,
+      e.Id                                                          AS mailing_id,
       e.TrackingId,
-      array_join(slice(split(UPPER(e.TrackingId), '-'), 1, 2), '-')    AS tracking_pack_id,
-      array_join(slice(split(UPPER(e.TrackingId), '-'), 1, 4), '-')    AS seg_1_4
+      array_join(slice(split(UPPER(e.TrackingId), '-'), 1, 2), '-') AS tracking_pack_id
   FROM   imep_bronze.tbl_email e
   WHERE  e.TrackingId IS NOT NULL
 ),
 
--- 2. Email-side aggregates
+-- 2. Email-side aggregates (per pack)
 email_side AS (
   SELECT
       ep.tracking_pack_id,
-      ep.seg_1_4,
       COUNT(DISTINCT rs.Id)                                                            AS sends,
       COUNT(DISTINCT CASE WHEN al.LinkTypeEnum = 'OPEN'  THEN al.TNumber END)          AS unique_opens,
       COUNT(DISTINCT CASE WHEN al.LinkTypeEnum = 'CLICK' THEN al.TNumber END)          AS unique_clicks
@@ -47,25 +51,23 @@ email_side AS (
   LEFT JOIN imep_bronze.tbl_email_receiver_status rs ON rs.EmailId = ep.mailing_id
   LEFT JOIN imep_bronze.tbl_analytics_link         al ON al.EmailReceiverStatusId = rs.Id
                                                       AND al.IsActive = 1
-  GROUP BY ep.tracking_pack_id, ep.seg_1_4
+  GROUP BY ep.tracking_pack_id
 ),
 
--- 3. Normalized SP pack key
+-- 3. Normalized SP pack key (SEG1-2)
 sp_packs AS (
   SELECT
       p.pageUUID,
       p.UBSGICTrackingID,
-      array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id,
-      array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 4), '-') AS seg_1_4
+      array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id
   FROM   sharepoint_bronze.pages p
   WHERE  p.UBSGICTrackingID IS NOT NULL
 ),
 
--- 4. SharePoint-side aggregates
+-- 4. SharePoint-side aggregates (per pack)
 sp_side AS (
   SELECT
       sp.tracking_pack_id,
-      sp.seg_1_4,
       SUM(m.views)                         AS total_views,
       SUM(m.visits)                        AS total_visits,
       SUM(m.durationsum)                   AS total_duration_sec,
@@ -73,10 +75,10 @@ sp_side AS (
   FROM   sp_packs sp
   JOIN   sharepoint_gold.pbi_db_interactions_metrics m ON m.marketingPageId = sp.pageUUID
   WHERE  m.visitdatekey >= '20250101'
-  GROUP BY sp.tracking_pack_id, sp.seg_1_4
+  GROUP BY sp.tracking_pack_id
 )
 
--- 5. FULL OUTER JOIN — Packs can be email-only OR page-only
+-- 5. FULL OUTER JOIN on pack level — packs can be email-only OR page-only
 SELECT
     COALESCE(e.tracking_pack_id, s.tracking_pack_id) AS tracking_pack_id,
     e.sends, e.unique_opens, e.unique_clicks,
@@ -88,7 +90,7 @@ SELECT
     END                                              AS coverage_status
 
 FROM        email_side e
-FULL OUTER JOIN sp_side s ON s.seg_1_4 = e.seg_1_4
+FULL OUTER JOIN sp_side s ON s.tracking_pack_id = e.tracking_pack_id
 ORDER BY tracking_pack_id;
 }}}
 
@@ -103,17 +105,18 @@ If you only want the packs where both channels have data (real funnel possible):
 SELECT e.tracking_pack_id, e.sends, e.unique_opens, e.unique_clicks,
        s.total_views, s.unique_viewers
 FROM   email_side e
-INNER JOIN sp_side s ON s.seg_1_4 = e.seg_1_4
+INNER JOIN sp_side s ON s.tracking_pack_id = e.tracking_pack_id
 }}}
 
-Expected result size: ~54 packs (Q24).
+Expected result size: ~54 packs.
 
-!3 Variant B — Activity-Level instead of Pack-Level (SEG1-3)
+!3 Variant B — Activity-Within-Pack Analysis (SEG1-3, single-system only)
 
-If you want to break it down even finer (per individual activity, not per pack):
+If you want to understand the time sequence of activities within a pack (e.g. "when did the emails go out, when did the pages launch") — '''only within one system''', not cross-channel:
 
 {{{
--- Key becomes SEG1-3 instead of SEG1-2
+-- SEG1-3 = Pack + Activity-Date. Only meaningful within iMEP or within SP,
+-- NOT for cross-channel match (pages run on different dates than emails).
 array_join(slice(split(UPPER(TrackingId), '-'), 1, 3), '-')
 }}}
 
@@ -121,7 +124,7 @@ array_join(slice(split(UPPER(TrackingId), '-'), 1, 3), '-')
 
 {{{
 -- Before the FULL OUTER JOIN, in sp_side:
-SELECT '(untracked)' AS seg_1_4, SUM(views), SUM(visits), ...
+SELECT '(untracked)' AS tracking_pack_id, SUM(views), SUM(visits), ...
 FROM   sharepoint_gold.pbi_db_interactions_metrics m
 LEFT JOIN sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
 WHERE  p.UBSGICTrackingID IS NULL
@@ -131,33 +134,33 @@ UNION ALL
 -- regular sp_side query
 }}}
 
-Shows "unattributed intranet activity" alongside attributed funnel.
+Shows "unattributed intranet activity" alongside the attributed funnel.
 
-!2 Gotchas
+!2 Pitfalls
 
 !3 1. UPPER() on both sides is mandatory
 
-Q23 confirms: format is UPPER & clean on both sides. Still apply UPPER() as defensive code — you don't want to lose 90% of your matches over a single lowercase edge case.
+Format is confirmed UPPER & clean on both sides. Still apply UPPER() as defensive code — you don't want to lose 90% of your matches over a single lowercase edge case.
 
 !3 2. TRIM() as insurance
 
 Whitespace in tracking IDs is rare, but not ruled out in legacy data:
 
 {{{
-array_join(slice(split(UPPER(TRIM(TrackingId)), '-'), 1, 4), '-')
+array_join(slice(split(UPPER(TRIM(TrackingId)), '-'), 1, 2), '-')
 }}}
 
-!3 3. SEG1-4, not SEG1-5
+!3 3. Pack-Level (SEG1-2), not Activity-Level
 
-'''The most important footgun of the entire project.''' SEG5 belongs to the system (iMEP vs SP), not the activity. Never full-string match.
+'''The most important pitfall of the entire project.''' Email activity and intranet page of the same pack have different SEG3 (date), SEG4 (activity sequence) and SEG5 (channel). Matching at any level finer than SEG1-2 would treat them as unrelated.
 
 !3 4. FULL OUTER JOIN, not INNER
 
-Most packs have only email data or only page data. Only ~54 packs are "both". INNER JOIN loses 90%+ of the packs — then the dashboard has only a tiny subset as its basis.
+Most packs have '''only''' email data or '''only''' page data. Only ~54 packs are "both". INNER JOIN loses 90%+ of the packs — then the dashboard has only a tiny subset as its basis.
 
-!3 5. Pack grain is SEG1-2 (Cluster + Pack-Number)
+!3 5. Pack grain is Cluster + Pack-Number
 
-When you aggregate at pack level, the key is CLUSTER-PACKNUMBER (e.g. QRREP-0000058). Activity level is SEG1-3 (with date). Dashboard default: '''Pack-Level'''.
+Pack key is CLUSTER-PACKNUMBER (e.g. QRREP-0000058). Dashboard default: '''Pack-Level (SEG1-2)'''. For within-system drilldown optionally SEG1-3 (per date) — but not for cross-channel match.
 
 !3 6. TrackingId is not a time attribute
 
@@ -167,7 +170,7 @@ TrackingId does contain SEG3 = date (YYMMDD), but that is the activity '''creati
 
 Default time filter from 2025-01-01 for iMEP, 20250101 for SP. Before 2025, TrackingId adoption is < 20% — funnel numbers become unreliable.
 
-!2 Expected Magnitudes (Q24/Q25)
+!2 Expected Magnitudes
 
 Based on the coverage findings:
  * Email packs with TrackingId (from 2025): ~54
@@ -177,6 +180,12 @@ Based on the coverage findings:
 !2 Cross References
 
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErCrossChannel
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.CrossChannel
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze.Pages
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q23, Q24, Q25. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

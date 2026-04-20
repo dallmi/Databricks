@@ -1,15 +1,15 @@
-# ER-Diagramm — `sharepoint_bronze.*`
+# ER Diagram — `sharepoint_bronze.*`
 
-> Bronze-Topologie für SharePoint-Intranet. Zentrale Unterscheidung: **`pages` (Inventory, mit TrackingID)** vs. **`pageviews` und `customevents` (Interactions, ohne TrackingID)**. Cross-Channel-Attribution geht **immer** über `pages`.
+> Bronze topology for the SharePoint intranet. Key distinction: **`pages` (inventory, with TrackingID)** vs. **`pageviews` and `customevents` (interactions, no TrackingID)**. Cross-channel attribution **always** runs through `pages`.
 
 ---
 
-## Vollständige Bronze-Topologie
+## Full Bronze topology
 
 ```mermaid
 erDiagram
-    pages      ||--o{ pageviews    : "pageUUID = pageId (Q30 to verify)"
-    pages      ||--o{ customevents : "pageUUID = pageId (Q30 to verify)"
+    pages      ||--o{ pageviews    : "pageUUID = pageId (to verify)"
+    pages      ||--o{ customevents : "pageUUID = pageId (to verify)"
     pages      }o--|| sites        : "SiteId = SiteId"
     pages      ||--o{ videos       : "pageUUID = pageId (if applicable)"
     master_employee_cdm_data }o..o{ pageviews : "potential user_gpn bridge"
@@ -54,53 +54,53 @@ erDiagram
 
 ---
 
-## Volumina & Refresh-Cadence
+## Volumes & Write Patterns
 
-| Tabelle | Rows | Refresh | Pattern |
-|---|---|---|---|
-| `customevents` | **262M** | 1×/Tag @ 02:00 UTC | (Q28: vermutlich Append) |
-| `pageviews` | **173M** | 1×/Tag @ 02:00 UTC | **Append WRITE**, 7 Bursts in 1 Minute (API-Pagination) |
-| `master_employee_cdm_data` | 24M | 1×/Tag | (TBD) |
-| `pages` | 48K | 1×/Tag @ 02:00 UTC | **MERGE Daily Snapshot Replace** |
-| `videos` | 3K | 1×/Tag | (TBD) |
-| `sites` | 805 | 1×/Tag | (TBD) |
+| Table | Rows | Pattern |
+|---|---|---|
+| `customevents` | **262M** | (presumably Append) |
+| `pageviews` | **173M** | **Append WRITE**, 7 bursts within 1 minute (API pagination) |
+| `master_employee_cdm_data` | 24M | (TBD) |
+| `pages` | 48K | **MERGE daily snapshot replace** |
+| `videos` | 3K | (TBD) |
+| `sites` | 805 | (TBD) |
 
-Plus historische Snapshots:
+Plus historical snapshots:
 - `pageviews_1_july_till_17_oct` (20.6M)
 - `pageviews_08022024` (19M)
 - `customevents_history` (13.3M)
 
 ---
 
-## Kritische Unterscheidung: Inventory vs. Interactions
+## Critical distinction: Inventory vs. Interactions
 
-### `pages` = Inventory (Dimension)
+### `pages` = Inventory (dimension)
 
-**Enthält**: Alle SharePoint-Pages mit ihren Metadaten, inklusive `UBSGICTrackingID` (wo gesetzt).
+**Contains**: every SharePoint page along with its metadata, including `UBSGICTrackingID` (where set).
 
-**Was du hier findest**:
-- "Welche Artikel existieren?"
-- "Welche Pages gehören zu TrackingID Y?"
-- "Welche Site hostet diese Page?"
+**What you find here**:
+- "Which articles exist?"
+- "Which pages belong to TrackingID Y?"
+- "Which site hosts this page?"
 
-**Was du hier NICHT findest**:
-- Wie oft wurde eine Page aufgerufen
-- Wer hat sie wann angeklickt
+**What you do NOT find here**:
+- How often a page was viewed
+- Who clicked it and when
 
-### `pageviews` / `customevents` = Interactions (Fact)
+### `pageviews` / `customevents` = Interactions (fact)
 
-**Enthält**: Jede einzelne Interaction eines Users mit einer Page.
+**Contains**: every single interaction of a user with a page.
 
-**Was du hier findest**:
-- "Wer hat welche Page wann gelesen?"
-- "Welches Device?"
-- "Welches Custom-Event wurde getriggert?"
+**What you find here**:
+- "Who read which page and when?"
+- "Which device?"
+- "Which custom event was triggered?"
 
-**Was du hier NICHT findest**:
-- Direkt die TrackingID — diese musst du **immer** via `pages` herbeijoinen.
+**What you do NOT find here**:
+- The TrackingID directly — you must **always** join it in via `pages`.
 
 ```sql
--- Die kanonische SP-Bronze-Kette
+-- The canonical SP Bronze chain
 SELECT pv.user_gpn, pv.ViewTime, p.UBSGICTrackingID, p.PageTitle
 FROM   sharepoint_bronze.pageviews pv
 JOIN   sharepoint_bronze.pages     p ON p.pageUUID = pv.pageId
@@ -109,14 +109,14 @@ WHERE  p.UBSGICTrackingID IS NOT NULL
 
 ---
 
-## Person-Identity in SharePoint-Bronze
+## Person identity in SharePoint Bronze
 
-SharePoint trägt **kein TNumber** nativ. Stattdessen:
+SharePoint carries **no TNumber** natively. Instead:
 
-- `pageviews.user_gpn` — GPN im 8-digit-Format (`00100200`)
-- `master_employee_cdm_data.T_NUMBER` — potentielle Bridge (Q17 hypothesiert, nicht final validiert)
+- `pageviews.user_gpn` — GPN in 8-digit format (`00100200`)
+- `master_employee_cdm_data.T_NUMBER` — potential bridge (hypothesised, not fully validated)
 
-**Die bestätigte Bridge läuft über iMEP's HR-Tabelle** (Q3b):
+**The confirmed bridge runs through iMEP's HR table**:
 
 ```sql
 -- gpn (8-digit) → TNumber via iMEP HR
@@ -125,21 +125,27 @@ FROM   sharepoint_bronze.pageviews    pv
 JOIN   imep_bronze.tbl_hr_employee    hr ON hr.WORKER_ID = pv.user_gpn
 ```
 
-Siehe [hr_enrichment.md](../joins/hr_enrichment.md).
+See [hr_enrichment.md](../joins/hr_enrichment.md).
 
 ---
 
-## Wichtige Beobachtungen
+## Key observations
 
-- **Schema-Inkonsistenz**: `pages.UBSGICTrackingID` vs. `pageviews.GICTrackingID` — unterschiedliche Spaltennamen für denselben fachlichen Key (plus Case-Varianten). Harmonisierung sollte im Silver-Layer passieren (`sharepoint_silver.webpage` nutzt `gICTrackingID`).
-- **1:1 URL↔TID-Mapping** (Q25): Auf `pages`-Ebene hat jede URL maximal eine TID. Safe für URL-basierte Aggregation.
-- **Append-Bursts bei pageviews**: 7 schnelle Writes innerhalb 1 Minute (00:15-00:16 UTC). Das ist kein Streaming — API-Pagination, aber sehr kurze Fenster. Für near-real-time-Dashboards der beste Signal-Kandidat.
-- **`customevents` ist fast 2× so gross wie `pageviews`** (262M vs 173M). Beide decken verwandte, aber unterschiedliche Interaction-Scopes.
+- **Schema inconsistency**: `pages.UBSGICTrackingID` vs. `pageviews.GICTrackingID` — different column names for the same business key (plus case variants). Harmonization should happen in the Silver layer (`sharepoint_silver.webpage` uses `gICTrackingID`).
+- **1:1 URL↔TID mapping**: at the `pages` level every URL has at most one TID. Safe for URL-based aggregation.
+- **Append bursts on pageviews**: 7 quick writes within 1 minute (00:15-00:16 UTC). This is not streaming — API pagination, but very short windows. Best signal candidate for near-real-time dashboards.
+- **`customevents` is nearly 2× the size of `pageviews`** (262M vs. 173M). Both cover related but different interaction scopes.
 
 ---
 
-## Referenzen
+## References
 
-- [pages.md](../tables/sharepoint/pages.md) — Die Cross-Channel-Brücke
-- [join_strategy_contract.md](../joins/join_strategy_contract.md) — Coverage-Regeln
+- [pages.md](../tables/sharepoint/pages.md) — the cross-channel bridge
+- [join_strategy_contract.md](../joins/join_strategy_contract.md) — coverage rules
 - Memory: `sharepoint_pages_inventory.md`, `sharepoint_gold_inventory.md`
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q17](../sources.md#q17), [Q25](../sources.md#q25), [Q28](../sources.md#q28), [Q30](../sources.md#q30). See [sources.md](../sources.md) for the full index.

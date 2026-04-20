@@ -4,11 +4,10 @@ Additional employee metadata — primarily '''Town'''. Carries '''UbsId''' as th
 
 !2 Meta
 | '''Layer'''          | Bronze (HR domain) |
-| '''Source system'''  | HR system -> CDC -> Delta |
+| '''Source system'''  | HR system -> Change Data Capture (CDC) -> Delta Bronze |
 | '''Grain'''          | 1 row per employee |
 | '''Primary key'''    | UbsId |
-| '''Refresh'''        | 2x/day (MERGE) |
-| '''PII'''            | Directly identifying (UbsId + Town) |
+| '''Write pattern''' | MERGE |
 
 !2 Key Columns
 
@@ -39,7 +38,7 @@ JOIN   imep_bronze.tbl_hr_user      u ON LOWER(u.UbsId) = LOWER(hr.T_NUMBER)
 
 !2 Quality Caveats
 
- * '''Case inconsistency between UbsId and T_NUMBER''' — the most common HR footgun. Always apply LOWER().
+ * '''Case inconsistency between UbsId and T_NUMBER''' — the most common HR pitfall. Always apply LOWER().
  * '''Subset of tbl_hr_employee''' — tbl_hr_user typically contains fewer or equal rows than tbl_hr_employee. Someone in tbl_hr_employee is not necessarily in tbl_hr_user.
  * '''Town is a free-form string''' — maintain a dedup/mapping table for location aggregation.
 
@@ -47,3 +46,9 @@ JOIN   imep_bronze.tbl_hr_user      u ON LOWER(u.UbsId) = LOWER(hr.T_NUMBER)
 
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrEmployee
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q3, Q3b. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

@@ -107,7 +107,7 @@ WHERE  p.UBSGICTrackingID IS NOT NULL
 GROUP BY 1, 2
 }}}
 
-!2 Gotchas
+!2 Pitfalls
 
 !3 1. LEFT JOIN for unattributed pages
 
@@ -174,5 +174,5 @@ Reduces the join partner to ~4% of the pages size.
 
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointGold.PbiDbInteractionsMetrics
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze.Pages
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErSharePointGold
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.SharePointGold
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract

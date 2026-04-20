@@ -1,8 +1,8 @@
 !1 ER Diagram — iMEP Gold
 
-Gold topology for iMEP. '''Strict 4-tier hierarchy''' (Q29, 31 tables classified). All tables join via MailingId = tbl_pbi_platform_mailings.Id = tbl_email.Id back to the master. final is the sole Tier-0 atomic fact and carries 520M rows.
+Gold topology for iMEP. '''Strict 4-tier hierarchy''' (31 tables classified). All tables join via MailingId = tbl_pbi_platform_mailings.Id = tbl_email.Id back to the master. final is the sole Tier-0 atomic fact and carries 520M rows.
 
-!2 4-Tier Hierarchy (Q29)
+!2 4-Tier Hierarchy
 
 | '''Tier''' | '''Role''' | '''# Tables''' | '''Representative members''' |
 | Tier 0 — Atomic Fact | Per-Recipient × Event × Hour | 1 | final (520M, 64K mailings) |
@@ -98,31 +98,31 @@ master ||--o{ div    : "Id = MailingId"
 master ||--o{ kpi    : "Id = MailingId (pivoted)"
 master ||--o{ ana    : "Id = MailingId"
 master ||--o{ events : "Id = MailingId"
-bronze ||--|| master : "Id = Id (1:1 CTAS)"
+bronze ||--|| master : "Id = Id (1:1 Full Rebuild)"
 final  }o..o{ master : "denormalized join contains Id"
 
 !enduml
 
-!2 Volumes & Refresh
+!2 Volumes & Write Pattern
 
-| '''Table'''                    | '''Rows'''  | '''Refresh'''              | '''Pattern''' |
-| '''final'''                    | '''~520M''' | '''2x/day @ ~00:23/12:25 UTC''' | '''CTAS Full Rebuild''' ⚠️ |
-| tbl_pbi_platform_mailings      | 73K         | 2x/day                      | CTAS |
-| tbl_pbi_platform_events        | 84K         | 2x/day                      | CTAS |
-| tbl_pbi_analytics              | 290K        | 2x/day                      | CTAS |
-| tbl_pbi_kpi                    | 245K        | 2x/day                      | CTAS |
-| tbl_pbi_mailings_region        | 73K         | 2x/day                      | CTAS |
-| tbl_pbi_mailings_division      | 697K        | 2x/day                      | CTAS |
-| (1 additional)                 | 1,384K      | 2x/day                      | CTAS |
+| '''Table'''                    | '''Rows'''  | '''Pattern''' |
+| '''final'''                    | '''~520M''' | '''Full Rebuild''' ⚠️ |
+| tbl_pbi_platform_mailings      | 73K         | Full Rebuild |
+| tbl_pbi_platform_events        | 84K         | Full Rebuild |
+| tbl_pbi_analytics              | 290K        | Full Rebuild |
+| tbl_pbi_kpi                    | 245K        | Full Rebuild |
+| tbl_pbi_mailings_region        | 73K         | Full Rebuild |
+| tbl_pbi_mailings_division      | 697K        | Full Rebuild |
+| (1 additional)                 | 1,384K      | Full Rebuild |
 
-'''All Gold tables are completely rebuilt via CTAS — no incrementality.''' Refresh window: 00:23 and 12:25 UTC (see Q28).
+'''All Gold tables are completely rebuilt on every run — no incrementality.''' Refresh cadence deliberately not documented, we don't have a complete job scheduler view.
 
 !2 Two Parallel Data Paths
 
 !3 Path 1: Master-Detail (Tier 1 → Tier 2/3)
 {{{
 tbl_email (Bronze)
-    |  [1:1 CTAS]
+    |  [1:1 Full Rebuild]
     v
 tbl_pbi_platform_mailings (Tier 1, 73K)
     |
@@ -136,7 +136,7 @@ tbl_pbi_platform_mailings (Tier 1, 73K)
 !3 Path 2: Denormalized Event Stream (final)
 {{{
 tbl_email                           -+
-tbl_email_receiver_status           -|--[CTAS Full Rebuild]--> final (520M)
+tbl_email_receiver_status           -|--[Full Rebuild]--> final (520M)
 tbl_analytics_link                  -|
 tbl_hr_employee + tbl_hr_costcenter -+
 }}}
@@ -162,7 +162,7 @@ FROM   imep_gold.tbl_pbi_kpi
 GROUP BY MailingId
 }}}
 
-!2 NULL Semantics in Tier-3 Aggregates (Q21)
+!2 NULL Semantics in Tier-3 Aggregates
 
 In tbl_pbi_mailings_region and _division:
  * UniqueOpens NULL ~28-35% — mailings without a single open event in the region. NOT a data error.
@@ -171,14 +171,14 @@ In tbl_pbi_mailings_region and _division:
 
 Semantic NULLs, not defects. Use COALESCE(value, 0) for aggregations.
 
-!2 Physical Storage (Q30)
+!2 Physical Storage
 
  * All 31 gold tables live in the '''shared gold ADLS account''' alongside sharepoint_gold.* — cross-channel joins inside Fabric/Spark possible without cross-account auth
  * Path pattern: abfss://gold@<gold-acc>/.../final or /tbl_pbi/* (+ 1 outlier /imep/tbl_active_employee_month)
  * External Delta, produced by a '''single orchestration notebook''' (Spark 3.2.1) — no managed pipeline
  * '''⚠️ Zero Partitioning''' on any table — biggest structural performance gap in the entire system; full scans on any query without tight filter
 
-!2 Engagement-Table Anomaly (Q29)
+!2 Engagement-Table Anomaly
 
 engagement (Tier 2, 1.8M rows) carries '''117,185 distinct mailingIds''', while tbl_pbi_platform_mailings only has 73,930. The delta (~44K) = event-IDs from tbl_pbi_platform_events. iMEP Gold treats '''emails + events as the same engagement unit''' in Tier-2 aggregates. Filter explicitly on the 73K mailing-IDs for mailing-specific analyses.
 
@@ -186,3 +186,9 @@ engagement (Tier 2, 1.8M rows) carries '''117,185 distinct mailingIds''', while 
 
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepGold.Final
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q21, Q28, Q29, Q30. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

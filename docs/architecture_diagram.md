@@ -1,7 +1,7 @@
-# Architektur — Cross-Channel Communication Analytics
+# Architecture — Cross-Channel Communication Analytics
 
-Visualisierung der Datenflüsse und Join-Keys zwischen Bronze, Silver, Gold und Dashboard.
-Begleitet [BRD_cross_channel_analytics.md](BRD_cross_channel_analytics.md) und
+Visualisation of the data flows and join keys between Bronze, Silver, Gold and Dashboard.
+Accompanies [BRD_cross_channel_analytics.md](BRD_cross_channel_analytics.md) and
 [genie_questions_imep.md](genie_questions_imep.md).
 
 ---
@@ -92,9 +92,9 @@ flowchart LR
 
 ---
 
-## 2. iMEP — Bronze-Join-Patterns (Pattern 2 aus Genie-Code)
+## 2. iMEP — Bronze join patterns (Pattern 2 from Genie code)
 
-So baut sich `silver.fact_email`: eine Row pro Empfänger-Interaktion, angereichert mit HR und Mailing-Master.
+This is how `silver.fact_email` is built: one row per recipient interaction, enriched with HR and mailing master.
 
 ```mermaid
 erDiagram
@@ -158,7 +158,7 @@ erDiagram
     }
 ```
 
-**Zentrale Join-Kette für `silver.fact_email`** (vereinfacht):
+**Central join chain for `silver.fact_email`** (simplified):
 
 ```
 FROM       tbl_analytics_link a
@@ -172,9 +172,9 @@ WHERE      a.IsActive = 1
 
 ---
 
-## 3. Employee-Identity-Bridge (GPN ↔ TNumber)
+## 3. Employee identity bridge (GPN ↔ TNumber)
 
-Das einzige Stelle, an der GPN im Modell lebt: beim Enrichment der PageView-Telemetrie. Danach nur noch TNumber.
+The only place where GPN lives in the model: during enrichment of the PageView telemetry. After that, only TNumber.
 
 ```mermaid
 flowchart LR
@@ -193,7 +193,7 @@ flowchart LR
     class FPV silver;
 ```
 
-| Identifier | Ort | Format |
+| Identifier | Location | Format |
 |---|---|---|
 | `user_gpn` in pageviews | `sharepoint_bronze.pageviews` | `00100200` (8-digit) |
 | `WORKER_ID` (= GPN) | `imep_bronze.tbl_hr_employee` | `00100200` |
@@ -201,13 +201,13 @@ flowchart LR
 | `TNumber` in iMEP | `tbl_email_receiver_status`, `tbl_analytics_link` | `t100200` |
 | `UbsId` | `imep_bronze.tbl_hr_user` | `T100200` (UPPERCASE) |
 
-→ Nach Silver-Build: einheitlich `t_number` (lowercase), überall. GPN gelöscht.
+→ After silver build: uniformly `t_number` (lowercase), everywhere. GPN dropped.
 
 ---
 
-## 4. Cross-Channel-Join über TrackingId
+## 4. Cross-channel join via TrackingId
 
-TrackingId ist der einzige kanalübergreifende Key — 32 Zeichen, 5 Segmente:
+TrackingId is the only cross-channel key — 32 characters, 5 segments:
 
 ```
 QRREP-0000058-240709-0000060-EMI
@@ -217,10 +217,10 @@ QRREP-0000058-240709-0000060-EMI
   │       └──────────────────────── pack number
   └──────────────────────────────── cluster
   └───────┬───────┘
-   tracking_pack_id  ← Dashboard-Grain
+   tracking_pack_id  ← Dashboard grain
 ```
 
-**Namens-Varianten pro System** (Silver harmonisiert sie zu `tracking_id`):
+**Naming variants per system** (silver harmonises them to `tracking_id`):
 
 ```mermaid
 flowchart LR
@@ -248,7 +248,7 @@ flowchart LR
 
 ---
 
-## 5. Gold Cross-Channel Fact — der Funnel pro Pack
+## 5. Gold cross-channel fact — the funnel per pack
 
 ```mermaid
 flowchart TB
@@ -280,29 +280,29 @@ flowchart TB
     class K1,K2,K3 kpi;
 ```
 
-**Funnel auf Pack-Ebene:**
+**Funnel at pack level:**
 
 ```
 Sent (100%) ─► Opened (~45%) ─► Clicked (~8%) ─► Page View (~6%) ─► Event Registered (~1.5%)
                                                       │
-                                              nur Article-Pages
+                                              article pages only
                                         (UBSGICTrackingID populated)
 ```
 
 ---
 
-## 6. Dashboard-Grain-Hierarchie
+## 6. Dashboard grain hierarchy
 
 ```mermaid
 flowchart TD
-    CL[Cluster<br/>z.B. QRREP]
+    CL[Cluster<br/>e.g. QRREP]
     PA[Pack<br/>tracking_pack_id<br/>QRREP-0000058]
     AC[Activity<br/>tracking_id <br/>QRREP-0000058-240709-0000060-EMI]
 
     CL --> PA
     PA --> AC
 
-    D1[Dashboard Default-Grain<br/>1 row per Pack]
+    D1[Dashboard default grain<br/>1 row per pack]
     PA --> D1
 
     classDef lvl1 fill:#F5F0E1,stroke:#B98E2C;
@@ -315,22 +315,22 @@ flowchart TD
     class D1 dash;
 ```
 
-Default-View zeigt eine Row pro Pack (`tracking_pack_id`). Drill-Down zur Activity-Ebene (`tracking_id`) optional. Roll-up zum Cluster für Programm-Reports.
+Default view shows one row per pack (`tracking_pack_id`). Drill-down to activity level (`tracking_id`) is optional. Roll-up to cluster for programme reports.
 
 ---
 
-## 7. Coverage Disclaimer (Q15-Findings)
+## 7. Coverage disclaimer (Q15 findings)
 
 ```mermaid
 flowchart LR
-    ALL[Alle Intranet PageViews<br/>100%]
+    ALL[All intranet PageViews<br/>100%]
     ART[Article PageViews<br/>News + Events only]
-    TRK[PageViews mit TrackingId<br/>= im Funnel]
+    TRK[PageViews with TrackingId<br/>= in funnel]
     
     ALL --> ART
     ART --> TRK
 
-    N[Dashboard-Metrik:<br/>'Attribuierte Views'<br/>deckt nur TRK ab]
+    N[Dashboard metric:<br/>'Attributed views'<br/>covers TRK only]
     TRK --> N
 
     classDef all fill:#ECEBE4,stroke:#8E8D83;
@@ -343,4 +343,4 @@ flowchart LR
     class N note;
 ```
 
-Q15/Q15b quantifizieren den Anteil TRK pro Monat → Default-Zeitraum und Coverage-Note im Dashboard.
+Q15/Q15b quantify the TRK share per month → default time window and coverage note in the dashboard.

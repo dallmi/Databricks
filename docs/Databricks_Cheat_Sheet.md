@@ -1,112 +1,112 @@
-# Databricks: Dateien finden & exportieren
+# Databricks: find and export files
 
-**Cheat Sheet für abgesicherte Umgebungen (Locked-Down Environment)**
+**Cheat sheet for locked-down environments**
 
-Erstellt: März 2026 | Kontext: Databricks auf Azure
+Created: March 2026 | Context: Databricks on Azure
 
 ---
 
-## Quick Reference: Was funktioniert
+## Quick reference: what works
 
-| Aufgabe | Funktionierende Lösung |
+| Task | Working solution |
 |---|---|
-| Datei herunterladen | Datei nach `/FileStore/` kopieren, dann URL direkt im Browser öffnen |
-| Datei löschen | `dbutils.fs.rm()` oder `%fs rm` Befehl |
-| Dateien auflisten | `%fs ls /pfad/` oder `dbutils.fs.ls()` |
+| Download a file | Copy the file to `/FileStore/`, then open the URL directly in the browser |
+| Delete a file | `dbutils.fs.rm()` or `%fs rm` command |
+| List files | `%fs ls /path/` or `dbutils.fs.ls()` |
 
 ---
 
-## 1. Datei aus DBFS herunterladen
+## 1. Download a file from DBFS
 
-**Status: FUNKTIONIERT (Browser-Methode)**
+**Status: WORKS (browser method)**
 
-In einer abgesicherten Umgebung funktionieren `displayHTML()` und `IPython.display` nicht zuverlässig. Die zuverlässigste Methode ist der direkte Browser-Zugriff über die FileStore-URL.
+In a locked-down environment, `displayHTML()` and `IPython.display` do not work reliably. The most reliable method is direct browser access via the FileStore URL.
 
-### Schritt 1: Datei nach FileStore kopieren
+### Step 1: Copy the file to FileStore
 
 ```python
 dbutils.fs.cp(
     "dbfs:/tmp/website.csv",
     "dbfs:/FileStore/website.csv",
-    True  # überschreiben falls vorhanden
+    True  # overwrite if present
 )
 ```
 
-### Schritt 2: Download-URL zusammenbauen
+### Step 2: Build the download URL
 
 ```python
 workspace_url = "https://adb-XXXXXX.Y.azuredatabricks.net"
-dateiname = "website.csv"
-download_url = f"{workspace_url}/files/{dateiname}"
+filename = "website.csv"
+download_url = f"{workspace_url}/files/{filename}"
 print(download_url)
 ```
 
-### Schritt 3: URL im Browser öffnen
+### Step 3: Open the URL in the browser
 
-Die ausgegebene URL einfach in die Browser-Adressleiste kopieren und Enter drücken. Der Download startet automatisch.
+Just copy the printed URL into the browser address bar and hit Enter. The download starts automatically.
 
-> **Hinweis:** Die Workspace-URL findest du in der Adressleiste deines Browsers, wenn du in Databricks eingeloggt bist. Format: `https://adb-XXXXXX.Y.azuredatabricks.net`
-
----
-
-## Was NICHT funktioniert hat
-
-**Status: FEHLGESCHLAGEN (HTML-Rendering blockiert)**
-
-Folgende Methoden wurden getestet und funktionierten in der abgesicherten Umgebung nicht:
-
-1. **IPython.display.FileLink:** Zeigt nur den Pfad als Text, keinen klickbaren Link.
-2. **IPython.display.HTML:** HTML wird als Plain Text gerendert, nicht als Link.
-3. **displayHTML() (Databricks-nativ):** Ebenfalls blockiert durch die Sicherheitsrichtlinien.
-
-Grund: Die Umgebung blockiert HTML-Rendering in Notebooks aus Sicherheitsgründen (Data Exfiltration Prevention).
+> **Note:** You can find the workspace URL in your browser address bar while logged into Databricks. Format: `https://adb-XXXXXX.Y.azuredatabricks.net`
 
 ---
 
-## 2. Dateien in DBFS löschen
+## What did NOT work
 
-**Status: FUNKTIONIERT**
+**Status: FAILED (HTML rendering blocked)**
 
-### Einzelne Datei löschen
+The following methods were tested and did not work in the locked-down environment:
+
+1. **IPython.display.FileLink:** Shows the path only as text, no clickable link.
+2. **IPython.display.HTML:** HTML is rendered as plain text, not as a link.
+3. **displayHTML() (Databricks native):** Also blocked by the security policy.
+
+Reason: The environment blocks HTML rendering in notebooks for security reasons (data exfiltration prevention).
+
+---
+
+## 2. Delete files in DBFS
+
+**Status: WORKS**
+
+### Delete a single file
 
 ```python
 dbutils.fs.rm("dbfs:/FileStore/website.csv")
 ```
 
-### Ordner rekursiv löschen
+### Delete a folder recursively
 
 ```python
 dbutils.fs.rm("dbfs:/tmp/", recurse=True)
 ```
 
-### Alternative: %fs Magic Commands
+### Alternative: %fs magic commands
 
 ```
-# Inhalte auflisten
+# List contents
 %fs ls /FileStore
 
-# Datei löschen
+# Delete file
 %fs rm /FileStore/website.csv
 
-# Ordner rekursiv löschen
+# Delete folder recursively
 %fs rm -r /tmp/
 ```
 
-> **Achtung:** Löschungen sind sofort und unwiderruflich! Vorsicht mit `recurse=True`.
+> **Warning:** Deletions are immediate and irreversible! Be careful with `recurse=True`.
 
 ---
 
-## 3. Wiederverwendbare Helper-Funktion
+## 3. Reusable helper function
 
-Diese Funktion kombiniert alle Schritte: Datei nach FileStore kopieren und die Download-URL ausgeben.
+This function combines all steps: copy the file to FileStore and print the download URL.
 
 ```python
 def download_from_dbfs(dbfs_path, workspace_url):
     """
-    Kopiert eine Datei nach /FileStore/ und gibt die
-    Download-URL aus, die im Browser geöffnet werden kann.
+    Copies a file to /FileStore/ and prints the
+    download URL that can be opened in the browser.
 
-    Beispiel:
+    Example:
         download_from_dbfs(
             "dbfs:/tmp/report.csv",
             "https://adb-XXXXXX.Y.azuredatabricks.net"
@@ -119,19 +119,19 @@ def download_from_dbfs(dbfs_path, workspace_url):
     dbutils.fs.cp(dbfs_path, target, True)
 
     url = f"{workspace_url}/files/{filename}"
-    print(f"Datei kopiert nach: {target}")
-    print(f"Download-URL: {url}")
-    print(">> Diese URL im Browser öffnen zum Download <<")
+    print(f"File copied to: {target}")
+    print(f"Download URL: {url}")
+    print(">> Open this URL in the browser to download <<")
     return url
 ```
 
-### Verwendung
+### Usage
 
 ```python
-# Workspace-URL einmalig definieren
+# Define the workspace URL once
 WORKSPACE = "https://adb-205203499382645.5.azuredatabricks.net"
 
-# Datei herunterladen
+# Download file
 download_from_dbfs("dbfs:/tmp/website.csv", WORKSPACE)
 ```
 
@@ -139,25 +139,25 @@ download_from_dbfs("dbfs:/tmp/website.csv", WORKSPACE)
 
 ## 4. DBFS File Browser (UI)
 
-Falls der DBFS File Browser in deiner Umgebung verfügbar ist:
+If the DBFS File Browser is available in your environment:
 
-1. Links in der Sidebar auf "Data" klicken
-2. "DBFS" auswählen (oben im Menü)
-3. Zum gewünschten Ordner navigieren (z.B. `/tmp/`)
-4. Drei-Punkte-Menü neben der Datei klicken
-5. "Download" auswählen
+1. In the left sidebar click "Data"
+2. Select "DBFS" (top of the menu)
+3. Navigate to the target folder (e.g. `/tmp/`)
+4. Click the three-dot menu next to the file
+5. Select "Download"
 
-> **Hinweis:** In abgesicherten Umgebungen ist der DBFS File Browser möglicherweise deaktiviert. In dem Fall die Code-Methode aus Abschnitt 1 verwenden.
+> **Note:** In locked-down environments the DBFS File Browser may be disabled. In that case use the code method from section 1.
 
 ---
 
-## 5. Screenshots in Tabellendaten umwandeln
+## 5. Turn screenshots into table data
 
-Wenn Export komplett blockiert ist, können Screenshots von Tabellen als Workaround genutzt werden:
+If export is fully blocked, screenshots of tables can be used as a workaround:
 
-**Option A (OneNote OCR):** Screenshot in OneNote einfügen, Rechtsklick > "Text aus Bild kopieren", in Excel einfügen.
+**Option A (OneNote OCR):** Paste screenshot into OneNote, right-click > "Copy text from picture", paste into Excel.
 
-**Option B (Python Tesseract):** Lokales OCR-Script wenn Python verfügbar ist:
+**Option B (Python Tesseract):** Local OCR script if Python is available:
 
 ```python
 pip install pytesseract pillow opencv-python pandas
@@ -173,4 +173,4 @@ df = pd.DataFrame(data)
 df.to_csv("output.csv", index=False)
 ```
 
-**Option C (KI-Assistent):** Screenshot an einen KI-Assistenten senden, der die Tabelle extrahiert und als CSV/Excel zurückgibt.
+**Option C (AI assistant):** Send the screenshot to an AI assistant that extracts the table and returns it as CSV/Excel.

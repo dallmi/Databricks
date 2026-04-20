@@ -4,11 +4,11 @@
 
 !2 Meta
 | '''Layer'''          | Bronze |
-| '''Source system'''  | iMEP (SQL Server) -> CDC -> Delta |
+| '''Source system'''  | iMEP (SQL Server) -> Change Data Capture (CDC) -> Delta Bronze |
 | '''Grain'''          | 1 row per URL per email template |
 | '''Primary key'''    | Id |
 | '''FK'''             | EmailId -> tbl_email.Id |
-| '''Refresh'''        | 2x/day @ 00:00/12:00 UTC (MERGE) |
+| '''Write pattern''' | MERGE |
 | '''Rows'''           | medium order — several links per mailing × 145K mailings |
 
 !2 Key Columns
@@ -44,7 +44,7 @@ WHERE  e.TrackingId IS NOT NULL
 !3 To tbl_analytics_link (N:1 via ElementValueId) — Click attribution per link
 
 {{{
--- Hypothetical — exact join key via ElementValueId to be verified (Q30)
+-- Hypothetical — exact join key via ElementValueId to be verified
 SELECT el.Url, COUNT(al.Id) AS clicks
 FROM   imep_bronze.tbl_email_links     el
 LEFT JOIN imep_bronze.tbl_analytics_link al ON al.EmailId = el.EmailId
@@ -54,11 +54,17 @@ GROUP BY el.Url
 
 !2 Quality Caveats
 
- * '''No direct FK to tbl_analytics_link''': click events reference EmailId and TNumber, but not directly tbl_email_links.Id. Link-specific click attribution has to go via ElementValueId or URL match — '''not yet validated''' (Q30 follow-up).
+ * '''No direct FK to tbl_analytics_link''': click events reference EmailId and TNumber, but not directly tbl_email_links.Id. Link-specific click attribution has to go via ElementValueId or URL match — '''not yet validated''' (follow-up).
  * '''Static schema''': URL does not change after publication. Redirect resolution (e.g. shortlinks) happens externally (newsletter tool) and is not visible here.
 
 !2 Cross References
 
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblAnalyticsLink
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.ImepBronze
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q30. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

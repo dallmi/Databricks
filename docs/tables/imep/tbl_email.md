@@ -1,21 +1,20 @@
 # `imep_bronze.tbl_email`
 
-> Master-Tabelle für iMEP-Mailings. Einziger Ort in Bronze, an dem `TrackingId` direkt am Mailing hängt — alles andere (Sends, Opens, Clicks) verknüpft sich über `EmailId = Id` zurück an diese Zeile.
+> Master table for iMEP mailings. Only place in Bronze where `TrackingId` is attached directly to the mailing — everything else (Sends, Opens, Clicks) links back to this row via `EmailId = Id`.
 
 | | |
 |---|---|
 | **Layer** | Bronze |
-| **Source system** | iMEP (SQL Server) → CDC → Delta |
-| **Grain** | 1 row per Mailing (Versand-Definition, nicht pro Empfänger) |
+| **Source system** | iMEP (SQL Server) → Change Data Capture (CDC) → Delta Bronze |
+| **Grain** | 1 row per Mailing (mailing definition, not per recipient) |
 | **Primary key** | `Id` |
-| **Cross-channel key** | `TrackingId` (32-char, 5 Segmente) |
-| **Refresh** | **2×/Tag @ 00:00 und 12:00 UTC** (MERGE full-table upsert on Id, Service Principal) — Q28 |
-| **Approx row count** | ~145K (Q27-Stand 2026-04-20, Timespan Nov 2020 – Apr 2026) |
-| **PII** | `CreatedBy` = TNumber des Autors → indirekt identifizierend |
+| **Cross-channel key** | `TrackingId` (32-char, 5 segments) |
+| **Write pattern** | MERGE full-table upsert on Id (Service Principal) |
+| **Approx row count** | ~145K (as of 2026-04-20, timespan Nov 2020 – Apr 2026) |
 
 ---
 
-## Neighborhood — direkte Joins mit Keys
+## Neighborhood — direct joins with keys
 
 ```mermaid
 erDiagram
@@ -70,14 +69,14 @@ erDiagram
 
 | Column | Type | Role | Notes |
 |---|---|---|---|
-| `Id` | string | **PK** | GUID, Join-Target für alle iMEP-Children |
-| `TrackingId` | string | **Cross-channel join** | `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL`. UPPER & clean. Genau 32 Zeichen wenn populated, sonst NULL bei nicht-getrackten Mailings. |
-| `Title` | string | Description | Interner Name, kein Subject |
-| `Subject` | string | Description | E-Mail-Betreff (sichtbar für Empfänger) |
-| `CreatedBy` | string | FK → `tbl_hr_employee.T_NUMBER` | TNumber lowercase (`t100200`), **nicht** GPN |
-| `CreationDate` | timestamp | Temporal | Erstellzeit des Mailing-Templates — **nicht** Versandzeit (die steckt in `tbl_email_receiver_status.DateTime`) |
+| `Id` | string | **PK** | GUID, join target for all iMEP children |
+| `TrackingId` | string | **Cross-channel join** | `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL`. UPPER & clean. Exactly 32 characters when populated, otherwise NULL for untracked mailings. |
+| `Title` | string | Description | Internal name, not the subject |
+| `Subject` | string | Description | Email subject line (visible to recipient) |
+| `CreatedBy` | string | FK → `tbl_hr_employee.T_NUMBER` | TNumber lowercase (`t100200`), **not** GPN |
+| `CreationDate` | timestamp | Temporal | Creation time of the mailing template — **not** send time (that lives in `tbl_email_receiver_status.DateTime`) |
 
-Vollständige Spaltenliste: `DESCRIBE imep_bronze.tbl_email` in Databricks.
+Full column list: `DESCRIBE imep_bronze.tbl_email` in Databricks.
 
 ---
 
@@ -87,7 +86,7 @@ Vollständige Spaltenliste: `DESCRIBE imep_bronze.tbl_email` in Databricks.
 Id            = "0a3f6c2e-..."
 TrackingId    = "QRREP-0000058-240709-0000060-EMI"
 Title         = "Q2 Investor Update — DE"
-Subject       = "Ihr Quartalsbericht zum Q2 2024"
+Subject       = "Your quarterly report for Q2 2024"
 CreatedBy     = "t100200"
 CreationDate  = 2024-07-08 14:22:31
 ```
@@ -97,7 +96,7 @@ CreationDate  = 2024-07-08 14:22:31
 ## Primary joins
 
 ### → `tbl_email_receiver_status` (1:N) — Sends / Bounces
-Eine Mailing-Zeile, viele Empfänger. Hier lebt **wer hat es bekommen** und **wann versendet**.
+One mailing row, many recipients. This is where **who received it** and **when it was sent** live.
 
 ```sql
 SELECT e.TrackingId, rs.TNumber, rs.DateTime, rs.LogStatus
@@ -107,7 +106,7 @@ WHERE  e.TrackingId IS NOT NULL
 ```
 
 ### → `tbl_analytics_link` (1:N) — Opens / Clicks
-Interaktions-Events (OPEN, CLICK). Jede Row = ein Event eines Empfängers.
+Interaction events (OPEN, CLICK). Each row = one event from a recipient.
 
 ```sql
 SELECT e.TrackingId, al.TNumber, al.LinkTypeEnum, al.CreationDate AS event_time, al.Agent
@@ -116,60 +115,66 @@ JOIN   imep_bronze.tbl_analytics_link al ON al.EmailId = e.Id
 WHERE  al.IsActive = 1
 ```
 
-### → `tbl_email_links` (1:N) — Template-URL-Inventory
-Statische URLs im Template. Nicht für Funnel-Metriken — dafür `tbl_analytics_link` nehmen.
+### → `tbl_email_links` (1:N) — Template URL inventory
+Static URLs in the template. Not for funnel metrics — use `tbl_analytics_link` for that.
 
-### → `imep_gold.tbl_pbi_platform_mailings` (1:1) — Pre-aggregated Master
-Gleiche `Id`, aber mit Content-Metriken angereichert. **Wir konsumieren Gold**, nicht Bronze (siehe Lineage unten).
+### → `imep_gold.tbl_pbi_platform_mailings` (1:1) — Pre-aggregated master
+Same `Id`, but enriched with content metrics. **We consume Gold**, not Bronze (see lineage below).
 
 ---
 
 ## Quality caveats
 
-- **TrackingId NULL-Rate**: Nicht jedes Mailing ist getrackt. Für Cross-Channel-Attribution `WHERE TrackingId IS NOT NULL` setzen. Q24: nur 986/73,930 Mailings (1.3%) haben TrackingId, aber starker Uptrend (2024: 99 → 2025: 637 → 2026 YTD: 250).
-- **TrackingId-Format**: Immer 32 Zeichen, 5 Segmente getrennt durch `-`, UPPER. Channel-Segment (SEG5) ist System-Ownership, nicht Medium — für Cross-Channel-Match mit SharePoint nur SEG1–4 vergleichen (siehe `joins/cross_channel_trackingid.md`).
-- **Cross-Channel-Pfad (Q27)**: TrackingId ist **Dimension**, nicht Fact-Key — koexistiert **nie** mit EmailId in derselben Tabelle. Cross-Channel läuft deshalb `tbl_email.TrackingId ↔ sharepoint_bronze.pages.UBSGICTrackingID`, **nicht** über Engagement-Rows (`pageviews` / `tbl_analytics_link`).
-- **`CreationDate` ≠ Versandzeit**: Für "wann ging's raus" `tbl_email_receiver_status.DateTime` joinen.
-- **`CreatedBy` Format**: lowercase `t######`. Joins gegen `tbl_hr_user.UbsId` brauchen `LOWER(UbsId)`.
+- **TrackingId NULL rate**: Not every mailing is tracked. For cross-channel attribution, apply `WHERE TrackingId IS NOT NULL`. Only 986/73,930 mailings (1.3%) have a TrackingId, but strong uptrend (2024: 99 → 2025: 637 → 2026 YTD: 250).
+- **TrackingId format**: Always 32 characters, 5 segments separated by `-`, UPPER. Structure: `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL`. SEG5 = channel (Email/Newsletter/Article/…). For cross-channel match with SharePoint compare only **SEG1-2 (Pack)** — email and intranet page of the same pack carry different dates/activities/channels. See [joins/cross_channel_via_tracking_id.md](../../joins/cross_channel_via_tracking_id.md).
+- **Cross-channel path**: TrackingId is a **dimension**, not a fact key — it **never** co-exists with EmailId in the same table. Cross-channel therefore runs `tbl_email.TrackingId ↔ sharepoint_bronze.pages.UBSGICTrackingID`, **not** via engagement rows (`pageviews` / `tbl_analytics_link`).
+- **`CreationDate` ≠ send time**: For "when did it go out" join `tbl_email_receiver_status.DateTime`.
+- **`CreatedBy` format**: lowercase `t######`. Joins against `tbl_hr_user.UbsId` require `LOWER(UbsId)`.
 
 ---
 
-## Lineage — Bronze → Gold (Silver ist übersprungen!)
+## Lineage — Bronze → Gold (Silver is skipped!)
 
-> **Confirmed 2026-04-20 (Q26)**: Email-Engagement **skipped den Silver-Layer komplett**. iMEP hat sich bewusst gegen eine dedizierte `silver.fact_email`-Schicht entschieden. `imep_silver` existiert — aber nur für **Events** (`invitation`, `eventregistration`, `event`), nicht für Email.
+> **Confirmed 2026-04-20**: Email engagement **skips the Silver layer entirely**. iMEP deliberately chose not to build a dedicated `silver.fact_email` layer. `imep_silver` exists — but only for **Events** (`invitation`, `eventregistration`, `event`), not for Email.
 
 ```
 imep_bronze.tbl_email
 imep_bronze.tbl_email_receiver_status   ───►   imep_gold.final  (~520M rows)
 imep_bronze.tbl_analytics_link                    │
-                                                  ├─ denormalisierter Join über Bronze
-                                                  ├─ HR-Enrichment spät angewendet
-                                                  └─ extreme Breite & Grösse by design
+                                                  ├─ denormalized join over Bronze
+                                                  ├─ HR enrichment applied late
+                                                  └─ extreme width & size by design
 
-imep_bronze.tbl_email  ───►  imep_gold.tbl_pbi_platform_mailings  [Master, 1:1 zu Bronze.Id]
+imep_bronze.tbl_email  ───►  imep_gold.tbl_pbi_platform_mailings  [Master, 1:1 to Bronze.Id]
                                        │
                                        └─► imep_gold.<tier-3 engagement>
-                                              - Join über lowercase `mailingid`
-                                              - UniqueOpens / UniqueClicks pro Mailing × Region
+                                              - Join via lowercase `mailingid`
+                                              - UniqueOpens / UniqueClicks per Mailing × Region
 ```
 
-**Consumption-Strategie für Cross-Channel-MVP**:
-- **Email-Events**: aus `imep_gold.final` konsumieren (ist *der* Email-Fact), nicht Bronze neu joinen.
-- **Mailing-Master**: `imep_gold.tbl_pbi_platform_mailings` für Title/Subject/TrackingId pro Mailing.
-- **Engagement-KPIs**: Tier-3 Tabellen (`UniqueOpens`/`UniqueClicks` pro Mailing × Region/Division).
+**Consumption strategy for cross-channel MVP**:
+- **Email events**: consume from `imep_gold.final` (it *is* the email fact), do not re-join Bronze.
+- **Mailing master**: `imep_gold.tbl_pbi_platform_mailings` for Title/Subject/TrackingId per mailing.
+- **Engagement KPIs**: Tier-3 tables (`UniqueOpens`/`UniqueClicks` per Mailing × Region/Division).
 
-**Offen (Q28/Q29/Q30)**:
-- Exakter Tabellenname `imep_gold.final` + Spalten-Grain (per-recipient-event?)
-- Refresh-Cadence via `DESCRIBE HISTORY`
-- Ob `imep_gold.final` alle Bronze-Spalten 1:1 trägt oder nur KPI-Untermenge
+**Open**:
+- Exact table name `imep_gold.final` + column grain (per-recipient-event?)
+- Write pattern via `DESCRIBE HISTORY`
+- Whether `imep_gold.final` carries all Bronze columns 1:1 or only a KPI subset
 
-Siehe [memory/imep_silver_q26_findings.md](../../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_silver_q26_findings.md) für volle Findings.
+See [memory/imep_silver_q26_findings.md](../../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_silver_q26_findings.md) for full findings.
 
 ---
 
-## Referenzen
+## References
 
-- ER-Diagramm: Section 2 in [../../architecture_diagram.md](../../architecture_diagram.md)
-- Canonical Join-Kette: [../../joins/imep_bronze_join.md](../../joins/imep_bronze_join.md) *(tbd)*
-- Cross-Channel TrackingId-Match: [../../joins/cross_channel_trackingid.md](../../joins/cross_channel_trackingid.md) *(tbd)*
-- Genie-Findings: `memory/imep_genie_findings_q1_q2_q3.md`
+- ER diagram: Section 2 in [../../architecture_diagram.md](../../architecture_diagram.md)
+- Canonical join chain: [../../joins/imep_bronze_join.md](../../joins/imep_bronze_join.md) *(tbd)*
+- Cross-channel TrackingId match: [../../joins/cross_channel_trackingid.md](../../joins/cross_channel_trackingid.md) *(tbd)*
+- Genie findings: `memory/imep_genie_findings_q1_q2_q3.md`
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q1b](../../sources.md#q1b), [Q2](../../sources.md#q2), [Q24](../../sources.md#q24), [Q26](../../sources.md#q26), [Q27](../../sources.md#q27), [Q28](../../sources.md#q28), [Q29](../../sources.md#q29), [Q30](../../sources.md#q30). See [sources.md](../../sources.md) for the full index.

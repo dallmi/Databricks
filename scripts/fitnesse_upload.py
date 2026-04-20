@@ -44,7 +44,7 @@ PLAN: list[tuple[str, str | None]] = [
     # path_relative_to_root              , source_file_relative_to_pages_dir
     ("",                                     "Overview.txt"),  # leaf content for root itself
     ("DataGlossary",                         None),
-    ("ErDiagrams",                           None),
+    ("Diagrams",                           None),
     ("JoinStrategy",                         None),
     ("DataGlossary.ImepBronze",              None),
     ("DataGlossary.ImepGold",                None),
@@ -52,11 +52,11 @@ PLAN: list[tuple[str, str | None]] = [
     ("DataGlossary.SharePointGold",          None),
     ("DataGlossary.Hr",                      None),
     # Content pages
-    ("ErDiagrams.ErImepBronze",              "ErDiagrams/ErImepBronze.txt"),
-    ("ErDiagrams.ErSharePointBronze",        "ErDiagrams/ErSharePointBronze.txt"),
-    ("ErDiagrams.ErImepGold",                "ErDiagrams/ErImepGold.txt"),
-    ("ErDiagrams.ErSharePointGold",          "ErDiagrams/ErSharePointGold.txt"),
-    ("ErDiagrams.ErCrossChannel",            "ErDiagrams/ErCrossChannel.txt"),
+    ("Diagrams.ImepBronze",              "Diagrams/ImepBronze.txt"),
+    ("Diagrams.SharePointBronze",        "Diagrams/SharePointBronze.txt"),
+    ("Diagrams.ImepGold",                "Diagrams/ImepGold.txt"),
+    ("Diagrams.SharePointGold",          "Diagrams/SharePointGold.txt"),
+    ("Diagrams.CrossChannel",            "Diagrams/CrossChannel.txt"),
     ("JoinStrategy.StrategyContract",        "JoinStrategy/StrategyContract.txt"),
     ("JoinStrategy.ImepBronzeEmailEvents",   "JoinStrategy/ImepBronzeEmailEvents.txt"),
     ("JoinStrategy.SharePointGoldToPages",   "JoinStrategy/SharePointGoldToPages.txt"),
@@ -84,7 +84,7 @@ Container page grouping the {name} section of the MultiChannelDataModel knowledg
 
 SUBSECTION_HINT = {
     "DataGlossary":            "See subfolders !see .ImepBronze, !see .ImepGold, !see .SharePointBronze, !see .SharePointGold, !see .Hr for per-domain table cards.",
-    "ErDiagrams":              "Five domain-scoped entity-relationship diagrams covering iMEP Bronze, iMEP Gold, SharePoint Bronze, SharePoint Gold, and the Cross-Channel bridge.",
+    "Diagrams":              "Five domain-scoped entity-relationship diagrams covering iMEP Bronze, iMEP Gold, SharePoint Bronze, SharePoint Gold, and the Cross-Channel bridge.",
     "JoinStrategy":            "Start with !see .StrategyContract for the five hard rules, then consult the canonical recipes for iMEP Bronze, SharePoint Gold, HR enrichment, and cross-channel joins.",
     "DataGlossary.ImepBronze": "iMEP bronze tables: TblEmail, TblEmailReceiverStatus, TblAnalyticsLink, TblEmailLinks, TblEvent.",
     "DataGlossary.ImepGold":   "iMEP gold tables: Final (520M consumption endpoint) plus tier-1/2/3 aggregates.",

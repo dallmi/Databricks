@@ -132,8 +132,63 @@ def _render_table(rows: list[list[str]], pages_index: dict[str, str] | None) -> 
     return "\n".join(out)
 
 
+def _render_contents_widget(
+    current_sub: str,
+    depth: int,
+    children_map: dict[str, list[str]] | None,
+    pages_index: dict[str, str] | None,
+) -> str:
+    """Render the FitNesse !contents widget as a nested HTML list.
+
+    depth == 1  → direct children only (items with grandchildren get a '+' marker)
+    depth >= 2  → recurse that many levels
+    depth <= 0  → fully recursive (effectively unlimited)
+    """
+    if children_map is None or pages_index is None:
+        return '<div class="fn-contents"><p><em>[contents]</em></p></div>'
+
+    max_depth = 99 if depth <= 0 else depth
+
+    def _render_level(parent_sub: str, level: int) -> str:
+        children = children_map.get(parent_sub, [])
+        if not children:
+            return ""
+        parts_html = ['<ul class="fn-contents-list">']
+        for child in children:
+            label = child.split(".")[-1]
+            href = pages_index.get(child, f"{child}.html")
+            has_grandchildren = bool(children_map.get(child))
+            collapsed = level >= max_depth and has_grandchildren
+            marker = (
+                ' <span class="fn-contents-plus">+</span>' if collapsed else ""
+            )
+            nested = (
+                _render_level(child, level + 1)
+                if has_grandchildren and not collapsed
+                else ""
+            )
+            parts_html.append(
+                f'<li><a href="{href}">{html.escape(label)}</a>{marker}{nested}</li>'
+            )
+        parts_html.append("</ul>")
+        return "".join(parts_html)
+
+    body = _render_level(current_sub, 1)
+    if not body:
+        return ""
+    return (
+        '<div class="fn-contents">'
+        '<div class="fn-contents-title">Contents:</div>'
+        f"{body}"
+        "</div>"
+    )
+
+
 def parse_fitnesse_to_html(
-    text: str, pages_index: dict[str, str] | None
+    text: str,
+    pages_index: dict[str, str] | None,
+    current_sub: str = "",
+    children_map: dict[str, list[str]] | None = None,
 ) -> str:
     """Render a FitNesse wiki source string to an HTML fragment."""
     lines = text.split("\n")
@@ -144,6 +199,21 @@ def parse_fitnesse_to_html(
     while i < n:
         line = lines[i]
         stripped = line.rstrip("\r")
+
+        # !contents widget: !contents [-R[N]] [-g] [-p] [-f] [-h]
+        m = re.match(r"^!contents\b(.*)$", stripped.strip())
+        if m:
+            flags = m.group(1).strip()
+            rm = re.search(r"-R(\d*)", flags)
+            if rm is None:
+                depth = 1
+            else:
+                depth = int(rm.group(1)) if rm.group(1) else 0  # 0 → unlimited
+            out.append(
+                _render_contents_widget(current_sub, depth, children_map, pages_index)
+            )
+            i += 1
+            continue
 
         # PlantUML block
         if stripped.strip() == "!startuml":
@@ -256,7 +326,7 @@ def discover_pages(pages_dir: Path) -> dict[str, Path]:
     for path in sorted(pages_dir.rglob("*.txt")):
         rel = path.relative_to(pages_dir)
         # pages/Overview.txt          -> ""  (content is the root page)
-        # pages/ErDiagrams/X.txt      -> "ErDiagrams.X"
+        # pages/Diagrams/X.txt      -> "Diagrams.X"
         # pages/DataGlossary/Hr/X.txt -> "DataGlossary.Hr.X"
         parts = list(rel.with_suffix("").parts)
         if parts == ["Overview"]:
@@ -278,6 +348,46 @@ def pages_to_html_map(pages: dict[str, Path]) -> dict[str, str]:
     return mapping
 
 
+def build_children_map(pages: dict[str, Path]) -> dict[str, list[str]]:
+    """Return {parent_sub: [direct_child_sub, ...]} across every page + section.
+
+    Root is represented by the empty string "". A sub like
+    "DataGlossary.ImepBronze.TblEmail" contributes children to both
+    "" → "DataGlossary", "DataGlossary" → "DataGlossary.ImepBronze", and
+    "DataGlossary.ImepBronze" → "DataGlossary.ImepBronze.TblEmail".
+    """
+    children: dict[str, set[str]] = {}
+    for sub in pages:
+        if sub == "":
+            continue
+        parts = sub.split(".")
+        children.setdefault("", set()).add(parts[0])
+        for depth in range(1, len(parts)):
+            parent = ".".join(parts[:depth])
+            child = ".".join(parts[: depth + 1])
+            children.setdefault(parent, set()).add(child)
+    return {p: sorted(c) for p, c in children.items()}
+
+
+def discover_sections(pages: dict[str, Path]) -> dict[str, list[str]]:
+    """Find every intermediate section (path prefix without its own .txt) and
+    return {section_sub: [direct_child_sub, ...]}.
+
+    Example: {"DataGlossary": ["DataGlossary.Hr", "DataGlossary.ImepBronze", ...],
+              "DataGlossary.Hr": ["DataGlossary.Hr.TblHrEmployee", ...]}
+    """
+    all_subs = {s for s in pages if s != ""}
+    sections: dict[str, set[str]] = {}
+    for sub in all_subs:
+        parts = sub.split(".")
+        for depth in range(1, len(parts)):
+            parent = ".".join(parts[:depth])
+            child = ".".join(parts[: depth + 1])
+            sections.setdefault(parent, set()).add(child)
+    # Drop sections that already have their own source page — those render normally.
+    return {s: sorted(children) for s, children in sections.items() if s not in all_subs}
+
+
 def build_sidebar_html(pages: dict[str, Path]) -> str:
     """Render a hierarchical sidebar listing all pages."""
     # Group by section.
@@ -293,7 +403,7 @@ def build_sidebar_html(pages: dict[str, Path]) -> str:
     parts_html.append(
         '<div class="sidebar-header"><a href="index.html">MultiChannelDataModel</a></div>'
     )
-    for section_name in ["ErDiagrams", "JoinStrategy", "DataGlossary"]:
+    for section_name in ["Diagrams", "JoinStrategy", "DataGlossary"]:
         if section_name not in sections:
             continue
         parts_html.append(f'<div class="sidebar-section">{section_name}</div>')
@@ -461,6 +571,27 @@ pre {
 }
 .plantuml img { max-width: 100%; height: auto; }
 
+/* !contents widget — corp-style inline table of contents */
+.fn-contents {
+  margin: 6px 0 18px;
+  padding: 0;
+}
+.fn-contents-title {
+  font-weight: 700; color: #000;
+  margin: 4px 0 2px;
+}
+.fn-contents-list {
+  list-style: disc; margin: 0 0 0 6px; padding-left: 22px;
+}
+.fn-contents-list .fn-contents-list {
+  margin: 0; padding-left: 22px;
+}
+.fn-contents-list li { margin: 1px 0; }
+.fn-contents-list a { color: #3a6ea5; }
+.fn-contents-plus {
+  color: #666; font-weight: 700; margin-left: 2px;
+}
+
 /* Footer — mimic FitNesse footer link bar */
 .fn-footer {
   padding: 10px 14px;
@@ -474,8 +605,32 @@ pre {
 """
 
 
+def render_section_stub(
+    sub: str,
+    children: list[str],
+    pages_index: dict[str, str],
+    children_map: dict[str, list[str]],
+) -> str:
+    """Render an auto-generated index page for a section folder that has no own .txt."""
+    title = sub.split(".")[-1]
+    contents_block = _render_contents_widget(sub, 0, children_map, pages_index)
+    content = (
+        f'<h1 id="{html.escape(title)}">{html.escape(title)}</h1>\n'
+        f'<p><em>Section index (auto-generated for local preview).</em></p>\n'
+        f'{contents_block}'
+    )
+    return HTML_TEMPLATE.format(
+        title=html.escape(title),
+        breadcrumbs=breadcrumbs(sub),
+        content=content,
+    )
+
+
 def render_page(
-    sub: str, source_path: Path, pages_index: dict[str, str]
+    sub: str,
+    source_path: Path,
+    pages_index: dict[str, str],
+    children_map: dict[str, list[str]],
 ) -> str:
     text = source_path.read_text(encoding="utf-8")
     # Page title: use first !1 line or sub name.
@@ -485,7 +640,7 @@ def render_page(
     title_plain = re.sub(r"'''(.+?)'''", r"\1", title)
     title_plain = re.sub(r"''(.+?)''", r"\1", title_plain)
 
-    content = parse_fitnesse_to_html(text, pages_index)
+    content = parse_fitnesse_to_html(text, pages_index, sub, children_map)
 
     return HTML_TEMPLATE.format(
         title=html.escape(title_plain),
@@ -506,18 +661,34 @@ def main() -> int:
         return 2
 
     pages_index = pages_to_html_map(pages)
+    sections = discover_sections(pages)
+    # Extend pages_index so !see cross-refs to section folders resolve.
+    for section_sub in sections:
+        pages_index.setdefault(section_sub, f"{section_sub}.html")
+
+    children_map = build_children_map(pages)
+
     # Write CSS
     (OUT_DIR / "style.css").write_text(CSS_CONTENT, encoding="utf-8")
 
     # Render each page
     for sub, source_path in pages.items():
-        html_text = render_page(sub, source_path, pages_index)
+        html_text = render_page(sub, source_path, pages_index, children_map)
         out_name = pages_index[sub]
         (OUT_DIR / out_name).write_text(html_text, encoding="utf-8")
         print(f"  wrote {out_name}  (from {source_path.relative_to(PAGES_DIR)})")
 
+    # Render section stubs for any intermediate folders without their own .txt
+    for section_sub, children in sections.items():
+        html_text = render_section_stub(
+            section_sub, children, pages_index, children_map
+        )
+        out_name = pages_index[section_sub]
+        (OUT_DIR / out_name).write_text(html_text, encoding="utf-8")
+        print(f"  wrote {out_name}  (auto-generated section index)")
+
     print()
-    print(f"Done — {len(pages)} pages written to {OUT_DIR}/")
+    print(f"Done — {len(pages) + len(sections)} pages written to {OUT_DIR}/")
     print(f"Open in browser:   file://{(OUT_DIR / 'index.html').resolve()}")
     return 0
 

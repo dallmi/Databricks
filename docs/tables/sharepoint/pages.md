@@ -1,30 +1,29 @@
 # `sharepoint_bronze.pages`
 
-> **Die Cross-Channel-Brücke.** Page-Inventory mit `UBSGICTrackingID` — **der einzige Ort**, an dem SharePoint-Side-Interaktionen einem Pack zugeordnet werden können. 48K Rows, aber nur **1,949 (~4%) haben `UBSGICTrackingID` populated**. Das ist der kritischste Coverage-Blocker im gesamten Cross-Channel-Modell. *(Q22, Q25)*
+> **The cross-channel bridge.** Page inventory with `UBSGICTrackingID` — **the only place** where SharePoint-side interactions can be attributed to a Pack. 48K rows, but only **1,949 (~4%) have `UBSGICTrackingID` populated**. This is the most critical coverage blocker in the entire cross-channel model.
 
 | | |
 |---|---|
 | **Layer** | Bronze |
-| **Source system** | SharePoint → (CDC / Snapshot) → Delta |
-| **Grain** | 1 row per SharePoint-Page (Snapshot) |
+| **Source system** | SharePoint -> Change Data Capture (CDC) or Snapshot -> Delta Bronze |
+| **Grain** | 1 row per SharePoint page (snapshot) |
 | **Primary key** | `pageUUID` (GUID) |
-| **Cross-channel key** | `UBSGICTrackingID` — **nur 4% populated** ⚠️ |
-| **Refresh** | **1×/Tag @ ~02:00 UTC** (MERGE Daily Snapshot Replace, Service Principal) — Q28 |
-| **Approx row count** | **~48K** (Q17/Q27-Stand, Timespan 1900 – Apr 2026) |
-| **PII** | keine direkte PII — Pages selbst sind öffentlich im Intranet |
-| **Coverage** | 1,949 / 48,419 Pages (~4%) haben TrackingID → **nur Article-Pages (News/Events)** |
+| **Cross-channel key** | `UBSGICTrackingID` — **only 4% populated** ⚠️ |
+| **Write pattern** | MERGE Daily Snapshot Replace (Service Principal) |
+| **Approx row count** | **~48K** (as of today, timespan 1900 – Apr 2026) |
+| **Coverage** | 1,949 / 48,419 pages (~4%) have TrackingID -> **only article pages (News/Events)** |
 
 ---
 
-## Neighborhood — Dimension-Table für Cross-Channel
+## Neighborhood — dimension table for cross-channel
 
 ```mermaid
 erDiagram
     pages ||--o{ pbi_db_interactions_metrics : "pageUUID = marketingPageId"
     pages ||--o{ pbi_db_pageviewed_metric    : "pageUUID = marketingPageId"
-    pages ||--o{ pageviews                   : "pageUUID = ? (Q30 to verify)"
+    pages ||--o{ pageviews                   : "pageUUID = ? (to verify)"
     pages }o--|| sites                       : "SiteId = SiteId"
-    pages ||--o| tbl_email                   : "UBSGICTrackingID ↔ TrackingId via SEG1-4"
+    pages ||--o| tbl_email                   : "UBSGICTrackingID <-> TrackingId via SEG1-2"
 
     pages {
         string pageUUID PK "GUID"
@@ -55,14 +54,14 @@ erDiagram
 
 | Column | Type | Role | Notes |
 |---|---|---|---|
-| `pageUUID` | string (GUID) | **PK** | Eindeutig pro Page. Wird als `marketingPageId` in allen `sharepoint_gold.*`-Metric-Tables referenziert. |
-| `UBSGICTrackingID` | string | **Cross-channel key** | Format: `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL` (32-char, 5-seg, UPPER). **Nur 4% populated.** |
-| `UBSArticleDate` | date | Publication date | Wann wurde der Artikel publiziert. Bei non-Article-Pages oft NULL. |
-| `PageURL` / `PageUrl` / `url` | string | URL | Spalten-Name variiert — verify via `DESCRIBE`. 1:1 URL↔TID-Mapping laut Q25. |
-| `PageTitle` | string | Display | Page-Titel |
-| `SiteId` | string | FK → `sites.SiteId` | Site-Zuordnung (99.4% der getrackten Pages = "News and events") |
+| `pageUUID` | string (GUID) | **PK** | Unique per page. Referenced as `marketingPageId` in all `sharepoint_gold.*` metric tables. |
+| `UBSGICTrackingID` | string | **Cross-channel key** | Format: `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL` (32-char, 5-seg, UPPER). **Only 4% populated.** |
+| `UBSArticleDate` | date | Publication date | When the article was published. Often NULL on non-article pages. |
+| `PageURL` / `PageUrl` / `url` | string | URL | Column name varies — verify via `DESCRIBE`. 1:1 URL<->TID mapping. |
+| `PageTitle` | string | Display | Page title |
+| `SiteId` | string | FK -> `sites.SiteId` | Site assignment (99.4% of tracked pages = "News and events") |
 
-Vollständige Liste (95 Spalten insgesamt laut Q17) via `DESCRIBE sharepoint_bronze.pages`.
+Full list (95 columns in total) via `DESCRIBE sharepoint_bronze.pages`.
 
 ---
 
@@ -81,7 +80,7 @@ SiteId            = "..."
 
 ## Primary joins
 
-### → `pbi_db_interactions_metrics` (1:N) — Der Standard-Cross-Channel-Weg
+### -> `pbi_db_interactions_metrics` (1:N) — the standard cross-channel path
 
 ```sql
 SELECT p.UBSGICTrackingID, p.PageURL, p.UBSArticleDate,
@@ -90,12 +89,12 @@ SELECT p.UBSGICTrackingID, p.PageURL, p.UBSArticleDate,
        COUNT(DISTINCT m.viewingcontactid) AS unique_viewers
 FROM   sharepoint_bronze.pages p
 JOIN   sharepoint_gold.pbi_db_interactions_metrics m ON m.marketingPageId = p.pageUUID
-WHERE  p.UBSGICTrackingID IS NOT NULL            -- Pflicht-Filter für Attribution
-  AND  m.visitdatekey   >= '20250101'            -- Default-Zeitraum ab 2025
+WHERE  p.UBSGICTrackingID IS NOT NULL            -- mandatory filter for attribution
+  AND  m.visitdatekey   >= '20250101'            -- default time window from 2025
 GROUP BY p.UBSGICTrackingID, p.PageURL, p.UBSArticleDate
 ```
 
-### → `sites` (N:1) — Site-Kontext
+### -> `sites` (N:1) — site context
 
 ```sql
 SELECT p.*, s.SiteName, s.SiteUrl
@@ -103,20 +102,20 @@ FROM   sharepoint_bronze.pages p
 LEFT JOIN sharepoint_bronze.sites s ON s.SiteId = p.SiteId
 ```
 
-### → iMEP Cross-Channel Link (SEG1-4)
+### -> iMEP cross-channel link (SEG1-2)
 
 ```sql
--- Pack-Level-Link: tbl_email × pages via SEG1-4
+-- Pack-level link: tbl_email x pages via SEG1-2
 WITH email_packs AS (
   SELECT DISTINCT
-         array_join(slice(split(UPPER(TrackingId), '-'), 1, 4), '-') AS seg1_4,
+         array_join(slice(split(UPPER(TrackingId), '-'), 1, 2), '-') AS seg1_4,
          TrackingId AS email_tid
   FROM   imep_bronze.tbl_email
   WHERE  TrackingId IS NOT NULL
 ),
 page_packs AS (
   SELECT DISTINCT
-         array_join(slice(split(UPPER(UBSGICTrackingID), '-'), 1, 4), '-') AS seg1_4,
+         array_join(slice(split(UPPER(UBSGICTrackingID), '-'), 1, 2), '-') AS seg1_4,
          UBSGICTrackingID AS page_tid
   FROM   sharepoint_bronze.pages
   WHERE  UBSGICTrackingID IS NOT NULL
@@ -128,67 +127,73 @@ JOIN   page_packs  p ON p.seg1_4 = e.seg1_4
 
 ---
 
-## Quality caveats — kritisch
+## Quality caveats — critical
 
-### ⚠️ 4%-Coverage-Blocker (Q22)
+### ⚠️ 4% coverage blocker
 
-Nur **1,949 / 48,419 Pages** haben `UBSGICTrackingID`. Konsequenz:
+Only **1,949 / 48,419 pages** have `UBSGICTrackingID`. Consequence:
 
-- Nur ~4% der 84M SharePoint-Interaction-Rows sind Pack-attribuierbar
-- Die restlichen 96% = "untracked intranet activity" (interne Tools, Settings, Collab-Pages etc.)
-- **Dashboard muss das explizit machen** — entweder (a) nur die 4%-Teilmenge zeigen und als "Article Pages only" labeln, oder (b) zwei getrennte Sektionen (attributed vs. unattributed)
+- Only ~4% of the 84M SharePoint interaction rows are pack-attributable
+- The remaining 96% = "untracked intranet activity" (internal tools, settings, collab pages, etc.)
+- **Dashboard must make this explicit** — either (a) show only the 4% subset and label it as "Article Pages only", or (b) two separate sections (attributed vs. unattributed)
 
-### Site-Konzentration (Q25)
+### Site concentration
 
-**99.4% der getrackten Pages** (1,937 von 1,949) liegen auf **einer einzigen Site**: "News and events".
+**99.4% of tracked pages** (1,937 out of 1,949) live on **one single site**: "News and events".
 
-- Dashboard-Default **sollte** auf diese Site restringiert sein
-- Für "Coverage reality check": 83 Pack-IDs (SEG1-2) sind diesem Dashboard zugänglich
+- Dashboard default **should** be restricted to this site
+- For "coverage reality check": 83 Pack IDs (SEG1-2) are accessible to this dashboard
 
-### Coverage-Rollout (Q25)
+### Coverage rollout
 
-- **Start der TID-Populierung**: September 2024 (33.9% Coverage für neue Pages)
-- **Peak bisher**: März 2026 (70.5%)
-- **Nie 80% erreicht** — selbst "aktuelle" Pages haben 25-30% fehlende TIDs
+- **Start of TID population**: September 2024 (33.9% coverage for new pages)
+- **Peak so far**: March 2026 (70.5%)
+- **Never reached 80%** — even "current" pages have 25-30% missing TIDs
 
-→ Default-Zeitfilter: `UBSArticleDate >= '2024-09-01'`.
+-> Default time filter: `UBSArticleDate >= '2024-09-01'`.
 
-### Format-Inkonsistenzen
+### Format inconsistencies
 
-- `UBSGICTrackingID` sollte immer UPPER, clean, 32-char sein — aber beim Vergleich mit iMEP immer `UPPER(TRIM(...))` absichern
-- SEG5 (Channel) divergiert: iMEP führt `EMI`/`NLI`/`TWE`, SharePoint `IAN`/`ITS`/`OPN`/`ANC` — **SEG5 ignorieren** beim Cross-Channel-Match (siehe Regel 3 in [join_strategy_contract.md](../../joins/join_strategy_contract.md))
+- `UBSGICTrackingID` should always be UPPER, clean, 32-char — but when comparing to iMEP always safeguard with `UPPER(TRIM(...))`
+- SEG5 (channel) diverges: iMEP carries `EMI`/`NLI`/`TWE`, SharePoint `IAN`/`ITS`/`OPN`/`ANC` — **ignore SEG5** on cross-channel matching (see rule 3 in [join_strategy_contract.md](../../joins/join_strategy_contract.md))
 
-### 1:1 URL ↔ TID
+### 1:1 URL <-> TID
 
-Q25 bestätigt: Jede URL hat maximal eine TID, jede TID maximal eine URL. D.h. **URL-basierte Aggregation** ist äquivalent zu TID-basierter — bei Bedarf URL als Fallback-Key nutzen.
+This confirms: each URL has at most one TID, each TID at most one URL. That is, **URL-based aggregation** is equivalent to TID-based — use URL as a fallback key if needed.
 
 ---
 
 ## Lineage
 
 ```
-SharePoint (CMS) ──[Daily Snapshot MERGE @ 02:00 UTC]──► sharepoint_bronze.pages
-                                                                │
-                                                                └──► sharepoint_silver.webpage (normalized dimension)
-                                                                         │
-                                                                         └──► pbi_db_* Gold-Metric-Tables referenzieren pageUUID
+SharePoint (CMS) --[Daily Snapshot MERGE]--> sharepoint_bronze.pages
+                                                                |
+                                                                +--> sharepoint_silver.webpage (normalized dimension)
+                                                                         |
+                                                                         +--> pbi_db_* gold metric tables reference pageUUID
 ```
 
-**Refresh-Anomalie**: Als Daily Snapshot Replace — die gesamte Tabelle wird einmal täglich überschrieben. `MERGE on (id: PageUId)` (Q28). Page-Deletions propagieren deshalb nach maximal 24h.
+**Refresh anomaly**: As Daily Snapshot Replace — the entire table is overwritten once per day. `MERGE on (id: PageUId)`. Page deletions therefore propagate within 24h at most.
 
 ---
 
-## Verwandte Cards
+## Related cards
 
-- [pbi_db_interactions_metrics](../sharepoint_gold/pbi_db_interactions_metrics.md) — Haupt-Consumer
-- `sites.md` *(pending)* — Site-Dimension
-- `pageviews.md` *(pending)* — Interaction-Bronze (ohne TrackingID-Attribution)
-- `webpage.md` *(pending)* — Silver-Variante dieser Tabelle
+- [pbi_db_interactions_metrics](../sharepoint_gold/pbi_db_interactions_metrics.md) — main consumer
+- `sites.md` *(pending)* — site dimension
+- `pageviews.md` *(pending)* — interaction bronze (without TrackingID attribution)
+- `webpage.md` *(pending)* — silver variant of this table
 
 ---
 
-## Referenzen
+## References
 
-- [join_strategy_contract.md](../../joins/join_strategy_contract.md) — Coverage-Regeln (Regel 5)
-- [architecture_diagram.md](../../architecture_diagram.md) — Section 4 (Cross-Channel-Join) und Section 7 (Coverage-Disclaimer)
+- [join_strategy_contract.md](../../joins/join_strategy_contract.md) — coverage rules (rule 5)
+- [architecture_diagram.md](../../architecture_diagram.md) — Section 4 (cross-channel join) and Section 7 (coverage disclaimer)
 - Memory: `sharepoint_gold_schemas_q22.md`, `sharepoint_pages_coverage_q25.md`, `sharepoint_pages_inventory.md`
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q2](../../sources.md#q2), [Q17](../../sources.md#q17), [Q22](../../sources.md#q22), [Q25](../../sources.md#q25), [Q27](../../sources.md#q27), [Q28](../../sources.md#q28), [Q30](../../sources.md#q30). See [sources.md](../../sources.md) for the full directory.

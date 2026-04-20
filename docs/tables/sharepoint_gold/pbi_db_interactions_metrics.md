@@ -1,28 +1,27 @@
 # `sharepoint_gold.pbi_db_interactions_metrics`
 
-> **Master Interaction Fact für SharePoint.** 84M Rows, 11 Spalten. Zentrale Tabelle für PageView-, Visit-, Duration- und Comment-Metriken auf Page × Date × Contact-Grain. **Trägt keinen direkten TrackingID** — Cross-Channel-Attribution läuft immer über `marketingPageId → pageUUID → UBSGICTrackingID` via `sharepoint_bronze.pages`. *(Q22)*
+> **Master interaction fact for SharePoint.** 84M rows, 11 columns. Central table for pageview, visit, duration and comment metrics on page × date × contact grain. **Carries no direct TrackingID** — cross-channel attribution always runs via `marketingPageId -> pageUUID -> UBSGICTrackingID` through `sharepoint_bronze.pages`.
 
 | | |
 |---|---|
-| **Layer** | Gold (Consumption) |
-| **Source system** | SharePoint Analytics (aggregiert aus `sharepoint_silver`) |
+| **Layer** | Gold (consumption) |
+| **Source system** | SharePoint Analytics (aggregated from `sharepoint_silver`) |
 | **Grain** | 1 row per `marketingPageId × visitdatekey × viewingcontactid × referenceapplicationid` |
 | **Primary key** | Composite (marketingPageId + visitdatekey + viewingcontactid + referenceapplicationid) |
-| **Cross-channel key** | **keiner direkt** — nur über FK-Kette `marketingPageId → pageUUID → UBSGICTrackingID` |
-| **Tier** | **Tier 0 — Atomic Interaction Fact** (Q29) |
-| **Refresh** | Täglicher Gold-Build via Notebook-CTAS (Spark 3.2.1), keine managed Pipeline (Q30) |
-| **Approx row count** | **~84M**, 35,544 distinct pages (Q29) |
-| **Physical storage** | External Delta, ADLS path `abfss://gold@<gold-acc>/.../employee_analytics/pbi_db_interactions_metrics`, **keine Partitionierung** (Q30) → Full-Scan-Risk |
-| **PII** | `viewingcontactid` (GUID) → indirekt identifizierend |
+| **Cross-channel key** | **none directly** — only via FK chain `marketingPageId -> pageUUID -> UBSGICTrackingID` |
+| **Tier** | **Tier 0 — atomic interaction fact** |
+| **Write pattern** | Notebook-based Full Rebuild (Spark 3.2.1), no managed pipeline |
+| **Approx row count** | **~84M**, 35,544 distinct pages |
+| **Physical storage** | External Delta, ADLS path `abfss://gold@<gold-acc>/.../employee_analytics/pbi_db_interactions_metrics`, **no partitioning** -> full-scan risk |
 
 ---
 
-## Neighborhood — FK-Kette zum Cross-Channel-Join
+## Neighborhood — FK chain to the cross-channel join
 
 ```mermaid
 erDiagram
     pbi_db_interactions_metrics }o--|| pages                  : "marketingPageId = pageUUID"
-    pages                       ||--o| tbl_email              : "UBSGICTrackingID ↔ TrackingId (via SEG1-4)"
+    pages                       ||--o| tbl_email              : "UBSGICTrackingID <-> TrackingId (via SEG1-2)"
     pbi_db_interactions_metrics }o..|| pbi_db_employeecontact : "viewingcontactid = contactId (potential)"
 
     pbi_db_interactions_metrics {
@@ -59,25 +58,25 @@ erDiagram
 
 | Column | Type | Sample | Role |
 |---|---|---|---|
-| `visitdatekey` | string | `20230421` | **Tages-Key** im Format `YYYYMMDD`. Grain-bestimmend. |
-| `referenceapplicationid` | string | `2` | Applikations-Referenz (welches System) |
-| `marketingPageId` | string (GUID) | `f94bc186-32a2-4155-aaec-42b22091cd22` | **FK** → `pages.pageUUID`. Der einzige Cross-Channel-Pfad. |
-| `views` | bigint | `1` | PageView-Count |
-| `viewingcontactid` | string (GUID) | `1254e21a-0b2b…` | **Person-Key** — nicht TNumber, aber Bridge via `pbi_db_employeecontact` möglich |
-| `flag` | string | `1` | Bedeutung unklar — Q30-Follow-up |
-| `visits` | bigint | `1` | Distinct Visit-Count (mit Dedup) |
-| `durationsum` | double | `7.72` | Aufenthaltszeit (Sekunden, summiert) |
-| `durationavg` | double | `7.72` | Durchschnittliche Duration |
-| `commentss` | bigint | `0` | Kommentar-Count (tippfehler in Spaltenname — **`commentss`** mit doppeltem s) |
-| `marketingPageIdGuid` | bigint | `NULL` | Always NULL — vermutlich Legacy-Spalte |
+| `visitdatekey` | string | `20230421` | **Day key** in `YYYYMMDD` format. Grain-defining. |
+| `referenceapplicationid` | string | `2` | Application reference (which system) |
+| `marketingPageId` | string (GUID) | `f94bc186-32a2-4155-aaec-42b22091cd22` | **FK** -> `pages.pageUUID`. The only cross-channel path. |
+| `views` | bigint | `1` | Pageview count |
+| `viewingcontactid` | string (GUID) | `1254e21a-0b2b…` | **Person key** — not TNumber, but a bridge via `pbi_db_employeecontact` is possible |
+| `flag` | string | `1` | Meaning unclear — follow-up |
+| `visits` | bigint | `1` | Distinct visit count (with dedup) |
+| `durationsum` | double | `7.72` | Time on page (seconds, summed) |
+| `durationavg` | double | `7.72` | Average duration |
+| `commentss` | bigint | `0` | Comment count (typo in column name — **`commentss`** with double s) |
+| `marketingPageIdGuid` | bigint | `NULL` | Always NULL — presumably a legacy column |
 
-CDM-Validation hat das Mapping bestätigt: `sourceName: mailync_marketingpageid`, `dataFormat: Guid`.
+CDM validation confirmed the mapping: `sourceName: mailync_marketingpageid`, `dataFormat: Guid`.
 
 ---
 
 ## Primary joins
 
-### → `sharepoint_bronze.pages` (N:1) — der Standard-Lookup
+### -> `sharepoint_bronze.pages` (N:1) — the standard lookup
 
 ```sql
 SELECT m.*, p.UBSGICTrackingID, p.PageURL, p.SiteName
@@ -85,9 +84,9 @@ FROM   sharepoint_gold.pbi_db_interactions_metrics m
 LEFT JOIN sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
 ```
 
-→ **LEFT JOIN**, sonst verlierst du die ~96% der Rows ohne gesetztes TrackingID.
+-> **LEFT JOIN**, otherwise you lose the ~96% of rows without a set TrackingID.
 
-### → Pack-Level-Cross-Channel-Funnel
+### -> Pack-level cross-channel funnel
 
 ```sql
 SELECT array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id,
@@ -96,66 +95,72 @@ SELECT array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 2), '-') AS tr
        SUM(m.durationsum)            AS total_duration_sec
 FROM   sharepoint_gold.pbi_db_interactions_metrics m
 JOIN   sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
-WHERE  p.UBSGICTrackingID IS NOT NULL          -- Pflicht-Filter
-  AND  m.visitdatekey >= '20250101'            -- Default-Zeitraum ab 2025
+WHERE  p.UBSGICTrackingID IS NOT NULL          -- mandatory filter
+  AND  m.visitdatekey >= '20250101'            -- default time window from 2025
 GROUP BY 1
 ```
 
-### → Potentielle SharePoint-Person-Bridge
+### -> Potential SharePoint person bridge
 
 ```sql
--- UNVERIFIED — Q17/Q22 hypothesize this works, not yet tested
+-- UNVERIFIED — hypothesized from earlier findings, not yet tested
 SELECT m.*, ec.T_NUMBER
 FROM   sharepoint_gold.pbi_db_interactions_metrics m
 LEFT JOIN sharepoint_gold.pbi_db_employeecontact ec ON ec.contactId = m.viewingcontactid
 ```
 
-→ Wenn das funktioniert, hätten wir einen TNumber für SharePoint-Views. **Noch nicht validiert.**
+-> If this works, we would have a TNumber for SharePoint views. **Not yet validated.**
 
 ---
 
 ## Quality caveats
 
-- **⚠️ Keine direkte TrackingID** — wenn jemand direkt `WHERE ...TrackingId = ...` sucht, findet er's nicht. Immer über `pages.UBSGICTrackingID` gehen.
-- **4%-Coverage-Blocker** (kritisch!): Nur 1,949/48,419 Pages haben `UBSGICTrackingID`. Heisst: Von 84M Interaction-Rows sind **nur ~3.3M Pack-attribuierbar** (4%). Die restlichen 96% sind "untracked intranet activity". Dashboard **muss** diese Sektion explizit labeln.
-- **`viewingcontactid` ≠ TNumber** — SharePoint-native Person-ID (GUID). Wenn Person-Level-Attribution nötig ist, läuft das über `pbi_db_employeecontact` (noch zu validieren).
-- **Spalten-Typo**: `commentss` (mit doppeltem s). Nicht korrigieren, sonst bricht jeder Query.
-- **`marketingPageIdGuid`** ist always NULL — ignorieren.
-- **Grain-Anomalie**: Eine Page × Datum × Contact kann theoretisch mehrere Rows haben (durch `referenceapplicationid`-Variationen) — für Page-Date-Grain-Rollup `GROUP BY marketingPageId, visitdatekey` und `SUM(views)` nutzen.
-- **`visitdatekey` als String formatiert** — für Zeit-Range-Filter Parse: `CAST(visitdatekey AS date)` oder String-Compare `visitdatekey >= '20250101'`.
+- **⚠️ No direct TrackingID** — if someone looks directly for `WHERE ...TrackingId = ...`, they won't find it. Always go via `pages.UBSGICTrackingID`.
+- **4% coverage blocker** (critical!): only 1,949/48,419 pages have `UBSGICTrackingID`. Meaning: of 84M interaction rows, **only ~3.3M are pack-attributable** (4%). The remaining 96% are "untracked intranet activity". The dashboard **must** label this section explicitly.
+- **`viewingcontactid` != TNumber** — SharePoint-native person ID (GUID). If person-level attribution is needed, it runs via `pbi_db_employeecontact` (still to validate).
+- **Column typo**: `commentss` (with double s). Don't fix it — you'd break every query.
+- **`marketingPageIdGuid`** is always NULL — ignore.
+- **Grain anomaly**: a page × date × contact may in theory have multiple rows (due to `referenceapplicationid` variations) — for page-date grain rollup use `GROUP BY marketingPageId, visitdatekey` and `SUM(views)`.
+- **`visitdatekey` formatted as a string** — for time-range filters parse via `CAST(visitdatekey AS date)` or string compare `visitdatekey >= '20250101'`.
 
 ---
 
 ## Lineage
 
 ```
-sharepoint_bronze.customevents       ┐
-sharepoint_bronze.pageviews          ├──► sharepoint_silver.webpagevisited  ──► sharepoint_gold.pbi_db_interactions_metrics
-sharepoint_bronze.pagevisited_*      ┘                                              (Metric-Aggregation pro page × date × contact)
+sharepoint_bronze.customevents       +
+sharepoint_bronze.pageviews          +--> sharepoint_silver.webpagevisited  --> sharepoint_gold.pbi_db_interactions_metrics
+sharepoint_bronze.pagevisited_*      +                                              (metric aggregation per page × date × contact)
 ```
 
-→ Im Unterschied zu iMEP-Email **läuft** hier Silver dazwischen (Q26 bestätigt). SharePoint nutzt das volle Medallion-Pattern.
+-> Unlike iMEP email, here silver **does** sit in between (confirmed). SharePoint uses the full medallion pattern.
 
 ---
 
-## Schwestertabellen im selben Schema
+## Sister tables in the same schema
 
-Für **verschiedene Grain-Requirements** gibt es spezialisiertere Gold-Tables:
+For **different grain requirements** there are more specialized gold tables:
 
-| Tabelle | Rows | Cols | Wann nutzen |
+| Table | Rows | Cols | When to use |
 |---|---|---|---|
-| **`pbi_db_interactions_metrics`** | 84M | 11 | Default — alles in einer Tabelle |
-| `pbi_db_pageviewed_metric` | 84M | 5 | Nur View-Counts, fast aggregation |
-| `pbi_db_pagevisited_metric` | 81M | 9 | Visit-orientiert (mit Dedup) |
-| `pbi_db_datewise_overview_fact_tbl` | 7.5M | 31 | Pre-aggregated page × date × division mit Rolling Windows (7/14/21/28d) |
-| `pbi_db_90_days_interactions_metric` | 9M | 11 | 90-Tage-Window, kleiner, schneller |
+| **`pbi_db_interactions_metrics`** | 84M | 11 | Default — everything in one table |
+| `pbi_db_pageviewed_metric` | 84M | 5 | View counts only, fast aggregation |
+| `pbi_db_pagevisited_metric` | 81M | 9 | Visit-oriented (with dedup) |
+| `pbi_db_datewise_overview_fact_tbl` | 7.5M | 31 | Pre-aggregated page × date × division with rolling windows (7/14/21/28d) |
+| `pbi_db_90_days_interactions_metric` | 9M | 11 | 90-day window, smaller, faster |
 
-Faustregel: Für Ad-hoc-Abfragen `interactions_metrics`; für Dashboards mit Zeit-Rollups `datewise_overview_fact_tbl`; für reine Count-Queries `pageviewed_metric`.
+Rule of thumb: for ad-hoc queries use `interactions_metrics`; for dashboards with time rollups use `datewise_overview_fact_tbl`; for pure count queries use `pageviewed_metric`.
 
 ---
 
-## Referenzen
+## References
 
-- [pages.md](../sharepoint/pages.md) — der Dimension-Lookup für TrackingID
-- [join_strategy_contract.md](../../joins/join_strategy_contract.md) — Regeln für Cross-Channel-Join
+- [pages.md](../sharepoint/pages.md) — the dimension lookup for TrackingID
+- [join_strategy_contract.md](../../joins/join_strategy_contract.md) — cross-channel join rules
 - Memory: `sharepoint_gold_inventory.md`, `sharepoint_gold_schemas_q22.md`
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q17](../../sources.md#q17), [Q22](../../sources.md#q22), [Q26](../../sources.md#q26), [Q29](../../sources.md#q29), [Q30](../../sources.md#q30). See [sources.md](../../sources.md) for the full directory.

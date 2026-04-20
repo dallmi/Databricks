@@ -1,8 +1,8 @@
 !1 ER Diagram — SharePoint Gold
 
-Gold topology for SharePoint. '''Strict 4-tier hierarchy''' (Q29, 20 tables + 3 Video sub-domain + 2 views). The FK chain runs via marketingPageId — all Gold metric tables reference back to sharepoint_bronze.pages.pageUUID. '''No direct TrackingID on the Gold facts!''' Cross-channel attribution always goes via pages.
+Gold topology for SharePoint. '''Strict 4-tier hierarchy''' (20 tables + 3 Video sub-domain + 2 views). The FK chain runs via marketingPageId — all Gold metric tables reference back to sharepoint_bronze.pages.pageUUID. '''No direct TrackingID on the Gold facts!''' Cross-channel attribution always goes via pages.
 
-!2 4-Tier Hierarchy (Q29)
+!2 4-Tier Hierarchy
 
 | '''Tier''' | '''Role''' | '''# Tables''' | '''Representative members''' |
 | Tier 0 — Atomic Interaction Facts | Per-Visitor × Page × Date | 4 | pbi_db_interactions_metrics (84M), pageviewed_metric (84M), pagevisited_metric (81M), 90_days_interactions_metric (9M) |
@@ -10,7 +10,7 @@ Gold topology for SharePoint. '''Strict 4-tier hierarchy''' (Q29, 20 tables + 3 
 | Tier 2 — Engagement / Social Signals | Likes, Comments, CTA | 3 | pageliked_metric (400K), pagecommented_metric (500K), page_like_int_fact (30K) |
 | Tier 3 — Dimension Tables | Person + Page + Calendar + Referrer | ~7 | employeecontact (24.3M, candidate person-bridge), website_page_inventory, calendar, referer_application |
 
-Plus '''Video Sub-Domain (3 tables)''' — the only tables in the entire system produced by a managed Declarative Pipeline (Spark 3.5.2/4.0.0, ChangeDataFeed, proper comments). The rest is Notebook-CTAS (Spark 3.2.1). See Q30.
+Plus '''Video Sub-Domain (3 tables)''' — the only tables in the entire system produced by a managed Declarative Pipeline (Spark 3.5.2/4.0.0, ChangeDataFeed, proper comments). The rest is Notebook-basierter Full Rebuild (Spark 3.2.1)..
 
 Plus '''2 Views''' (no physical storage): pbi_db_page_visitedkey_view, pbi_db_website_page_view.
 
@@ -109,7 +109,7 @@ dw    }o--|| pages : "marketingPageId = pageUUID"
 ninety }o--|| pages : "marketingPageId = pageUUID"
 pvkv  ||..|| im    : "visit-key filter"
 ec    }o..o{ im    : "contactId = viewingcontactid (bridge)"
-pages }o--|| email : "UBSGICTrackingID ↔ TrackingId (SEG1-4)"
+pages }o--|| email : "UBSGICTrackingID ↔ TrackingId (Pack / SEG1-2)"
 
 !enduml
 
@@ -149,7 +149,7 @@ Only 4% of pages have a TrackingID. Of 84M interaction rows, '''~80M are unattri
 !3 Rule 3 — viewingcontactid ≠ TNumber
 
 SharePoint-native person ID is a GUID (viewingcontactid), not TNumber. For cross-channel joins with iMEP person data either:
- * pbi_db_employeecontact as bridge (Q17 hypothesis, not yet validated)
+ * pbi_db_employeecontact as bridge (hypothesis, not yet validated)
  * or fall back to sharepoint_bronze.pageviews.user_gpn + iMEP HR bridge
 
 !2 Alternative Path — CTA Clicks
@@ -191,14 +191,14 @@ sharepoint_bronze.pages
               |
               |  UBSGICTrackingID (if populated)
               v
-Cross-channel match to imep_bronze.tbl_email.TrackingId (SEG1-4)
+Cross-channel match to imep_bronze.tbl_email.TrackingId (Pack / SEG1-2)
 }}}
 
-!2 Physical Storage (Q30)
+!2 Physical Storage
 
 '''Two pipeline families''' visible from the ADLS paths:
 
- * '''Family 1 "Employee Analytics" (16 tables)''' — abfss://gold@<gold-acc>/.../employee_analytics/pbi_db_*, Spark 3.2.1, Notebook-CTAS, no pipeline metadata
+ * '''Family 1 "Employee Analytics" (16 tables)''' — abfss://gold@<gold-acc>/.../employee_analytics/pbi_db_*, Spark 3.2.1, Notebook-basierter Full Rebuild, no pipeline metadata
  * '''Family 2 "Video Analytics" (3 tables)''' — abfss://gold@<gold-acc>/.../sharepoint_gold/sharepoint_gold/pbi_db_*, Spark 3.5.2/4.0.0, managed Declarative Pipeline (pipelines.pipelineId), ChangeDataFeed enabled, proper table comments
 
 '''Gold co-location with iMEP Gold''': both schemas live in the same ADLS gold account → cross-channel joins inside Fabric/Spark without cross-account auth.
@@ -210,3 +210,9 @@ Cross-channel match to imep_bronze.tbl_email.TrackingId (SEG1-4)
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointGold.PbiDbInteractionsMetrics
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze.Pages
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.SharePointGoldToPages
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q17, Q29, Q30. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

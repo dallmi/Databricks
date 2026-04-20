@@ -72,7 +72,7 @@ pages/
 │   ├── SharePointBronze/
 │   ├── SharePointGold/
 │   └── Hr/
-├── ErDiagrams/
+├── Diagrams/
 └── JoinStrategy/
 ```
 
@@ -131,12 +131,12 @@ Root: **`.EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataMo
 │       ├── .TblHrEmployee
 │       ├── .TblHrCostcenter
 │       └── .TblHrUser
-├── .ErDiagrams
-│   ├── .ErImepBronze                 [<- our POC page]
-│   ├── .ErSharePointBronze
-│   ├── .ErImepGold
-│   ├── .ErSharePointGold
-│   └── .ErCrossChannel
+├── .Diagrams
+│   ├── .ImepBronze                 [<- our POC page]
+│   ├── .SharePointBronze
+│   ├── .ImepGold
+│   ├── .SharePointGold
+│   └── .CrossChannel
 └── .JoinStrategy
     ├── .StrategyContract
     ├── .ImepBronzeEmailEvents

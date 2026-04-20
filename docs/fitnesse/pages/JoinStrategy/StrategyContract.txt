@@ -1,6 +1,6 @@
 !1 Join Strategy Contract — Cross-Channel Analytics
 
-Single-pager with the most important rules for joins in the cross-channel model. '''Read this before you write SQL.''' Every rule derives from a concrete Genie finding (Q1–Q30).
+Single-pager with the most important rules for joins in the cross-channel model. '''Read this before you write SQL.''' Every rule derives from a concrete Genie finding.
 
 !2 The 5 Rules You Must Follow
 
@@ -18,7 +18,7 @@ tbl_analytics_link  <->  sharepoint_bronze.pageviews   -- NO
 tbl_email_receiver_status  <->  sharepoint_gold.pbi_db_interactions_metrics  -- NO
 }}}
 
-'''Why''': TrackingId exists in exactly 4 tables (tbl_email, tbl_event, tbl_pbi_platform_mailings, tbl_pbi_platform_events) and never co-occurs with EmailId in the same table. SharePoint has no person-key equivalent to TNumber. Cross-channel must therefore always run through the dimension tables tbl_email ↔ pages. (Q27)
+'''Why''': TrackingId exists in exactly 4 tables (tbl_email, tbl_event, tbl_pbi_platform_mailings, tbl_pbi_platform_events) and never co-occurs with EmailId in the same table. SharePoint has no person-key equivalent to TNumber. Cross-channel must therefore always run through the dimension tables tbl_email ↔ pages.
 
 !3 Rule 2 — TNumber exists in only 2 tables. Person-level analytics are email-only.
 
@@ -35,44 +35,44 @@ ON analytics_link.TNumber = tbl_hr_employee.T_NUMBER   -- both lowercase t######
  * tbl_hr_user.UbsId is UPPERCASE -> join with LOWER(UbsId) = LOWER(T_NUMBER)
  * GPN comes from pageviews.user_gpn (8-digit) -> tbl_hr_employee.WORKER_ID is the bridge (no external source needed)
 
-'''Why''': TNumber appears in only two tables. For SharePoint person analytics you must resolve separately via sharepoint_gold.pbi_db_employeecontact (24M rows) or CDM — not TNumber-compatible without a bridge. (Q3, Q27)
+'''Why''': TNumber appears in only two tables. For SharePoint person analytics you must resolve separately via sharepoint_gold.pbi_db_employeecontact (24M rows) or CDM — not TNumber-compatible without a bridge.
 
-!3 Rule 3 — TrackingId match: SEG1–4, never SEG5
+!3 Rule 3 — TrackingId match: Pack-Level (SEG1-2) only
 
 TrackingId format: CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL (32 characters, 5 segments, UPPER).
 
 '''DO''':
 {{{
--- For cross-channel match: only compare SEG1-4
-ON  array_join(slice(split(email.TrackingId, '-'), 1, 4), '-')
-  = array_join(slice(split(pages.UBSGICTrackingID, '-'), 1, 4), '-')
+-- For cross-channel match: only compare SEG1-2 (Pack)
+ON  array_join(slice(split(email.TrackingId, '-'), 1, 2), '-')
+  = array_join(slice(split(pages.UBSGICTrackingID, '-'), 1, 2), '-')
 }}}
 
 '''DON'T''':
 {{{
 -- WRONG: full string match
 ON email.TrackingId = pages.UBSGICTrackingID   -- only 6/1677 matches (Jaccard 0.004)
+
+-- ALSO WRONG: SEG1-4 match (Cluster-Pack-Date-Activity)
+-- Would require the same date AND the same activity sequence on both sides.
+-- But an email can launch 2024-07-09 (SEG3=240709) while the matching
+-- intranet page of the same pack only goes live on 2024-07-15 (SEG3=240715)
+-- with a different activity sequence. SEG1-4 match would treat them as unrelated.
 }}}
 
-'''Why''': SEG5 encodes system ownership, not channel. iMEP: EMI/NLI/TWE. SharePoint: IAN/ITS/OPN/ANC. Full string match produces almost no matches, even though the same activity is semantically intended. (Q23)
+'''Why''': a pack bundles multiple activities across channels and dates. Email goes out early, the matching intranet page often days later with a different activity sequence. SEG3 (date) and SEG4 (activity seq) therefore differ between email and page of the same pack. Match on SEG1-2 binds activities at pack level, independent of timing or channel. (business-refined)
 
-!3 Rule 4 — Gold is a CTAS full rebuild. Respect the refresh window.
+!3 Rule 4 — Gold is a Full Rebuild. Expect rebuild runs.
 
-'''Refresh times (UTC)''':
-| '''Layer''' | '''Time''' | '''Pattern''' |
-| iMEP Bronze | 00:00 + 12:00 | MERGE Upsert |
-| SharePoint Bronze | 02:00 | MERGE (pages) + Append (pageviews, 7 bursts in 1 min) |
-| iMEP Gold | 00:23 + 12:25 | '''CTAS Full Rebuild''' ← critical |
+'''Pattern''': iMEP Gold Tier-0 (final, 520M rows) and the Tier-1/2 aggregates are built as CREATE OR REPLACE TABLE AS SELECT — on each refresh the table is completely destroyed and rewritten, not incrementally merged.
 
-'''DO''':
- * Dashboard queries between 00:35–11:55 and 12:35–23:55 UTC (safe window)
- * For scheduled reports: 00:40 UTC or 12:40 UTC as earliest slot
+'''Consequences''':
+ * A query parallel to a refresh run can hit a partial / momentarily inconsistent state (the old and new snapshot swap atomically at the end, but parallel reads against an in-flight rebuild are more expensive).
+ * Row counts and aggregates may jump between two successive dashboard refreshes if a Gold rebuild happened in between.
 
-'''DON'T''':
- * Dashboard scheduled refresh at 00:20–00:30 or 12:20–12:30 UTC
- * Long transactions spanning these windows
+'''DO''': build dashboards against Gold so they are resilient against whichever snapshot is current (no assumption "row X from before still exists the same way"). For scheduled reports, coordinate the actual run times with the upstream team — '''we do not have a complete job scheduler view'''.
 
-'''Why''': Gold tables are fully destroyed and rebuilt (CREATE OR REPLACE TABLE AS SELECT). Queries in the middle of the window can hit partial / inconsistent state. (Q28)
+'''DON'T''': no throw-away caching of Gold row-IDs across sessions. No assumptions about concrete refresh slots in this repo — we only see them through DESCRIBE HISTORY, not through the scheduler. (scope-limited)
 
 !3 Rule 5 — Coverage reality: ~4% of pages, ~1.3% of mailings
 
@@ -82,7 +82,7 @@ ON email.TrackingId = pages.UBSGICTrackingID   -- only 6/1677 matches (Jaccard 0
  1 '''iMEP side''': only 986 / 73,930 mailings (1.3%) have TrackingId. However: strong uptrend (2024: 99 -> 2025: 637 -> 2026 YTD: 250). '''Default time range of the dashboard: from 2025 onwards.'''
  1 '''Site concentration''': 99.4% of tracked pages sit on one single site ("News and events"). If the dashboard filters globally -> recommendation to restrict to this site by default.
 
-'''Why''': without these caveats, stakeholders see massive absolute numbers and incorrect rate calculations. (Q22, Q24, Q25)
+'''Why''': without these caveats, stakeholders see massive absolute numbers and incorrect rate calculations.
 
 !2 Quick Reference — Join Patterns
 
@@ -150,13 +150,13 @@ FULL OUTER JOIN sp_side s ON s.tracking_pack_id = e.tracking_pack_id;
 
 That is the funnel at pack level. '''FULL OUTER JOIN''', because many packs have only email or only intranet.
 
-!2 Footgun Alert
+!2 Pitfall Alert
 
-| '''Footgun''' | '''Symptom''' | '''Fix''' |
+| '''Pitfall''' | '''Symptom''' | '''Fix''' |
 | Looking for TrackingId on engagement tables | column not found | TrackingId lives only on tbl_email, tbl_event, tbl_pbi_platform_mailings, tbl_pbi_platform_events |
-| Full string match of TrackingIds | 0 or near-0 matches | Compare SEG1-4 (see Rule 3) |
+| Full string match of TrackingIds | 0 or near-0 matches | Compare SEG1-2 (Pack) (see Rule 3) |
 | UbsId = T_NUMBER without case normalization | 0 matches | LOWER(UbsId) = LOWER(T_NUMBER) |
-| Dashboard refresh at 00:25 UTC | Partially empty Gold tables | Respect refresh windows (Rule 4) |
+| Gold query parallel to a full rebuild | Partial / momentarily inconsistent state | Build dashboards resilient to rebuild runs (Rule 4) — coordinate concrete slots with upstream, we don't see them in the repo |
 | SUM(views) without TID filter | Inflated numbers | WHERE UBSGICTrackingID IS NOT NULL for attributed funnel |
 | COUNT(*) FROM imep_gold.final without filter | ~520M, timeout | Always constrain by time or filter with PartitionKey |
 | Mailing send time from tbl_email.CreationDate | Wrong timestamps | Send time lives in tbl_email_receiver_status.DateTime |
@@ -164,20 +164,12 @@ That is the funnel at pack level. '''FULL OUTER JOIN''', because many packs have
 
 !2 Sources
 
-Every rule in this document traces back to a Genie session:
- * Q1, Q27 — TrackingId location + Dimensional-vs-Factual
- * Q3, Q3a/b — HR bridge (GPN↔TNumber via WORKER_ID)
- * Q22 — 4% coverage blocker + FK chain
- * Q23 — SEG5 divergence (channel ownership)
- * Q24, Q25 — Adoption timeline + site concentration
- * Q26 — Silver asymmetry
- * Q27 — Join graph topology
- * Q28 — Refresh cadence + CTAS windows
+Every rule in this document traces back to a Genie session — full catalog in !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources. Relevant for this page: Q1, Q3 · Q3a · Q3b, Q22, Q23, Q24, Q25, Q26, Q27, Q28, Q30.
 
 !2 Cross References
 
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErCrossChannel
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.CrossChannel
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.ImepBronzeEmailEvents
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.SharePointGoldToPages
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment

@@ -1,22 +1,21 @@
 # `imep_gold.final`
 
-> **Der denormalisierte Consumption-Endpoint für Email-Engagement.** 520M Rows, wird 2×/Tag via CTAS komplett neu aufgebaut. Kombiniert `tbl_email` + `tbl_email_receiver_status` + `tbl_analytics_link` mit HR-Enrichment (Region, Division, etc.) — in einer einzigen Tabelle. Email-Engagement hat **bewusst keine Silver-Schicht**; `final` **ist** der Silver-Skip-Endpoint. *(Q26)*
+> **The denormalized consumption endpoint for email engagement.** 520M rows, rebuilt completely via Full Rebuild (no incrementality). Combines `tbl_email` + `tbl_email_receiver_status` + `tbl_analytics_link` with HR enrichment (Region, Division, etc.) — in a single table. Email engagement has **deliberately no silver layer**; `final` **is** the silver-skip endpoint.
 
 | | |
 |---|---|
-| **Layer** | Gold (Consumption) — **Tier 0** (Atomic Fact) |
-| **Source systems** | iMEP Bronze (3 Tabellen) + HR (Bronze) |
-| **Grain** | **1 row per `mailing × recipient × event × hour`** — Events sind stunden-gebucket, nicht pro einzelnem Event (Q29) |
+| **Layer** | Gold (consumption) — **Tier 0** (atomic fact) |
+| **Source systems** | iMEP Bronze (3 tables) + HR (Bronze) |
+| **Grain** | **1 row per `mailing × recipient × event × hour`** — events are hour-bucketed, not per individual event |
 | **Primary key** | `Id` |
-| **Cross-channel key** | `TrackingId` (via Join auf Mailing-Master inherited) |
-| **Refresh** | **2×/Tag @ ~00:23 und ~12:25 UTC** (**CTAS Full Rebuild** — komplettes `CREATE OR REPLACE TABLE AS SELECT`, **keine Inkrementalität**, Service Principal) — Q28 |
-| **Approx row count** | **~520M**, 64,196 distinct mailings (Q29-Stand 2026-04-20) |
-| **Physical storage** | External Delta, ADLS path `abfss://gold@<gold-acc>/.../final`, **keine Partitionierung** (Q30) — Full-Scan-Risk bei Queries ohne Time-Filter |
-| **PII** | `TNumber`, evtl. `Receiver` → direkt identifizierend |
+| **Cross-channel key** | `TrackingId` (inherited via join onto mailing master) |
+| **Write pattern** | **Full Rebuild** — complete `CREATE OR REPLACE TABLE AS SELECT`, **no incrementality** (Service Principal) |
+| **Approx row count** | **~520M**, 64,196 distinct mailings (as of 2026-04-20) |
+| **Physical storage** | External Delta, ADLS path `abfss://gold@<gold-acc>/.../final`, **no partitioning** — full-scan risk on queries without a time filter |
 
 ---
 
-## Neighborhood — Gold-Endpoint im Kontext
+## Neighborhood — gold endpoint in context
 
 ```mermaid
 erDiagram
@@ -61,27 +60,27 @@ erDiagram
     }
 ```
 
-> **Hinweis**: Exakte Spaltenliste muss per `DESCRIBE imep_gold.final` verifiziert werden. Obige Schema-Annahme basiert auf Q26/Q27-Findings (HR-Enrichment spät, denormalisiert) und typischen Gold-Patterns.
+> **Note**: exact column list must be verified via `DESCRIBE imep_gold.final`. The schema assumption above is based on later Genie findings (late HR enrichment, denormalized) and typical gold patterns.
 
 ---
 
-## Key Columns (erwartet — Verifikation Q30 pending)
+## Key Columns (expected — DESCRIBE verification pending)
 
 | Column | Type | Role | Notes |
 |---|---|---|---|
-| `Id` | string | **PK** | Event-ID |
-| `MailingId` | string | FK-Äquivalent | = `tbl_email.Id` — wird durch CTAS denormalisiert |
-| `TrackingId` | string | **Cross-channel key** | Inherited von `tbl_email` |
-| `TNumber` | string | Person-Key | Lowercase `t######` |
-| `LogStatus` / `LinkTypeEnum` | string | Event-Type | Kombiniert Send-Status + Open/Click-Type |
-| `Region`, `Division`, `Area`, `Country` | string | HR-enriched | Via `tbl_hr_employee` + `tbl_hr_costcenter` zur Build-Zeit gejoined |
-| `event_time` | timestamp | Temporal | Send-Zeit oder Event-Zeit — per `DESCRIBE` zu klären |
+| `Id` | string | **PK** | Event ID |
+| `MailingId` | string | FK equivalent | = `tbl_email.Id` — denormalized on Full Rebuild |
+| `TrackingId` | string | **Cross-channel key** | Inherited from `tbl_email` |
+| `TNumber` | string | Person key | Lowercase `t######` |
+| `LogStatus` / `LinkTypeEnum` | string | Event type | Combines send status + open/click type |
+| `Region`, `Division`, `Area`, `Country` | string | HR-enriched | Joined at build time via `tbl_hr_employee` + `tbl_hr_costcenter` |
+| `event_time` | timestamp | Temporal | Send time or event time — to clarify via `DESCRIBE` |
 
-→ Vollständige Spaltenliste via `DESCRIBE imep_gold.final` in Databricks verifizieren (Q30-Follow-up).
+-> Verify full column list in Databricks via `DESCRIBE imep_gold.final` (follow-up).
 
 ---
 
-## Sample row (strukturell)
+## Sample row (structural)
 
 ```
 Id           = "..."
@@ -100,7 +99,7 @@ event_time   = 2024-07-09 09:34:12
 
 ## Primary joins
 
-### Pattern A: Direkte Konsumption (default für Dashboards)
+### Pattern A: Direct consumption (default for dashboards)
 
 ```sql
 SELECT TrackingId, Region, Division, LogStatus, COUNT(*) AS events
@@ -110,7 +109,7 @@ WHERE  event_time >= '2025-01-01'
 GROUP BY TrackingId, Region, Division, LogStatus
 ```
 
-### Pattern B: Pack-Level-Aggregation (Dashboard-Grain)
+### Pattern B: Pack-level aggregation (dashboard grain)
 
 ```sql
 SELECT array_join(slice(split(UPPER(TrackingId), '-'), 1, 2), '-') AS tracking_pack_id,
@@ -123,62 +122,68 @@ WHERE  TrackingId IS NOT NULL
 GROUP BY 1
 ```
 
-### Pattern C: Cross-Channel-Funnel (mit SharePoint)
+### Pattern C: Cross-channel funnel (with SharePoint)
 
-Siehe [join_strategy_contract.md](../../joins/join_strategy_contract.md) Pattern C — `final` ist die Email-Seite des Funnels, gejoint gegen SharePoint via SEG1-4-Match.
+See [join_strategy_contract.md](../../joins/join_strategy_contract.md) Pattern C — `final` is the email side of the funnel, joined against SharePoint via SEG1-2 match.
 
 ---
 
 ## Quality caveats
 
-- **⚠️ CTAS Full Rebuild 2×/Tag** — die Tabelle wird komplett zerstört und neu aufgebaut. Lange Queries über die Refresh-Fenster (`00:23` + `12:25` UTC) hinweg können auf inkonsistenten Stand treffen.
-- **Keine Inkrementalität auf Gold-Seite** — jede Änderung in Bronze landet erst nach dem nächsten CTAS-Run in `final`. Bei Out-of-Band-Fragen nach neueren Events → Bronze-Tabellen direkt nutzen.
-- **Full-Scan kostet**: 520M Rows × breites Schema. Queries **immer** mit `event_time`-Filter oder `TrackingId`-Filter einschränken. Die Gold-CTAS hat laut Q28 **kein Z-Order** — auf bestimmte Spalten optimierte Queries gibt es nicht.
-- **⚠️ Keine Partitionierung** (Q30) — zero partitioning ist der grösste strukturelle Performance-Gap im ganzen System. Partitioning by date würde Scan-I/O und CTAS-Kosten massiv reduzieren, aber das ist Architektur-Change beim iMEP-Team, nicht bei uns.
-- **HR-Snapshot zur Build-Zeit**: `Region`/`Division` reflektieren den HR-Stand zum CTAS-Zeitpunkt. Wechselt ein Mitarbeiter am 1. Juli von EMEA → APAC, zeigen alle älteren `final`-Events **nach dem nächsten CTAS** den neuen Wert — nicht den historischen. Für echte temporale HR-Analysen muss aus Bronze mit `tbl_hr_employee`-Snapshot gejoint werden.
-- **Biggest compute hotspot im gesamten Pipeline-Budget** — CTAS-Rebuild einer 520M-Row-Tabelle 2×/Tag. Ist als erster Optimierungs-Lever identifiziert (Q28), aber nicht unsere Baustelle.
+- **⚠️ Full Rebuild** — the table is destroyed and rebuilt entirely, not merged incrementally. Long-running queries in parallel with a rebuild run may hit a temporarily inconsistent state. Refresh cadence not documented — we do not have a complete job-scheduler overview.
+- **No incrementality on the gold side** — any bronze change only lands in `final` after the next rebuild run. For out-of-band questions about newer events -> use bronze tables directly.
+- **Full scan is costly**: 520M rows × wide schema. **Always** constrain queries with an `event_time` or `TrackingId` filter. The Gold Full Rebuild has **no Z-Order** — there are no queries optimized on specific columns.
+- **⚠️ No partitioning** — zero partitioning is the biggest structural performance gap in the whole system. Partitioning by date would drastically reduce scan I/O and rebuild cost, but that is an architecture change on the iMEP team, not on us.
+- **HR snapshot at build time**: `Region`/`Division` reflect the HR state at the rebuild timestamp. If an employee moves on July 1 from EMEA -> APAC, all older `final` events show the new value **after the next Full Rebuild** — not the historical one. For true temporal HR analyses, join from bronze with a `tbl_hr_employee` snapshot.
+- **Biggest compute hotspot in the entire pipeline budget** — full rebuild of a 520M-row table. Identified as the top optimization lever, but not our area.
 
 ---
 
 ## Lineage
 
 ```
-imep_bronze.tbl_email                   ┐
-imep_bronze.tbl_email_receiver_status   ├──[CTAS 2×/Tag]──► imep_gold.final (520M)
-imep_bronze.tbl_analytics_link          │
-imep_bronze.tbl_hr_employee             │
-imep_bronze.tbl_hr_costcenter           ┘
+imep_bronze.tbl_email                   +
+imep_bronze.tbl_email_receiver_status   +--[Full Rebuild]--> imep_gold.final (520M)
+imep_bronze.tbl_analytics_link          |
+imep_bronze.tbl_hr_employee             |
+imep_bronze.tbl_hr_costcenter           +
 ```
 
-**Kein Silver dazwischen** — `imep_silver` existiert, aber nur für Events (`invitation`, `eventregistration`, `event`), **nicht für Email**.
+**No silver in between** — `imep_silver` exists, but only for events (`invitation`, `eventregistration`, `event`), **not for email**.
 
 ---
 
-## Consumption-Strategie
+## Consumption strategy
 
-Für neue Cross-Channel-Analysen gilt:
+For new cross-channel analyses the rule is:
 
-- **Default**: `imep_gold.final` nutzen. Ist vorkonfektioniert, HR-ready.
-- **Wenn du was in `final` nicht findest** (z.B. spezielle Bronze-Spalte): nicht `final` erweitern wollen, sondern direkt Bronze joinen.
-- **Wenn `final` zu gross wird**: Tier-3-Aggregate nutzen (`tbl_pbi_mailings_region`, `_division`, `tbl_pbi_kpi`) — die sind per `GROUP BY MailingId × Dimension` vorverdichtet.
+- **Default**: use `imep_gold.final`. Pre-assembled, HR-ready.
+- **If you can't find something in `final`** (e.g. a specific bronze column): don't extend `final` — join bronze directly.
+- **If `final` gets too large**: use the Tier-3 aggregates (`tbl_pbi_mailings_region`, `_division`, `tbl_pbi_kpi`) — these are pre-rolled-up via `GROUP BY MailingId × Dimension`.
 
 ---
 
-## Verifikations-Stand nach Q29/Q30 ✅
+## Verification state after later verification ✅
 
-| Item | Stand |
+| Item | State |
 |---|---|
-| Name | ✅ `imep_gold.final` (Q29 explizit bestätigt, Q28-Labeling war Image-Fehler) |
+| Name | ✅ `imep_gold.final` (explicitly confirmed, earlier label confusion resolved) |
 | Rows | ✅ 520M, 64,196 distinct mailings |
-| Tier-Klassifikation | ✅ Tier 0 (Atomic Fact) |
-| Grain | ✅ `mailing × recipient × event × hour` (Events sind stunden-gebucket) |
+| Tier classification | ✅ Tier 0 (atomic fact) |
+| Grain | ✅ `mailing × recipient × event × hour` (events are hour-bucketed) |
 | Storage | ✅ External Delta, ADLS path `abfss://gold@<gold-acc>/.../final`, no partitioning |
-| Source-Spalten (welche aus welcher Bronze) | ⚠️ via `DESCRIBE imep_gold.final` in Databricks zu prüfen wenn nötig |
+| Source columns (which from which bronze) | ⚠️ check via `DESCRIBE imep_gold.final` in Databricks if needed |
 
 ---
 
-## Referenzen
+## References
 
 - [Join Strategy Contract](../../joins/join_strategy_contract.md)
 - [architecture_diagram.md](../../architecture_diagram.md)
 - Memory: `imep_silver_q26_findings.md`, `imep_join_graph_q27_findings.md`, `imep_pipeline_ops_q28_findings.md`, `imep_gold_full_inventory.md`
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q26](../../sources.md#q26), [Q27](../../sources.md#q27), [Q28](../../sources.md#q28), [Q29](../../sources.md#q29), [Q30](../../sources.md#q30). See [sources.md](../../sources.md) for the full directory.

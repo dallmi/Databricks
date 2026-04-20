@@ -1,16 +1,15 @@
 !1 TblHrEmployee ('''imep_bronze.tbl_hr_employee''')
 
-'''The HR master table.''' Carries '''both''' T_NUMBER (iMEP-compatible) and WORKER_ID (= GPN, SharePoint-compatible) — '''this''' is the cross-channel employee bridge. No external source required (Q3b).
+'''The HR master table.''' Carries '''both''' T_NUMBER (iMEP-compatible) and WORKER_ID (= GPN, SharePoint-compatible) — '''this''' is the cross-channel employee bridge. No external source required.
 
 !2 Meta
 | '''Layer'''          | Bronze (sits in imep_bronze, but used across domains) |
-| '''Source system'''  | HR system (SQL Server) -> CDC -> Delta |
+| '''Source system'''  | HR system (SQL Server) -> Change Data Capture (CDC) -> Delta Bronze |
 | '''Grain'''          | 1 row per employee (current snapshot) |
 | '''Primary key'''    | T_NUMBER |
 | '''Bridge columns''' | T_NUMBER (iMEP) + WORKER_ID (SharePoint/GPN) |
-| '''Refresh'''        | 2x/day (MERGE, Service Principal) |
+| '''Write pattern''' | MERGE (Service Principal) |
 | '''Rows'''           | ~265K |
-| '''PII'''            | '''High''' — all employee data. Exercise caution in dashboards. |
 
 !2 Key Columns
 
@@ -24,7 +23,7 @@
 | UUNAME                    | string     | Username             | Not for analytics joins |
 | PersonalNumber            | string     | Legacy               | Do not use |
 
-Full schema via !- DESCRIBE imep_bronze.tbl_hr_employee -! (~30-40 columns incl. PII — irrelevant for cross-channel analytics, we aggregate on Region/Division).
+Full schema via !- DESCRIBE imep_bronze.tbl_hr_employee -! (~30-40 columns).
 
 !2 Sample Row
 
@@ -73,13 +72,12 @@ LEFT JOIN imep_bronze.tbl_hr_user   u ON LOWER(u.UbsId) = LOWER(hr.T_NUMBER)
 
  * '''Snapshot, no history''': current HR state. Employee moves (EMEA -> APAC) propagate at latest after the next 12h MERGE — older engagement rows show the new value afterwards.
  * '''Former employees disappear''': anyone who has left falls out of the table. Use LEFT JOIN for historical engagement data — otherwise you lose their events.
- * '''PII completeness''': contains name, date of birth, email, etc. For cross-channel dashboards pull only T_NUMBER/WORKER_ID/ORGANIZATIONAL_UNIT — never leak plain-text PII into dashboards.
  * '''WORKER_ID is always an 8-digit string with leading zeros'''. Watch out for type coercion: INT(WORKER_ID) loses the leading zeros.
 
 !2 Lineage
 
 {{{
-HR system (SQL Server) --[CDC + MERGE 2x/day]--> imep_bronze.tbl_hr_employee
+HR system (SQL Server) --[CDC + MERGE]--> imep_bronze.tbl_hr_employee
                                                          |
                                                          +--> denormalized into imep_gold.final
                                                          +--> ad-hoc JOIN for HR enrichment
@@ -90,4 +88,10 @@ HR system (SQL Server) --[CDC + MERGE 2x/day]--> imep_bronze.tbl_hr_employee
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrCostcenter
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrUser
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.ImepBronze
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q3, Q3a, Q3b, Q27, Q28. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

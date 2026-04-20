@@ -4,13 +4,12 @@ The master table for all iMEP mailings. Single source of the '''TrackingId''' pe
 
 !2 Meta
 | '''Layer'''         | Bronze                                                            |
-| '''Source system''' | iMEP (SQL Server) -> CDC -> Delta                                 |
+| '''Source system''' | iMEP (SQL Server) -> Change Data Capture (CDC) -> Delta Bronze                                 |
 | '''Grain'''         | 1 row per Mailing (template definition, not per recipient)        |
 | '''Primary key'''   | Id                                                                |
 | '''Cross-channel''' | TrackingId (32-char, 5 segments)                                  |
-| '''Refresh'''       | 2x/day @ 00:00 + 12:00 UTC (MERGE full-table upsert, Service Principal) |
+| '''Write pattern''' | MERGE full-table upsert (Service Principal) |
 | '''Rows'''          | ~145K (Nov 2020 - Apr 2026)                                       |
-| '''PII'''           | CreatedBy = TNumber of author, indirectly identifying              |
 
 !2 Neighborhood Diagram
 
@@ -119,23 +118,23 @@ Same Id, enriched with content metrics. Consumption-ready table.
 !2 Quality Caveats
 
  * '''TrackingId NULL-rate''': Not every mailing is tracked. For cross-channel attribution set !- WHERE TrackingId IS NOT NULL -!. Only 986/73,930 mailings (1.3%) have TrackingId, but adoption ramping up fast (2024: 99, 2025: 637, 2026 YTD: 250).
- * '''TrackingId format''': Always 32 chars, 5 segments separated by '-', UPPER. SEG5 encodes system ownership, not medium — for cross-channel match use SEG1-4 only.
+ * '''TrackingId format''': Always 32 chars, 5 segments separated by '-', UPPER. Structure: CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL. SEG5 = channel (EMI/NLI/TWE/IAN/ITS/OPN/ANC), SEG3-4 are activity-specific and differ per channel. For cross-channel match with SharePoint compare '''Pack-Level (SEG1-2)''' only — email and intranet page of the same pack have different dates/activities/channels.
  * '''Cross-channel path''': TrackingId is a '''dimension''', not a fact key — never co-occurs with EmailId in the same table. Cross-channel goes via tbl_email.TrackingId <-> sharepoint_bronze.pages.UBSGICTrackingID, NOT via engagement rows.
  * '''CreationDate != send time''': For actual send time, use tbl_email_receiver_status.DateTime.
  * '''CreatedBy format''': lowercase 't######'. Joins against tbl_hr_user.UbsId need LOWER(UbsId).
 
 !2 Lineage (Bronze -> Gold; No Silver for Email!)
 
-Email engagement skips the silver layer entirely. iMEP has confirmed this as an architectural choice (Q26). imep_silver exists only for events (invitation, eventregistration, event), not email.
+Email engagement skips the silver layer entirely. iMEP has confirmed this as an architectural choice. imep_silver exists only for events (invitation, eventregistration, event), not email.
 
 !startuml
 skinparam linetype ortho
 rectangle "imep_bronze.tbl_email" as bronze
 rectangle "imep_gold.tbl_pbi_platform_mailings\n(master, 1:1 to bronze.Id)" as master
-rectangle "imep_gold.final\n(denormalized, ~520M rows,\nCTAS 2x/day)" as final
+rectangle "imep_gold.final\n(denormalized, ~520M rows,\nFull Rebuild)" as final
 rectangle "imep_gold.<tier-3 engagement>\n(aggregates per Mailing x Region/Division)" as tier3
 
-bronze --> master : "CTAS 2x/day"
+bronze --> master : "Full Rebuild"
 bronze --> final : "denormalized join\nwith receiver_status + analytics_link"
 master --> tier3 : "join via lowercase mailingid"
 !enduml
@@ -158,8 +157,14 @@ GROUP BY 1, 2, 3
 
 !2 Cross References
 
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.ImepBronze
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.ImepBronzeEmailEvents
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmailReceiverStatus
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblAnalyticsLink
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q1b, Q2, Q24, Q26, Q27, Q28, Q29, Q30. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

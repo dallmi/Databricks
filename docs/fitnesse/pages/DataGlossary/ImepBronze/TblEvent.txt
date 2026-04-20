@@ -4,13 +4,12 @@
 
 !2 Meta
 | '''Layer'''          | Bronze |
-| '''Source system'''  | iMEP (SQL Server) -> CDC -> Delta |
+| '''Source system'''  | iMEP (SQL Server) -> Change Data Capture (CDC) -> Delta Bronze |
 | '''Grain'''          | 1 row per event definition |
 | '''Primary key'''    | Id |
 | '''Cross-channel key''' | TrackingId |
-| '''Refresh'''        | 2x/day @ 00:00/12:00 UTC (MERGE) |
+| '''Write pattern''' | MERGE |
 | '''Rows'''           | ~100K (2009 - Apr 2026 — oldest dataset in the project!) |
-| '''PII'''            | low — event definitions are internal |
 
 !2 Key Columns (expected — exact verification via DESCRIBE)
 
@@ -85,7 +84,7 @@ For dashboard consumption: use Gold instead of Bronze -> Silver aggregation.
 
 !2 Quality Caveats
 
- * '''EventDate can be 2124 (sentinel for "open-ended")''' — Q1b confirmed. In filter logic guard with WHERE EventDate < '2100-01-01' if desired.
+ * '''EventDate can be 2124 (sentinel for "open-ended")''' confirmed. In filter logic guard with WHERE EventDate < '2100-01-01' if desired.
  * '''Oldest dataset in the project''' (from 2009). Pre-2020 data has little relevance for cross-channel analyses, but historical events exist.
  * '''TrackingId adoption''': most pre-2024 events have no TrackingId — cross-channel attribution only possible for newer events.
 
@@ -99,10 +98,16 @@ imep_bronze.tbl_event
         +--> imep_gold.tbl_pbi_platform_events (84K) with RegistrationCount
 }}}
 
-'''Important''': Events are '''the one area''' where imep_silver exists (Q26). Email engagement '''does not'''.
+'''Important''': Events are '''the one area''' where imep_silver exists. Email engagement '''does not'''.
 
 !2 Cross References
 
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.ImepBronze
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.CrossChannelViaTrackingId
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q1b, Q26, Q27. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

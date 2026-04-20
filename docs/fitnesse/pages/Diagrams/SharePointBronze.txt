@@ -69,7 +69,7 @@ entity "master_employee_cdm_data" as cdm {
   24M rows, 246 cols
 }
 
-pages ||--o{ pv    : "pageUUID = pageId (Q30 to verify)"
+pages ||--o{ pv    : "pageUUID = pageId (to verify)"
 pages ||--o{ ce    : "pageUUID = pageId"
 pages }o--|| sites : "SiteId = SiteId"
 pages ||--o{ vid   : "pageUUID = pageId"
@@ -77,15 +77,15 @@ cdm   }o..o{ pv    : "potential user_gpn bridge"
 
 !enduml
 
-!2 Volumes & Refresh Cadence
+!2 Volumes & Write Pattern
 
-| '''Table'''            | '''Rows''' | '''Refresh'''          | '''Pattern''' |
-| customevents           | 262M       | 1x/day @ 02:00 UTC     | (Q28: presumably Append) |
-| pageviews              | 173M       | 1x/day @ 02:00 UTC     | '''Append WRITE''', 7 bursts in 1 min (API pagination) |
-| master_employee_cdm_data | 24M      | 1x/day                  | TBD |
-| pages                  | 48K        | 1x/day @ 02:00 UTC     | '''MERGE daily snapshot replace''' |
-| videos                 | 3K         | 1x/day                  | TBD |
-| sites                  | 805        | 1x/day                  | TBD |
+| '''Table'''            | '''Rows''' | '''Pattern''' |
+| customevents           | 262M       | (presumably Append) |
+| pageviews              | 173M       | '''Append WRITE''', 7 bursts in 1 min (API pagination) |
+| master_employee_cdm_data | 24M      | TBD |
+| pages                  | 48K        | '''MERGE daily snapshot replace''' |
+| videos                 | 3K         | TBD |
+| sites                  | 805        | TBD |
 
 !2 Critical Distinction: Inventory vs. Interactions
 
@@ -107,14 +107,14 @@ WHERE  p.UBSGICTrackingID IS NOT NULL
 
 SharePoint does '''not''' natively carry a TNumber. Instead:
  * pageviews.user_gpn — GPN in 8-digit format (00100200)
- * master_employee_cdm_data.T_NUMBER — potential bridge (Q17 hypothesis, not yet validated)
+ * master_employee_cdm_data.T_NUMBER — potential bridge (hypothesis, not yet validated)
 
-Confirmed bridge runs via iMEP HR (Q3b): join pageviews.user_gpn = tbl_hr_employee.WORKER_ID. See !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment.
+Confirmed bridge runs via iMEP HR: join pageviews.user_gpn = tbl_hr_employee.WORKER_ID. See !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.HrEnrichment.
 
 !2 Key Observations
 
  * '''Schema inconsistency''': pages.UBSGICTrackingID vs. pageviews.GICTrackingID — different column names for the same business key. Harmonization happens in Silver (sharepoint_silver.webpage uses gICTrackingID).
- * '''1:1 URL↔TID mapping''' (Q25): at the pages level, each URL has at most one TID. Safe for URL-based aggregation.
+ * '''1:1 URL↔TID mapping''': at the pages level, each URL has at most one TID. Safe for URL-based aggregation.
  * '''Append bursts on pageviews''': 7 fast writes within 1 minute (00:15-00:16 UTC) — not streaming but API pagination, very short windows.
  * '''customevents is ~2x larger than pageviews''' (262M vs 173M). Covers related but distinct interaction scopes.
 
@@ -122,4 +122,10 @@ Confirmed bridge runs via iMEP HR (Q3b): join pageviews.user_gpn = tbl_hr_employ
 
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointBronze.Pages
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErCrossChannel
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.CrossChannel
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q17, Q25, Q28, Q30. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

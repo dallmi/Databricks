@@ -1,17 +1,16 @@
 !1 Final ('''imep_gold.final''')
 
-'''The denormalized consumption endpoint for email engagement.''' 520M rows, fully rebuilt 2x/day via CTAS. Combines tbl_email + tbl_email_receiver_status + tbl_analytics_link with HR enrichment (Region, Division, etc.) — in a single table. Email engagement intentionally has '''no Silver layer'''; final '''is''' the Silver-skip endpoint. (Q26)
+'''The denormalized consumption endpoint for email engagement.''' 520M rows, fully rebuilt from scratch on every run (no incrementality). Combines tbl_email + tbl_email_receiver_status + tbl_analytics_link with HR enrichment (Region, Division, etc.) — in a single table. Email engagement intentionally has '''no Silver layer'''; final '''is''' the Silver-skip endpoint.
 
 !2 Meta
 | '''Layer'''          | Gold (Consumption) — '''Tier 0 (Atomic Fact)''' |
 | '''Source systems''' | iMEP Bronze (3 tables) + HR (Bronze) |
-| '''Grain'''          | '''1 row per mailing × recipient × event × hour''' — events are hour-bucketed (Q29) |
+| '''Grain'''          | '''1 row per mailing × recipient × event × hour''' — events are hour-bucketed |
 | '''Primary key'''    | Id |
 | '''Cross-channel key''' | TrackingId (inherited via join on Mailing master) |
-| '''Refresh'''        | '''2x/day @ ~00:23 and ~12:25 UTC''' ('''CTAS Full Rebuild''' — no incrementality, Service Principal) — Q28 |
-| '''Rows'''           | '''~520M''', 64,196 distinct mailings (Q29) |
-| '''Physical storage''' | External Delta, ADLS path abfss://gold@<gold-acc>/.../final, '''no partitioning''' (Q30) |
-| '''PII'''            | TNumber, possibly Receiver -> directly identifying |
+| '''Write pattern''' | '''Full Rebuild''' — no incrementality (Service Principal) |
+| '''Rows'''           | '''~520M''', 64,196 distinct mailings |
+| '''Physical storage''' | External Delta, ADLS path abfss://gold@<gold-acc>/.../final, '''no partitioning''' |
 
 !2 Neighborhood Diagram
 
@@ -65,20 +64,20 @@ hr    }o--|| final : "contributes Region, Division via TNumber"
 
 !enduml
 
-'''Note''': the exact column list must be verified via DESCRIBE imep_gold.final. The schema assumption above is based on Q26/Q27 findings (HR enrichment late, denormalized) and typical Gold patterns.
+'''Note''': the exact column list must be verified via DESCRIBE imep_gold.final. The schema assumption above is based on later Genie findings (HR enrichment late, denormalized) and typical Gold patterns.
 
-!2 Key Columns (expected — verification via Q30 pending)
+!2 Key Columns (expected — DESCRIBE verification pending)
 
 | '''Column'''   | '''Type''' | '''Role'''             | '''Notes''' |
 | Id             | string     | PK                     | Event ID |
-| MailingId      | string     | FK equivalent          | = tbl_email.Id — denormalized by CTAS |
+| MailingId      | string     | FK equivalent          | = tbl_email.Id — denormalized by the Full Rebuild |
 | TrackingId     | string     | '''Cross-channel key'''| Inherited from tbl_email |
 | TNumber        | string     | Person key             | Lowercase t###### |
 | LogStatus / LinkTypeEnum | string | Event type     | Combines send status + open/click type |
 | Region, Division, Area, Country | string | HR-enriched | Joined at build time via tbl_hr_employee + tbl_hr_costcenter |
 | event_time     | timestamp  | Temporal               | Send time or event time — to be clarified via DESCRIBE |
 
-Verify the complete column list via !- DESCRIBE imep_gold.final -! in Databricks (Q30 follow-up).
+Verify the complete column list via !- DESCRIBE imep_gold.final -! in Databricks (follow-up).
 
 !2 Sample Row (structural)
 
@@ -122,22 +121,22 @@ GROUP BY 1
 
 !3 Pattern C: Cross-channel funnel (with SharePoint)
 
-See !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.CrossChannelViaTrackingId — final is the email side of the funnel, joined against SharePoint via SEG1-4 match.
+See !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.CrossChannelViaTrackingId — final is the email side of the funnel, joined against SharePoint via Pack-Level (SEG1-2).
 
 !2 Quality Caveats
 
- * '''⚠️ Zero Partitioning''' (Q30) — biggest structural performance gap across all 114 tables in the system. Queries without a tight time or TrackingId filter trigger a full 520M-row scan. An iMEP-team architecture concern, not ours to fix.
- * '''⚠️ CTAS Full Rebuild 2x/day''' — the table is completely destroyed and rebuilt. Long-running queries spanning the refresh windows (00:23 + 12:25 UTC) may encounter an inconsistent state.
- * '''No incrementality on the Gold side''' — any change in Bronze only lands in final after the next CTAS run. For out-of-band questions about newer events, use Bronze directly.
- * '''Full scan is expensive''': 520M rows × wide schema. Always restrict queries with event_time or TrackingId filter. According to Q28 the Gold CTAS has '''no Z-Order''' — no queries optimized for specific columns.
- * '''HR snapshot at build time''': Region/Division reflect the HR state at the time of the CTAS. If an employee moves EMEA -> APAC on July 1, all older final events show the new value '''after the next CTAS''' — not the historical one. For true temporal HR analyses, join from Bronze with a tbl_hr_employee snapshot.
- * '''Biggest compute hotspot in the pipeline budget''' — CTAS rebuild of a 520M-row table 2x/day. Identified as the first optimization lever (Q28), but not our concern.
+ * '''⚠️ Zero Partitioning''' — biggest structural performance gap across all 114 tables in the system. Queries without a tight time or TrackingId filter trigger a full 520M-row scan. An iMEP-team architecture concern, not ours to fix.
+ * '''⚠️ Full Rebuild''' — the table is completely destroyed and rebuilt, not incrementally merged. Long-running queries parallel to a rebuild run may encounter a momentarily inconsistent state. Refresh cadence not documented — we don't have a complete job scheduler view.
+ * '''No incrementality on the Gold side''' — any change in Bronze only lands in final after the next rebuild run. For out-of-band questions about newer events, use Bronze directly.
+ * '''Full scan is expensive''': 520M rows × wide schema. Always restrict queries with event_time or TrackingId filter. The Gold Full Rebuild has '''no Z-Order''' — no queries optimized for specific columns.
+ * '''HR snapshot at build time''': Region/Division reflect the HR state at the time of the Full Rebuild. If an employee moves EMEA -> APAC on July 1, all older final events show the new value '''after the next Full Rebuild''' — not the historical one. For true temporal HR analyses, join from Bronze with a tbl_hr_employee snapshot.
+ * '''Biggest compute hotspot in the pipeline budget''' — full rebuild of a 520M-row table. Identified as the first optimization lever, but not our concern.
 
 !2 Lineage
 
 {{{
 imep_bronze.tbl_email                   -+
-imep_bronze.tbl_email_receiver_status   -|  [CTAS 2x/day]  --> imep_gold.final (520M)
+imep_bronze.tbl_email_receiver_status   -|  [Full Rebuild]  --> imep_gold.final (520M)
 imep_bronze.tbl_analytics_link          -|
 imep_bronze.tbl_hr_employee             -|
 imep_bronze.tbl_hr_costcenter           -+
@@ -151,10 +150,10 @@ imep_bronze.tbl_hr_costcenter           -+
  * '''If you can't find something in final''' (e.g. a specific Bronze column): don't try to extend final, join Bronze directly.
  * '''If final gets too large''': use the Tier-3 aggregates (tbl_pbi_mailings_region, _division, tbl_pbi_kpi) — they are pre-aggregated via GROUP BY MailingId × Dimension.
 
-!2 Verification Status after Q29 / Q30
+!2 Verification Status
 
 | '''Item''' | '''Status''' |
-| Name | ✅ imep_gold.final (Q29 explicitly confirmed; Q28 label was image error) |
+| Name | ✅ imep_gold.final (explicitly confirmed; earlier label mix-up resolved) |
 | Rows | ✅ 520M, 64,196 distinct mailings |
 | Tier classification | ✅ Tier 0 (Atomic Fact) |
 | Grain | ✅ mailing × recipient × event × hour (hour-bucketed) |
@@ -166,5 +165,11 @@ imep_bronze.tbl_hr_costcenter           -+
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmailReceiverStatus
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblAnalyticsLink
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepGold
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.ImepGold
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q26, Q27, Q28, Q29, Q30. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

@@ -1,16 +1,15 @@
 !1 Pages ('''sharepoint_bronze.pages''')
 
-'''The cross-channel bridge.''' Page inventory with UBSGICTrackingID — '''the only place''' where SharePoint-side interactions can be attributed to a Pack. 48K rows, but only '''1,949 (~4%) have UBSGICTrackingID populated'''. The most critical coverage blocker in the entire cross-channel model. (Q22, Q25)
+'''The cross-channel bridge.''' Page inventory with UBSGICTrackingID — '''the only place''' where SharePoint-side interactions can be attributed to a Pack. 48K rows, but only '''1,949 (~4%) have UBSGICTrackingID populated'''. The most critical coverage blocker in the entire cross-channel model.
 
 !2 Meta
 | '''Layer'''          | Bronze |
-| '''Source system'''  | SharePoint -> (CDC / Snapshot) -> Delta |
+| '''Source system'''  | SharePoint -> Change Data Capture (CDC) or Snapshot -> Delta Bronze |
 | '''Grain'''          | 1 row per SharePoint page (snapshot) |
 | '''Primary key'''    | pageUUID (GUID) |
 | '''Cross-channel key''' | UBSGICTrackingID — '''only 4% populated''' ⚠️ |
-| '''Refresh'''        | '''1x/day @ ~02:00 UTC''' (MERGE daily snapshot replace, Service Principal) — Q28 |
+| '''Write pattern''' | MERGE daily snapshot replace (Service Principal) |
 | '''Rows'''           | '''~48K''' (timespan 1900 - Apr 2026) |
-| '''PII'''            | None direct — pages themselves are public on the intranet |
 | '''Coverage'''       | 1,949 / 48,419 pages (~4%) have TrackingID -> '''article pages only (News/Events)''' |
 
 !2 Neighborhood Diagram
@@ -47,7 +46,7 @@ entity "tbl_email" as email {
 
 pages ||--o{ im    : "pageUUID = marketingPageId"
 pages }o--|| sites : "SiteId = SiteId"
-pages ||--o| email : "UBSGICTrackingID ↔ TrackingId (SEG1-4)"
+pages ||--o| email : "UBSGICTrackingID ↔ TrackingId (Pack / SEG1-2)"
 
 !enduml
 
@@ -57,11 +56,11 @@ pages ||--o| email : "UBSGICTrackingID ↔ TrackingId (SEG1-4)"
 | pageUUID                | string (GUID) | '''PK'''              | Unique per page. Referenced as marketingPageId in all sharepoint_gold.* metric tables. |
 | UBSGICTrackingID        | string     | '''Cross-channel key'''  | Format: CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL (32-char, 5-seg, UPPER). '''Only 4% populated.''' |
 | UBSArticleDate          | date       | Publication date         | When the article was published. Often NULL for non-article pages. |
-| PageURL / PageUrl / url | string     | URL                      | Column name varies — verify via DESCRIBE. 1:1 URL↔TID mapping per Q25. |
+| PageURL / PageUrl / url | string     | URL                      | Column name varies — verify via DESCRIBE. 1:1 URL↔TID mapping. |
 | PageTitle               | string     | Display                  | Page title |
 | SiteId                  | string     | FK -> sites.SiteId       | 99.4% of tracked pages = "News and events" |
 
-Full list (95 columns total per Q17) via !- DESCRIBE sharepoint_bronze.pages -!.
+Full list (95 columns total) via !- DESCRIBE sharepoint_bronze.pages -!.
 
 !2 Sample Row
 
@@ -98,10 +97,10 @@ FROM   sharepoint_bronze.pages p
 LEFT JOIN sharepoint_bronze.sites s ON s.SiteId = p.SiteId
 }}}
 
-!3 iMEP cross-channel link (SEG1-4)
+!3 iMEP cross-channel link (Pack / SEG1-2)
 
 {{{
--- Pack-level link: tbl_email × pages via SEG1-4
+-- Pack-level link: tbl_email × pages via Pack-Level (SEG1-2)
 WITH email_packs AS (
   SELECT DISTINCT
          array_join(slice(split(UPPER(TrackingId), '-'), 1, 4), '-') AS seg1_4,
@@ -123,20 +122,20 @@ JOIN   page_packs  p ON p.seg1_4 = e.seg1_4
 
 !2 Quality Caveats — Critical
 
-!3 ⚠️ 4% coverage blocker (Q22)
+!3 ⚠️ 4% coverage blocker
 
 Only '''1,949 / 48,419 pages''' have UBSGICTrackingID. Consequence:
  * Only ~4% of the 84M SharePoint interaction rows are Pack-attributable
  * The remaining 96% = "untracked intranet activity" (internal tools, settings, collaboration pages etc.)
  * '''The dashboard must make this explicit''' — either (a) show only the 4% subset labelled "Article Pages only", or (b) two separate sections (attributed vs. unattributed)
 
-!3 Site concentration (Q25)
+!3 Site concentration
 
 '''99.4% of tracked pages''' (1,937 of 1,949) live on '''a single site''': "News and events".
  * Dashboard default '''should''' be restricted to this site
  * Coverage reality check: 83 Pack IDs (SEG1-2) accessible to this dashboard
 
-!3 Coverage rollout (Q25)
+!3 Coverage rollout
 
  * Start of TID population: September 2024 (33.9% coverage for new pages)
  * Peak so far: March 2026 (70.5%)
@@ -151,23 +150,29 @@ Default time filter: WHERE UBSArticleDate >= '2024-09-01'.
 
 !3 1:1 URL ↔ TID
 
-Q25 confirms: each URL has at most one TID, each TID at most one URL. '''URL-based aggregation''' is equivalent to TID-based — use URL as a fallback key if needed.
+Dies confirms: each URL has at most one TID, each TID at most one URL. '''URL-based aggregation''' is equivalent to TID-based — use URL as a fallback key if needed.
 
 !2 Lineage
 
 {{{
-SharePoint (CMS) --[Daily Snapshot MERGE @ 02:00 UTC]--> sharepoint_bronze.pages
+SharePoint (CMS) --[Daily Snapshot MERGE]--> sharepoint_bronze.pages
                                                                 |
                                                                 +--> sharepoint_silver.webpage (normalized dimension)
                                                                          |
                                                                          +--> pbi_db_* gold metric tables reference pageUUID
 }}}
 
-'''Refresh anomaly''': the entire table is overwritten once a day. MERGE on (id: PageUId) (Q28). Page deletions propagate within at most 24h.
+'''Refresh anomaly''': the entire table is overwritten once a day. MERGE on (id: PageUId). Page deletions propagate within at most 24h.
 
 !2 Cross References
 
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.SharePointGold.PbiDbInteractionsMetrics
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErSharePointBronze
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.SharePointBronze
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.CrossChannelViaTrackingId
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q2, Q17, Q22, Q25, Q27, Q28, Q30. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

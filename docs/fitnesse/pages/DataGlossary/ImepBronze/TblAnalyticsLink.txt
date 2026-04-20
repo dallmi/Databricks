@@ -4,14 +4,13 @@
 
 !2 Meta
 | '''Layer'''          | Bronze |
-| '''Source system'''  | iMEP (SQL Server) -> CDC -> Delta |
+| '''Source system'''  | iMEP (SQL Server) -> Change Data Capture (CDC) -> Delta Bronze |
 | '''Grain'''          | 1 row per event (Open or Click) per recipient × mailing × link |
 | '''Primary key'''    | Id |
 | '''FK'''             | EmailId -> tbl_email.Id; EmailReceiverStatusId -> tbl_email_receiver_status.Id; TNumber -> tbl_hr_employee.T_NUMBER |
-| '''Refresh'''        | 2x/day @ 00:00 and 12:00 UTC (MERGE '''incremental''', Service Principal) — Q28 |
+| '''Write pattern''' | MERGE '''incremental''' (Service Principal) |
 | '''Rows'''           | '''533M''' (Nov 2020 - Apr 2026) |
 | '''Per-MERGE delta''' | '''3.7-8.5K rows''' (truly incremental — only new click events) |
-| '''PII'''            | TNumber -> indirectly identifying |
 
 !2 Neighborhood Diagram
 
@@ -68,7 +67,7 @@ al    }o--|| hr : "TNumber = T_NUMBER"
 | IsActive                  | int        | Soft-delete flag      | '''Always filter WHERE IsActive = 1''' |
 | CreationDate              | timestamp  | '''Event time'''      | When the Open/Click happened |
 
-Another 13 columns (see Q2 schema check — 22 columns total). Geo info, IP hash, etc.
+Another 13 columns (see schema check — 22 columns total). Geo info, IP hash, etc.
 
 !2 Sample Row
 
@@ -126,18 +125,18 @@ ORDER BY events DESC
 
  * '''Largest table in the project — 533M rows.''' Queries '''always''' need to be time-constrained (WHERE CreationDate >= …) or filtered by EmailId/TrackingId. Full scan = timeout risk.
  * '''Always set IsActive = 1''' — otherwise soft-deleted events bleed into numbers.
- * '''Truly incremental''': only 3.7-8.5k new rows per 12h cycle. Backfill anomalies unlikely, but Delta history is huge (110+ write operations for Bronze alone per Q28).
+ * '''Truly incremental''': only 3.7-8.5k new rows per 12h cycle. Backfill anomalies unlikely, but Delta history is huge (110+ write operations for Bronze alone).
  * '''LinkTypeEnum values''': only OPEN and CLICK are reliable. Other values (if present) should be validated first.
  * '''TNumber redundant''' with tbl_email_receiver_status.TNumber — when joining both tables, one column can be dropped.
  * '''Agent values are free strings''' — no canonical enum list. For device analytics define mapping logic first (desktop/mobile/tablet).
 
 !2 Lineage — Bronze -> Gold
 
-Skips Silver (Q26). One of the three Bronze inputs for imep_gold.final.
+Skips Silver. One of the three Bronze inputs for imep_gold.final.
 
 {{{
 imep_bronze.tbl_analytics_link       -+
-imep_bronze.tbl_email_receiver_status -|--> imep_gold.final (~520M rows, CTAS 2x/day)
+imep_bronze.tbl_email_receiver_status -|--> imep_gold.final (~520M rows, Full Rebuild)
 imep_bronze.tbl_email                -+
 }}}
 
@@ -145,7 +144,7 @@ Events are also aggregated into Tier-3 aggregates (tbl_pbi_kpi pivot: OpenCount/
 
 !2 Incrementality Anomaly — Why This Matters
 
-tbl_analytics_link is the '''only''' iMEP Bronze table with a truly incremental MERGE (Q28). Implications:
+tbl_analytics_link is the '''only''' iMEP Bronze table with a truly incremental MERGE. Implications:
  * Total size grows only through new events — no re-ingestion of old data
  * '''Delta history remains interpretable''' (each entry = one real mini-batch)
  * For streaming-like dashboards (live click-through rate) this is the best available source
@@ -157,5 +156,11 @@ Still not true streaming — batches are buffered at 12h.
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmailReceiverStatus
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepGold.Final
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.ImepBronze
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.ImepBronzeEmailEvents
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q2, Q26, Q27, Q28. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

@@ -4,14 +4,13 @@
 
 !2 Meta
 | '''Layer'''          | Bronze |
-| '''Source system'''  | iMEP (SQL Server) -> CDC -> Delta |
+| '''Source system'''  | iMEP (SQL Server) -> Change Data Capture (CDC) -> Delta Bronze |
 | '''Grain'''          | 1 row per Mailing × recipient (per send event) |
 | '''Primary key'''    | Id |
 | '''FK'''             | EmailId -> tbl_email.Id; TNumber -> tbl_hr_employee.T_NUMBER |
-| '''Refresh'''        | 2x/day @ 00:00 and 12:00 UTC (MERGE full-table upsert, Service Principal) — Q28 |
+| '''Write pattern''' | MERGE full-table upsert (Service Principal) |
 | '''Rows'''           | '''293M''' (Nov 2020 - Apr 2026) |
 | '''Per-MERGE delta''' | 27-72M rows (full-replace upsert) |
-| '''PII'''            | TNumber + Receiver (email) -> directly identifying |
 
 !2 Neighborhood Diagram
 
@@ -68,7 +67,6 @@ rs    }o--|| user : "LOWER(TNumber) = LOWER(UbsId)"
 | Id              | string      | PK                     | GUID. Referenced by tbl_analytics_link.EmailReceiverStatusId -> bridge from send event to open/click event. |
 | EmailId         | string      | FK -> tbl_email.Id     | Links to the mailing master |
 | TNumber         | string      | FK -> tbl_hr_employee  | Lowercase t######. '''The only person key''' iMEP carries per recipient. |
-| Receiver        | string      | PII                    | Email address — only pull when PII is required |
 | Status          | int         | Status code            | Numeric — mapping via LogStatus is more readable |
 | LogStatus       | string      | '''Human-readable'''   | Values like Open, Bounce, Sent. Use for filtering/grouping. |
 | EmailLanguage   | string      | Localization           | DE / EN / FR / ... |
@@ -82,7 +80,6 @@ Full column list: !- DESCRIBE imep_bronze.tbl_email_receiver_status -!.
 Id             = "3b9c1a8f-..."
 EmailId        = "0a3f6c2e-..."
 TNumber        = "t100200"
-Receiver       = "max.muster@example.com"
 Status         = 1
 LogStatus      = "Open"
 EmailLanguage  = "DE"
@@ -123,11 +120,10 @@ LEFT JOIN imep_bronze.tbl_hr_employee          hr ON hr.T_NUMBER = rs.TNumber
  * '''Full-table MERGE''': every 12h the entire table is upserted (27-72M per run) — not incremental. Delta history shows a "wave" per refresh cycle, not streaming.
  * '''LogStatus vs Status''': LogStatus is the readable string (Open, Bounce, ...), Status the numeric code. For dashboards always use LogStatus.
  * '''DateTime is send time''' — for "when was it opened", look at tbl_analytics_link.CreationDate.
- * '''PII''': Receiver is a plain-text email address. Only pull when explicitly needed; otherwise use TNumber only.
 
 !2 Lineage — Bronze -> Gold
 
-Email engagement '''skips Silver''' (Q26). tbl_email_receiver_status is one of the three Bronze sources flowing directly into imep_gold.final.
+Email engagement '''skips Silver'''. tbl_email_receiver_status is one of the three Bronze sources flowing directly into imep_gold.final.
 
 {{{
 imep_bronze.tbl_email                    -+
@@ -142,5 +138,11 @@ Send counts from this table also flow into Tier-3 aggregates (tbl_pbi_mailings_r
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblAnalyticsLink
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrEmployee
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.ImepBronze
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.ImepBronzeEmailEvents
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q2, Q26, Q27, Q28. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

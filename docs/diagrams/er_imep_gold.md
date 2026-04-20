@@ -1,21 +1,21 @@
-# ER-Diagramm — `imep_gold.*`
+# ER Diagram — `imep_gold.*`
 
-> Gold-Topologie für iMEP. **Strikte 4-Tier-Hierarchie** (Q29, 31 Tabellen klassifiziert). Alle Tabellen joinen via `MailingId = tbl_pbi_platform_mailings.Id = tbl_email.Id` zurück zum Master. Das `final` ist der einzige Tier-0-Atomic-Fact und trägt 520M Rows.
+> Gold topology for iMEP. **Strict 4-tier hierarchy** (31 tables classified). All tables join via `MailingId = tbl_pbi_platform_mailings.Id = tbl_email.Id` back to the master. `final` is the only Tier-0 atomic fact and carries 520M rows.
 
 ---
 
-## 4-Tier-Hierarchie (Q29)
+## 4-Tier Hierarchy
 
-| Tier | Rolle | # Tabellen | Vertreter |
+| Tier | Role | # Tables | Representatives |
 |---|---|---|---|
-| **Tier 0 — Atomic Fact** | Per-Recipient × Event × Hour | **1** | `final` (520M, 64K mailings) |
-| **Tier 1 — Timespan × Dim Aggregates** | 24h / 72h / 1w / 15w / 15m+ × Date/DateHour/DivArea/RegCntry | **15** | `dateonly`, `datetime`, `divarea`, `regcntry` Varianten |
-| **Tier 2 — Per-Mailing Summaries** | UniqueOpens/UniqueClicks pro Mailing × Dim | ~8 | `mailingreceiver_*`, `engagement` (1.8M, 117K mailings — mixed mail+event!), `log_mail` |
-| **Tier 3 — Platform & Reference Dims** | Master + Lookup-Tabellen | ~7 | `tbl_pbi_platform_mailings` (73,920 / 927 TIDs), `tbl_pbi_platform_events` (84,052) |
+| **Tier 0 — Atomic Fact** | Per-recipient × Event × Hour | **1** | `final` (520M, 64K mailings) |
+| **Tier 1 — Timespan × Dim Aggregates** | 24h / 72h / 1w / 15w / 15m+ × Date/DateHour/DivArea/RegCntry | **15** | `dateonly`, `datetime`, `divarea`, `regcntry` variants |
+| **Tier 2 — Per-Mailing Summaries** | UniqueOpens/UniqueClicks per Mailing × Dim | ~8 | `mailingreceiver_*`, `engagement` (1.8M, 117K mailings — mixed mail+event!), `log_mail` |
+| **Tier 3 — Platform & Reference Dims** | Master + lookup tables | ~7 | `tbl_pbi_platform_mailings` (73,920 / 927 TIDs), `tbl_pbi_platform_events` (84,052) |
 
 ---
 
-## Zentrale Tier-Relationen
+## Central Tier Relations
 
 ```mermaid
 erDiagram
@@ -74,58 +74,58 @@ erDiagram
 
 ---
 
-## Volumina & Refresh
+## Volumes & Write Patterns
 
-| Tabelle | Rows | Refresh | Pattern |
-|---|---|---|---|
-| **`final`** | **~520M** | **2×/Tag @ ~00:23/12:25 UTC** | **CTAS Full Rebuild** ⚠️ |
-| `tbl_pbi_platform_mailings` | 73K | 2×/Tag | CTAS |
-| `tbl_pbi_platform_events` | 84K | 2×/Tag | CTAS |
-| `tbl_pbi_analytics` | 290K | 2×/Tag | CTAS |
-| `tbl_pbi_kpi` | 245K | 2×/Tag | CTAS |
-| `tbl_pbi_mailings_region` | 73K | 2×/Tag | CTAS |
-| `tbl_pbi_mailings_division` | 697K | 2×/Tag | CTAS |
-| (1 weitere) | 1,384K | 2×/Tag | CTAS |
+| Table | Rows | Pattern |
+|---|---|---|
+| **`final`** | **~520M** | **Full Rebuild** ⚠️ |
+| `tbl_pbi_platform_mailings` | 73K | Full Rebuild |
+| `tbl_pbi_platform_events` | 84K | Full Rebuild |
+| `tbl_pbi_analytics` | 290K | Full Rebuild |
+| `tbl_pbi_kpi` | 245K | Full Rebuild |
+| `tbl_pbi_mailings_region` | 73K | Full Rebuild |
+| `tbl_pbi_mailings_division` | 697K | Full Rebuild |
+| (1 other) | 1,384K | Full Rebuild |
 
-**Alle Gold-Tables werden per CTAS komplett neu aufgebaut** — keine Inkrementalität. Refresh-Window: 00:23 und 12:25 UTC (siehe Q28).
+**Every Gold table is rebuilt from scratch by Full Rebuild (no incrementality)** — no incrementality. Refresh cadence intentionally not documented; we do not have a complete job-scheduler overview.
 
 ---
 
-## Zwei parallele Daten-Pfade in Gold
+## Two parallel data paths in Gold
 
-### Pfad 1: Master-Detail (Tier 1 → Tier 2/3)
+### Path 1: Master-Detail (Tier 1 → Tier 2/3)
 
 ```
 tbl_email (Bronze)
-    │ [1:1 CTAS]
+    │ [1:1 Full Rebuild]
     ▼
 tbl_pbi_platform_mailings (Tier 1, 73K)
     │
-    ├──► tbl_pbi_mailings_region    (aggregiert × Region)
-    ├──► tbl_pbi_mailings_division  (aggregiert × Division)
+    ├──► tbl_pbi_mailings_region    (aggregated × Region)
+    ├──► tbl_pbi_mailings_division  (aggregated × Division)
     ├──► tbl_pbi_kpi                (pivoted measures)
     └──► tbl_pbi_analytics
 ```
 
-**Wann nutzen**: Für aggregierte Metriken pro Mailing × Dimension. Kleiner, schneller als `final`.
+**When to use**: aggregated metrics per Mailing × Dimension. Smaller, faster than `final`.
 
-### Pfad 2: Denormalisierter Event-Stream (`final`)
+### Path 2: Denormalized event stream (`final`)
 
 ```
 tbl_email                           ┐
-tbl_email_receiver_status           ├──[CTAS Full Rebuild]──► final (520M)
+tbl_email_receiver_status           ├──[Full Rebuild]──► final (520M)
 tbl_analytics_link                  │
 tbl_hr_employee + tbl_hr_costcenter │
                                     ┘
 ```
 
-**Wann nutzen**: Für Event-Level-Queries mit HR-Context, ohne manuelles Joinen. Default für Dashboards.
+**When to use**: event-level queries with HR context, without manual joins. Default for dashboards.
 
 ---
 
-## Die pivotierte `tbl_pbi_kpi` — Vorsicht beim Aggregieren
+## The pivoted `tbl_pbi_kpi` — careful when aggregating
 
-`tbl_pbi_kpi` ist **nicht** im gewöhnlichen Wide-Format. Stattdessen:
+`tbl_pbi_kpi` is **not** in the usual wide format. Instead:
 
 | MailingId | measure | MailingReceiverStatus | value |
 |---|---|---|---|
@@ -133,7 +133,7 @@ tbl_hr_employee + tbl_hr_costcenter │
 | `a1b2c3...` | `ClickCount` | `Click` | 189 |
 | `a1b2c3...` | `SentCount` | `Sent` | 8500 |
 
-Für Dashboard-Konsumption muss pivotiert werden:
+For dashboard consumption it must be pivoted:
 
 ```sql
 SELECT MailingId,
@@ -146,33 +146,39 @@ GROUP BY MailingId
 
 ---
 
-## NULL-Semantik in den Tier-3-Aggregaten (Q21)
+## NULL semantics in the Tier-3 aggregates
 
-Bei `tbl_pbi_mailings_region`, `_division`:
+For `tbl_pbi_mailings_region`, `_division`:
 
-- **`UniqueOpens NULL ~28-35%`** — das sind Mailings ohne ein einziges Open-Event in der entsprechenden Region. NICHT als Datenfehler interpretieren.
-- **`UniqueClicks NULL ~66-81%`** — Mailings ohne Clicks in der Region. Click-Rate ist naturgemäss niedriger als Open-Rate.
-- **Match-Rate Mailing ↔ Tier-3**: 72-98% — nicht alle Mailings haben überhaupt Tier-3-Einträge.
+- **`UniqueOpens NULL ~28-35%`** — these are mailings without a single open event in the corresponding region. Do NOT interpret as a data defect.
+- **`UniqueClicks NULL ~66-81%`** — mailings with no clicks in the region. Click rate is naturally lower than open rate.
+- **Match rate Mailing ↔ Tier-3**: 72-98% — not every mailing has Tier-3 entries at all.
 
-Semantische NULLs, keine Defekte. Für Aggregationen `COALESCE(value, 0)` nutzen.
-
----
-
-## Physical Storage (Q30)
-
-- Alle 31 Gold-Tabellen liegen im **geteilten Gold-ADLS-Account** zusammen mit `sharepoint_gold.*` → Cross-Channel-Joins innerhalb Fabric/Spark ohne Cross-Account-Auth
-- Path-Pattern: `abfss://gold@<gold-acc>/.../final` bzw. `/tbl_pbi/*` (+ 1 Outlier `/imep/tbl_active_employee_month`)
-- External Delta, erzeugt von **einem Orchestration-Notebook** (Spark 3.2.1) — keine managed Pipeline
-- **⚠️ Zero Partitioning** auf allen Tabellen — grösster struktureller Performance-Gap; Full-Scans bei jeder Query ohne enge Filter
-
-## Engagement-Table-Anomalie (Q29)
-
-`engagement` (Tier 2, 1.8M Rows) führt **117,185 distinct mailingIds**, während `tbl_pbi_platform_mailings` nur 73,930 enthält. Der Delta (~44K) = Event-IDs aus `tbl_pbi_platform_events`. iMEP Gold behandelt **Emails + Events als dieselbe Engagement-Einheit** in Tier-2-Aggregaten. Bei Mailing-spezifischen Analysen filtert man explizit auf die 73K Mailing-IDs.
+Semantic NULLs, not defects. Use `COALESCE(value, 0)` for aggregations.
 
 ---
 
-## Referenzen
+## Physical Storage
+
+- All 31 Gold tables sit in the **shared Gold ADLS account** together with `sharepoint_gold.*` → cross-channel joins inside Fabric/Spark without cross-account auth
+- Path pattern: `abfss://gold@<gold-acc>/.../final` and `/tbl_pbi/*` (+ 1 outlier `/imep/tbl_active_employee_month`)
+- External Delta, produced by **a single orchestration notebook** (Spark 3.2.1) — no managed Pipeline
+- **⚠️ Zero partitioning** on every table — the largest structural performance gap; full scans on any query without tight filters
+
+## Engagement table anomaly
+
+`engagement` (Tier 2, 1.8M rows) carries **117,185 distinct mailingIds**, while `tbl_pbi_platform_mailings` contains only 73,930. The delta (~44K) = event IDs from `tbl_pbi_platform_events`. iMEP Gold treats **emails + events as the same engagement unit** in Tier-2 aggregates. For mailing-specific analyses explicitly filter down to the 73K mailing IDs.
+
+---
+
+## References
 
 - [final.md](../tables/imep_gold/final.md)
-- [join_strategy_contract.md](../joins/join_strategy_contract.md) — Refresh-Window-Regeln
+- [join_strategy_contract.md](../joins/join_strategy_contract.md) — rules for working with Full Rebuild tables
 - Memory: `imep_gold_full_inventory.md`, `imep_gold_tier3_schemas_q21.md`, `imep_pipeline_ops_q28_findings.md`
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q21](../sources.md#q21), [Q28](../sources.md#q28), [Q29](../sources.md#q29), [Q30](../sources.md#q30). See [sources.md](../sources.md) for the full index.

@@ -44,7 +44,7 @@ LEFT JOIN imep_bronze.tbl_hr_employee           hr ON hr.T_NUMBER             = 
 LEFT JOIN imep_bronze.tbl_hr_costcenter         cc ON cc.ORGANIZATIONAL_UNIT  = hr.ORGANIZATIONAL_UNIT
 
 WHERE   e.TrackingId IS NOT NULL                   -- Cross-channel filter
-  AND   rs.DateTime >= '2025-01-01'                -- Default time range (Q24 adoption ramp)
+  AND   rs.DateTime >= '2025-01-01'                -- Default time range (adoption ramp)
   AND   rs.LogStatus IN ('Sent', 'Open')           -- adjust per analysis
 }}}
 
@@ -99,7 +99,7 @@ LEFT JOIN imep_bronze.tbl_analytics_link       al ON al.EmailReceiverStatusId = 
 GROUP BY mail.tracking_pack_id
 }}}
 
-!2 Gotchas
+!2 Pitfalls
 
 !3 1. ALWAYS filter al.IsActive = 1
 
@@ -122,7 +122,7 @@ For time-to-open analyses: DATEDIFF(second, rs.DateTime, al.CreationDate).
 
 !3 5. HR join is N:1, but can change
 
-tbl_hr_employee is upserted 2x/day. Region/Division are current, not historical. For "who was in which division on day X" you need tbl_hr_employee_history (if it exists) or a snapshot merge.
+tbl_hr_employee is upserted via MERGE (snapshot replace). Region/Division are current, not historical. For "who was in which division on day X" you need tbl_hr_employee_history (if it exists) or a snapshot merge.
 
 !3 6. TrackingId only on tbl_email
 
@@ -140,5 +140,11 @@ Do not look for it on receiver_status or analytics_link — they don't carry it.
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmail
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblEmailReceiverStatus
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.ImepBronze.TblAnalyticsLink
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErImepBronze
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.ImepBronze
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q2, Q24, Q27. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.

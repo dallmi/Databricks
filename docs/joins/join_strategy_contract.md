@@ -1,12 +1,12 @@
 # Join Strategy Contract — Cross-Channel Analytics
 
-> **Zweck**: Single-Pager mit den wichtigsten Regeln für Joins im Cross-Channel-Modell. Lies das, **bevor** du SQL schreibst. Jede Regel stammt aus einem konkreten Genie-Finding (Q1–Q30).
+> **Purpose**: Single-pager with the most important rules for joins in the cross-channel model. Read this **before** you write SQL. Every rule comes from a specific Genie finding.
 
 ---
 
-## Die 5 Regeln, an die du dich halten musst
+## The 5 rules you must follow
 
-### Regel 1 — Cross-Channel läuft dimensional, nie über Engagement
+### Rule 1 — Cross-channel runs dimensionally, never through engagement
 
 **DO**:
 ```sql
@@ -15,93 +15,99 @@ tbl_email.TrackingId  ↔  sharepoint_bronze.pages.UBSGICTrackingID
 
 **DON'T**:
 ```sql
--- FALSCH: direkter Join von Engagement-Facts zwischen Domains
-tbl_analytics_link  ↔  sharepoint_bronze.pageviews   -- NEIN
-tbl_email_receiver_status  ↔  sharepoint_gold.pbi_db_interactions_metrics  -- NEIN
+-- WRONG: direct join of engagement facts between domains
+tbl_analytics_link  ↔  sharepoint_bronze.pageviews   -- NO
+tbl_email_receiver_status  ↔  sharepoint_gold.pbi_db_interactions_metrics  -- NO
 ```
 
-**Warum**: TrackingId existiert in **genau 4 Tabellen** (`tbl_email`, `tbl_event`, `tbl_pbi_platform_mailings`, `tbl_pbi_platform_events`) und koexistiert **nie** mit `EmailId` in derselben Tabelle. SharePoint hat kein Person-Key-Equivalent zu TNumber. Cross-Channel muss deshalb **immer** über die Dimensions-Tabellen `tbl_email` ↔ `pages` laufen. *(Q27)*
+**Why**: TrackingId exists in **exactly 4 tables** (`tbl_email`, `tbl_event`, `tbl_pbi_platform_mailings`, `tbl_pbi_platform_events`) and **never** co-occurs with `EmailId` in the same table. SharePoint has no person-key equivalent to TNumber. Cross-channel must therefore **always** run through the dimension tables `tbl_email` ↔ `pages`.
 
 ---
 
-### Regel 2 — TNumber existiert nur in 2 Tabellen. Person-Level-Analytics sind Email-only.
+### Rule 2 — TNumber exists in only 2 tables. Person-level analytics are email-only.
 
-**Person-Level-Joins nur möglich über**:
+**Person-level joins are only possible via**:
 - `imep_bronze.tbl_email_receiver_status.TNumber`
 - `imep_bronze.tbl_analytics_link.TNumber`
 
-**Join zu HR**:
+**Join to HR**:
 ```sql
-ON analytics_link.TNumber = tbl_hr_employee.T_NUMBER   -- beide lowercase t######
+ON analytics_link.TNumber = tbl_hr_employee.T_NUMBER   -- both lowercase t######
 ```
 
-**Sonderfälle**:
-- `tbl_hr_user.UbsId` ist **UPPERCASE** → `LOWER(UbsId) = LOWER(T_NUMBER)` joinen
-- GPN kommt aus `pageviews.user_gpn` (8-digit) → `tbl_hr_employee.WORKER_ID` ist die Bridge (**keine** externe Quelle nötig)
+**Special cases**:
+- `tbl_hr_user.UbsId` is **UPPERCASE** → join `LOWER(UbsId) = LOWER(T_NUMBER)`
+- GPN comes from `pageviews.user_gpn` (8-digit) → `tbl_hr_employee.WORKER_ID` is the bridge (**no** external source required)
 
-**Warum**: TNumber erscheint nur in zwei Tabellen. Für SharePoint-Person-Analytics muss separat über `sharepoint_gold.pbi_db_employeecontact` (24M Rows) oder CDM resolved werden — das ist **nicht** TNumber-kompatibel ohne Bridge. *(Q3, Q27)*
+**Why**: TNumber appears in only two tables. For SharePoint person analytics you must resolve separately via `sharepoint_gold.pbi_db_employeecontact` (24M rows) or CDM — that is **not** TNumber-compatible without a bridge.
 
 ---
 
-### Regel 3 — TrackingId-Match: SEG1–4, niemals SEG5
+### Rule 3 — TrackingId match at Pack level (SEG1-2), not per activity
 
-TrackingId-Format: `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL` (32 Zeichen, 5 Segmente, UPPER).
+TrackingId format: `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL` (32 chars, 5 segments, UPPER).
+
+Segments:
+- **SEG1 = Cluster**
+- **SEG2 = Pack number** → together SEG1-2 identifies the campaign (`QRREP-0000058`)
+- SEG3 = YYMMDD of the individual activity
+- SEG4 = activity sequence within the Pack
+- SEG5 = **Channel** (Email/Newsletter/Article/…) — value differs by system vocabulary (iMEP: `EMI`/`NLI`/`TWE`; SharePoint: `IAN`/`ITS`/`OPN`/`ANC`)
 
 **DO**:
 ```sql
--- Für Cross-Channel-Match: nur SEG1-4 vergleichen
-ON  array_join(slice(split(email.TrackingId, '-'), 1, 4), '-')
-  = array_join(slice(split(pages.UBSGICTrackingID, '-'), 1, 4), '-')
+-- Cross-channel match lives at the Pack level: SEG1-2 only
+ON  array_join(slice(split(email.TrackingId, '-'), 1, 2), '-')
+  = array_join(slice(split(pages.UBSGICTrackingID, '-'), 1, 2), '-')
 ```
 
 **DON'T**:
 ```sql
--- FALSCH: vollständiger String-Match
-ON email.TrackingId = pages.UBSGICTrackingID   -- nur 6/1677 Treffer (Jaccard 0.004)
+-- WRONG: full-string match (6/1677 hits, Jaccard 0.004)
+ON email.TrackingId = pages.UBSGICTrackingID
+
+-- ALSO WRONG: SEG1-4 match (Cluster-Pack-Date-Activity)
+-- Would require the same date and same activity sequence on both sides.
+-- But an email can launch on 2024-07-09 (SEG3=240709) while the
+-- intranet page of the same Pack only goes live on 2024-07-15 (SEG3=240715)
+-- with a different activity sequence. SEG1-4 match would treat them as unrelated.
 ```
 
-**Warum**: SEG5 encodiert **System-Ownership**, nicht Kanal. iMEP: `EMI`/`NLI`/`TWE`. SharePoint: `IAN`/`ITS`/`OPN`/`ANC`. Full-String-Match produziert fast keine Treffer, obwohl inhaltlich dieselbe Activity gemeint ist. *(Q23)*
+**Why**: A Pack bundles multiple activities across channels and dates. The email goes out early, the corresponding intranet page often days later with a different Activity-Seq. SEG3 (date) and SEG4 (Activity-Seq) therefore differ between the email and the page of the same Pack. Matching on SEG1-2 ties activities together through the Pack, independent of timing or channel.
 
 ---
 
-### Regel 4 — Gold ist CTAS-Full-Rebuild. Respektiere Refresh-Fenster.
+### Rule 4 — Gold is Full Rebuild. Plan for the refresh window.
 
-**Refresh-Zeiten (UTC)**:
-| Layer | Zeit | Pattern |
-|---|---|---|
-| iMEP Bronze | 00:00 + 12:00 | MERGE Upsert |
-| SharePoint Bronze | 02:00 | MERGE (pages) + Append (pageviews, 7 Bursts in 1 Min) |
-| iMEP Gold | 00:23 + 12:25 | **CTAS Full Rebuild** ← kritisch |
+**Pattern**: iMEP Gold Tier-0 (`final`, 520M rows) and Tier-1/2 aggregates are built as `CREATE OR REPLACE TABLE AS SELECT` — per refresh the table is fully torn down and rewritten, not merged incrementally.
 
-**DO**:
-- Dashboard-Queries zwischen `00:35–11:55` und `12:35–23:55` UTC (sicheres Fenster)
-- Für Scheduled Reports: `00:40 UTC` oder `12:40 UTC` als frühester Slot
+**Consequence**:
+- During a refresh run a query can hit a partial / momentarily inconsistent state (old snapshot vs. new snapshot swap atomically at the end, but parallel reads against an ongoing rebuild are more expensive).
+- Row counts and aggregates can jump between two consecutive dashboard refreshes if a Gold rebuild ran in between.
 
-**DON'T**:
-- Dashboard-Scheduled-Refresh um `00:20–00:30` oder `12:20–12:30` UTC
-- Lange Transactions über diese Fenster hinweg öffnen
+**DO**: Build dashboards against Gold so they are resilient against the current snapshot (no assumptions like "row X from earlier still exists as is"). For scheduled reports, align the actual run times with the upstream team — we don't have a full job scheduler overview.
 
-**Warum**: Gold-Tables werden komplett zerstört und neu aufgebaut (`CREATE OR REPLACE TABLE AS SELECT`). Queries mitten im Fenster können auf partiellen / inkonsistenten Stand treffen. *(Q28)*
+**DON'T**: No throw-away caching of Gold row IDs across sessions. No assumptions about concrete refresh slots in this repo — we only see them via `DESCRIBE HISTORY`, not through the scheduler.
 
 ---
 
-### Regel 5 — Coverage-Realität: ~4% Pages, ~1.3% Mailings
+### Rule 5 — Coverage reality: ~4% pages, ~1.3% mailings
 
-**Pflicht-Caveats** in jedem Dashboard:
+**Mandatory caveats** in every dashboard:
 
-1. **SharePoint-Seite**: Nur 1,949 / 48,419 Pages (~4%) haben `UBSGICTrackingID`. Nur diese ~4% der 84M Interaction-Rows sind Pack-attribuierbar. Restliche 96% = "untracked intranet activity" — separate Sektion oder transparent gelabelt.
+1. **SharePoint side**: Only 1,949 / 48,419 pages (~4%) have `UBSGICTrackingID`. Only these ~4% of the 84M interaction rows are Pack-attributable. The remaining 96% = "untracked intranet activity" — separate section or labelled transparently.
 
-2. **iMEP-Seite**: Nur 986 / 73,930 Mailings (1.3%) haben TrackingId. Aber: starker Uptrend (2024: 99 → 2025: 637 → 2026 YTD: 250). **Default-Zeitraum des Dashboards: ab 2025.**
+2. **iMEP side**: Only 986 / 73,930 mailings (1.3%) have TrackingId. However: strong uptrend (2024: 99 → 2025: 637 → 2026 YTD: 250). **Dashboard default period: from 2025.**
 
-3. **Site-Konzentration**: 99.4% der getrackten Pages liegen auf **einer einzigen Site** ("News and events"). Falls Dashboard global filtert → Empfehlung, defaultmässig auf diese Site zu beschränken.
+3. **Site concentration**: 99.4% of tracked pages live on **a single site** ("News and events"). If the dashboard filters globally → recommend restricting by default to this site.
 
-**Warum**: Ohne diese Caveats sehen Stakeholder massive Absolut-Zahlen und falsche Rate-Berechnungen. *(Q22, Q24, Q25)*
+**Why**: Without these caveats stakeholders see massive absolute numbers and wrong rate calculations.
 
 ---
 
-## Quick-Reference — Join-Patterns
+## Quick reference — Join patterns
 
-### Pattern A: Per-Recipient-Event (Bronze-Kette, die 533M-Row-Wahrheit)
+### Pattern A: Per-recipient-event (Bronze chain, the 533M-row truth)
 
 ```sql
 SELECT e.TrackingId, rs.TNumber, al.LinkTypeEnum, al.CreationDate AS event_time, al.Agent
@@ -113,9 +119,9 @@ WHERE  e.TrackingId IS NOT NULL
   AND  al.IsActive  = 1
 ```
 
-→ Full-Detail-Grain, aber 533M Rows. Nur bei Ad-hoc-Analysen.
+→ Full-detail grain, but 533M rows. Ad-hoc analyses only.
 
-### Pattern B: Gold-Consumption (wenn es schnell sein muss)
+### Pattern B: Gold consumption (when it has to be fast)
 
 ```sql
 SELECT *
@@ -123,9 +129,9 @@ FROM   imep_gold.final
 WHERE  /* whatever filter */
 ```
 
-→ 520M Rows, schon denormalisiert, HR-enriched. **Default für Dashboard-Backends.**
+→ 520M rows, already denormalized, HR-enriched. **Default for dashboard backends.**
 
-### Pattern C: Cross-Channel-Funnel (Pack-Level)
+### Pattern C: Cross-channel funnel (Pack level)
 
 ```sql
 WITH pack AS (
@@ -163,36 +169,25 @@ FROM   email_side e
 FULL OUTER JOIN sp_side s ON s.tracking_pack_id = e.tracking_pack_id;
 ```
 
-→ Das ist der Funnel auf Pack-Ebene. `FULL OUTER JOIN`, weil viele Packs nur Email haben oder nur Intranet.
+→ This is the funnel at Pack level. `FULL OUTER JOIN`, because many Packs are email-only or intranet-only.
 
 ---
 
-## Footgun-Alarm
+## Pitfalls
 
-| Footgun | Symptom | Fix |
+| Pitfall | Symptom | Fix |
 |---|---|---|
-| `TrackingId` auf Engagement-Tabellen suchen | `column not found` | TrackingId lebt nur auf `tbl_email`, `tbl_event`, `tbl_pbi_platform_mailings`, `tbl_pbi_platform_events` |
-| Full-String-Match von TrackingIds | 0 oder fast 0 Treffer | SEG1-4 vergleichen (siehe Regel 3) |
-| `UbsId = T_NUMBER` ohne Case-Norm | 0 Treffer | `LOWER(UbsId) = LOWER(T_NUMBER)` |
-| Dashboard-Refresh um `00:25 UTC` | Teilweise leere Gold-Tables | Refresh-Fenster respektieren (Regel 4) |
-| `SUM(views)` ohne TID-Filter | Aufgeblähte Zahlen | `WHERE UBSGICTrackingID IS NOT NULL` für attribuierten Funnel |
-| `COUNT(*) FROM imep_gold.final` ohne Filter | ~520M, Timeout | Immer zeitlich einschränken oder mit PartitionKey filtern |
-| Mailing-Send-Zeit aus `tbl_email.CreationDate` | Falsche Timestamps | Send-Zeit steht in `tbl_email_receiver_status.DateTime` |
-| `GICTrackingID` vs `UBSGICTrackingID` verwechseln | Schema-inkonsistent | `pages` hat `UBSGICTrackingID`, `pageviews` hat `GICTrackingID` — beide meinen dasselbe, aber Case-Varianten kommen vor |
+| Looking for `TrackingId` on engagement tables | `column not found` | TrackingId only lives on `tbl_email`, `tbl_event`, `tbl_pbi_platform_mailings`, `tbl_pbi_platform_events` |
+| Full-string match of TrackingIds | 0 or near-zero hits | Compare SEG1-2 (Pack level) — see Rule 3 |
+| `UbsId = T_NUMBER` without case norm | 0 hits | `LOWER(UbsId) = LOWER(T_NUMBER)` |
+| Gold query parallel to full rebuild | Partial / momentarily inconsistent state | Build dashboards resilient against Gold (Rule 4) — clarify concrete refresh slots with upstream, we don't see them in the repo |
+| `SUM(views)` without TID filter | Inflated numbers | `WHERE UBSGICTrackingID IS NOT NULL` for the attributed funnel |
+| `COUNT(*) FROM imep_gold.final` without filter | ~520M, timeout | Always restrict by time or filter on PartitionKey |
+| Mailing send time from `tbl_email.CreationDate` | Wrong timestamps | Send time lives in `tbl_email_receiver_status.DateTime` |
+| Mixing up `GICTrackingID` vs `UBSGICTrackingID` | Schema-inconsistent | `pages` has `UBSGICTrackingID`, `pageviews` has `GICTrackingID` — both mean the same, but case variants occur |
 
 ---
 
-## Quellen-Index
+## Sources
 
-Jede Regel in diesem Dokument ist rückverfolgbar zu einer Genie-Session:
-
-- **Q1, Q27** → TrackingId-Location + Dimensional-vs-Factual
-- **Q3, Q3a/b** → HR-Bridge (GPN↔TNumber via WORKER_ID)
-- **Q22** → 4%-Coverage-Blocker + FK-Chain
-- **Q23** → SEG5-Divergenz (Channel-Ownership)
-- **Q24, Q25** → Adoption-Timeline + Site-Konzentration
-- **Q26** → Silver-Asymmetrie
-- **Q27** → Join-Graph-Topologie
-- **Q28** → Refresh-Cadence + CTAS-Windows
-
-Volldetails in [genie_questions_imep.md](../genie_questions_imep.md) und im Memory unter `memory/*.md`.
+Every rule in this document traces back to a Genie session — full traceability index in [sources.md](../sources.md). Relevant for this document: Q1, Q3 · Q3a · Q3b, Q22, Q23, Q24, Q25, Q26, Q27, Q28, Q30.

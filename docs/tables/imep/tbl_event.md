@@ -1,36 +1,35 @@
 # `imep_bronze.tbl_event`
 
-> **Event-Master-Tabelle** — Events als Feature in iMEP (nicht zu verwechseln mit "Email-Events" im Sinne von Opens/Clicks). Trägt **`TrackingId`** (eine der nur 4 Tabellen mit dieser Spalte). Für Event-Registrations siehe zusätzlich `imep_silver.eventregistration` (13.7M).
+> **Event master table** — Events as a feature in iMEP (not to be confused with "email events" in the sense of Opens/Clicks). Carries **`TrackingId`** (one of only 4 tables with this column). For event registrations see also `imep_silver.eventregistration` (13.7M).
 
 | | |
 |---|---|
 | **Layer** | Bronze |
-| **Source system** | iMEP (SQL Server) → CDC → Delta |
-| **Grain** | 1 row per Event-Definition |
+| **Source system** | iMEP (SQL Server) → Change Data Capture (CDC) → Delta Bronze |
+| **Grain** | 1 row per event definition |
 | **Primary key** | `Id` |
 | **Cross-channel key** | `TrackingId` |
-| **Refresh** | 2×/Tag @ 00:00/12:00 UTC (MERGE) |
-| **Approx row count** | ~100K (Q27, Timespan 2009 – Apr 2026 — ältester Datenbestand im Projekt!) |
-| **PII** | gering — Event-Definitionen sind intern |
+| **Write pattern** | MERGE |
+| **Approx row count** | ~100K (timespan 2009 – Apr 2026 — oldest dataset in the project!) |
 
 ---
 
-## Key Columns (erwartet — exakt Verifikation via `DESCRIBE`)
+## Key Columns (expected — exact verification via `DESCRIBE`)
 
 | Column | Type | Role | Notes |
 |---|---|---|---|
-| `Id` | string | **PK** | Event-GUID |
-| `TrackingId` | string | **Cross-channel key** | Format wie `tbl_email.TrackingId`, 32-char 5-seg |
-| `Title` | string | | Event-Name |
-| `EventDate` | timestamp | | Wann das Event stattfindet |
-| `CreatedBy` | string | | TNumber des Creators |
-| `CreationDate` | timestamp | | Wann wurde das Event angelegt |
+| `Id` | string | **PK** | Event GUID |
+| `TrackingId` | string | **Cross-channel key** | Format like `tbl_email.TrackingId`, 32-char 5-seg |
+| `Title` | string | | Event name |
+| `EventDate` | timestamp | | When the event takes place |
+| `CreatedBy` | string | | TNumber of the creator |
+| `CreationDate` | timestamp | | When the event was created |
 
-Vollständiges Schema: `DESCRIBE imep_bronze.tbl_event`.
+Full schema: `DESCRIBE imep_bronze.tbl_event`.
 
 ---
 
-## Beziehungen
+## Relationships
 
 ```mermaid
 erDiagram
@@ -64,7 +63,7 @@ erDiagram
 
 ## Primary joins
 
-### → `imep_silver.eventregistration` — Wer hat registriert?
+### → `imep_silver.eventregistration` — Who registered?
 
 ```sql
 SELECT e.Title, e.EventDate, e.TrackingId, er.TNumber, er.RegistrationStatus
@@ -74,7 +73,7 @@ WHERE  e.TrackingId IS NOT NULL
   AND  e.EventDate >= '2025-01-01'
 ```
 
-### → `imep_gold.tbl_pbi_platform_events` — Pre-aggregated mit Registration-Count
+### → `imep_gold.tbl_pbi_platform_events` — Pre-aggregated with registration count
 
 ```sql
 SELECT e.Title, e.TrackingId, pe.RegistrationCount
@@ -82,15 +81,15 @@ FROM   imep_bronze.tbl_event                 e
 JOIN   imep_gold.tbl_pbi_platform_events     pe ON pe.Id = e.Id
 ```
 
-→ Für Dashboard-Consumption: Gold nutzen statt Bronze → Silver-Aggregation.
+→ For dashboard consumption: use Gold instead of Bronze → Silver aggregation.
 
 ---
 
 ## Quality caveats
 
-- **`EventDate` kann 2124 (Sentinel für "open-ended") sein** — Q1b bestätigt. Bei Filter-Logik `WHERE EventDate < '2100-01-01'` absichern wenn gewollt.
-- **Ältester Datenbestand im Projekt** (ab 2009). Vor 2020 kaum Relevanz für Cross-Channel-Analysen, aber historische Events existieren.
-- **TrackingId-Adoption**: Die meisten pre-2024-Events haben kein TrackingId — Cross-Channel-Attribution nur für neuere Events möglich.
+- **`EventDate` can be 2124 (sentinel for "open-ended")** confirmed. When filtering, guard with `WHERE EventDate < '2100-01-01'` if required.
+- **Oldest dataset in the project** (from 2009 onward). Pre-2020 data has limited relevance for cross-channel analyses, but historical events exist.
+- **TrackingId adoption**: Most pre-2024 events have no TrackingId — cross-channel attribution is only possible for more recent events.
 
 ---
 
@@ -99,18 +98,24 @@ JOIN   imep_gold.tbl_pbi_platform_events     pe ON pe.Id = e.Id
 ```
 imep_bronze.tbl_event
         │
-        ├──► imep_silver.event (84K), invitation, eventregistration (13.7M)  [Silver existiert für Events!]
+        ├──► imep_silver.event (84K), invitation, eventregistration (13.7M)  [Silver exists for events!]
         │
-        └──► imep_gold.tbl_pbi_platform_events (84K) mit RegistrationCount
+        └──► imep_gold.tbl_pbi_platform_events (84K) with RegistrationCount
 ```
 
-**Wichtig**: Events sind **der eine Bereich**, wo `imep_silver` existiert (Q26). Email-Engagement **nicht**.
+**Important**: Events are **the one area** where `imep_silver` exists. Email engagement **does not**.
 
 ---
 
-## Referenzen
+## References
 
-- `eventregistration.md` *(Silver-Card pending)*
-- [tbl_email.md](tbl_email.md) — Parallele Struktur für Mailings
+- `eventregistration.md` *(Silver card pending)*
+- [tbl_email.md](tbl_email.md) — Parallel structure for mailings
 - [er_imep_bronze.md](../../diagrams/er_imep_bronze.md)
-- [cross_channel_via_tracking_id.md](../../joins/cross_channel_via_tracking_id.md) — TrackingId-Match-Regel gilt auch für Events
+- [cross_channel_via_tracking_id.md](../../joins/cross_channel_via_tracking_id.md) — TrackingId match rule applies to events as well
+
+---
+
+## Sources
+
+Genie sessions backing the statements on this page: [Q1b](../../sources.md#q1b), [Q26](../../sources.md#q26), [Q27](../../sources.md#q27). See [sources.md](../../sources.md) for the full index.

@@ -12,7 +12,7 @@ The HR bridge. For '''three scenarios''': (1) enrich TNumber from iMEP engagemen
 | UbsId | tbl_hr_user | UPPERCASE T###### | T100200 |
 | viewingcontactid | sharepoint_gold.* | GUID | 1254e21a-... |
 
-'''Key fact''': tbl_hr_employee is the only table that carries '''both''' T_NUMBER and WORKER_ID at the same time -> a simple JOIN instead of an external bridge source (Q3b).
+'''Key fact''': tbl_hr_employee is the only table that carries '''both''' T_NUMBER and WORKER_ID at the same time -> a simple JOIN instead of an external bridge source.
 
 !2 Scenario 1: iMEP Engagement → HR Region/Division
 
@@ -54,7 +54,7 @@ LEFT JOIN imep_bronze.tbl_hr_employee hr ON hr.WORKER_ID = pv.user_gpn
 ON  CONCAT('t', LPAD(pv.user_gpn, 6, '0')) = hr.T_NUMBER   -- does NOT work
 }}}
 
-Q3a confirmed: the string-based transformation 00100200 -> t100200 works '''as an example''', but not systematically. Enough GPNs do '''not''' match their T-Number under this rule. '''Always use WORKER_ID.'''
+Dies confirmed: the string-based transformation 00100200 -> t100200 works '''as an example''', but not systematically. Enough GPNs do '''not''' match their T-Number under this rule. '''Always use WORKER_ID.'''
 
 !2 Scenario 3: Match UbsId (UPPERCASE) with T_NUMBER (lowercase)
 
@@ -103,7 +103,7 @@ LEFT JOIN imep_opens                   io ON io.TNumber  = hr.T_NUMBER
 WHERE  COALESCE(sp.view_count, 0) + COALESCE(io.open_count, 0) > 0
 }}}
 
-!2 Gotchas
+!2 Pitfalls
 
 !3 1. T_NUMBER vs. TNumber vs. UbsId — three variants of the same key
 
@@ -116,13 +116,13 @@ Join iMEP engagement ↔ HR = direct. Join HR ↔ tbl_hr_user = needs LOWER().
 
 !3 2. GPN comes only from tbl_hr_employee.WORKER_ID
 
-GPN does '''not''' exist on tbl_hr_employee as a separate column named "GPN". The 8-digit ID is called WORKER_ID. Q3b finding: the HR columns searched initially did list it ("Primary worker identifier") — but not flagged as "= GPN".
+GPN does '''not''' exist on tbl_hr_employee as a separate column named "GPN". The 8-digit ID is called WORKER_ID. The HR columns searched initially did list it ("Primary worker identifier") — but not flagged as "= GPN".
 
 !3 3. There are more HR identifiers — but only these are relevant for us
 
 tbl_hr_employee also carries: ABACUS_ID, ALTERNATE_WORKER_ID, WEBSSO, UUNAME, PersonalNumber. For cross-channel analytics, T_NUMBER + WORKER_ID is sufficient. The others are for other use cases (WebSSO for auth, Abacus for finance joins).
 
-!3 4. HR is upserted 2x/day — snapshot, not history
+!3 4. HR is a snapshot, not history
 
 tbl_hr_employee and tbl_hr_costcenter represent the '''current''' HR state. Regional analysis "Person X was in EMEA in July, in APAC in August" does '''not''' work out-of-the-box — that requires snapshot tables (if they exist, still to be clarified).
 
@@ -141,5 +141,11 @@ When working in sharepoint_gold.pbi_db_interactions_metrics, do '''not''' use vi
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrEmployee
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrCostcenter
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.DataGlossary.Hr.TblHrUser
-!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.ErDiagrams.ErCrossChannel
+!see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Diagrams.CrossChannel
 !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.JoinStrategy.StrategyContract
+
+----
+
+!2 Sources
+
+Genie sessions supporting this page: Q3, Q3a, Q3b, Q27. Full catalog: !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Sources.
