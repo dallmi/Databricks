@@ -42,10 +42,10 @@ Plus die Brücke:
 - [tbl_email](tables/imep/tbl_email.md) — Mailing-Master (145K)
 - [tbl_email_receiver_status](tables/imep/tbl_email_receiver_status.md) — Sends/Bounces (293M)
 - [tbl_analytics_link](tables/imep/tbl_analytics_link.md) — Opens/Clicks (533M)
-- tbl_email_links — Template-URL-Inventory *(card pending)*
+- [tbl_email_links](tables/imep/tbl_email_links.md) — Template-URL-Inventory
 - tbl_email_components — 3.3M *(card pending)*
 - tbl_email_template_images — 1.7M *(card pending)*
-- tbl_event — Events (100K) *(card pending)*
+- [tbl_event](tables/imep/tbl_event.md) — Events (100K)
 
 **Silver** — `imep_silver.*` *(nur Events! Kein Email-Silver — siehe Q26)*
 - invitation, eventregistration (13.7M), event (84K) *(cards pending)*
@@ -81,9 +81,9 @@ Plus die Brücke:
 
 ### HR Domain — `imep_bronze.*` (lebt in iMEP, wird aber von allen genutzt)
 
-- tbl_hr_employee — T_NUMBER + WORKER_ID (= GPN), 265K *(card pending)*
-- tbl_hr_costcenter — Region/Division/Area/Country *(card pending)*
-- tbl_hr_user — UbsId (Uppercase-Variante) *(card pending)*
+- [tbl_hr_employee](tables/hr/tbl_hr_employee.md) — T_NUMBER + WORKER_ID (= GPN), 265K
+- [tbl_hr_costcenter](tables/hr/tbl_hr_costcenter.md) — Region/Division/Area/Country
+- [tbl_hr_user](tables/hr/tbl_hr_user.md) — UbsId (Uppercase-Variante)
 
 ### Page Metadata — `page_metadata_bronze.*` *(Q27-Fund)*
 - pagelikesview (40K), comments (3.4K), reportedcomments, moderatedcomments *(cards pending)*
@@ -97,10 +97,10 @@ Hier liegen die **fertigen SQL-Kochrezepte** für die am häufigsten gebrauchten
 | Recipe | Zweck |
 |---|---|
 | **[join_strategy_contract.md](joins/join_strategy_contract.md)** | ⭐ Lies das zuerst — Dos & Don'ts |
-| joins/imep_bronze_email_events.md | Die 4-Tabellen-Bronze-Kette: Mailing × Empfänger × Event *(pending)* |
-| joins/sharepoint_gold_to_pages.md | Gold-Metriken → TrackingID via pageUUID *(pending)* |
-| joins/hr_enrichment.md | TNumber → Region/Division/Area *(pending)* |
-| joins/cross_channel_via_tracking_id.md | iMEP ↔ SharePoint über TrackingId SEG1-4 *(pending)* |
+| [imep_bronze_email_events.md](joins/imep_bronze_email_events.md) | Die 4-Tabellen-Bronze-Kette: Mailing × Empfänger × Event |
+| [sharepoint_gold_to_pages.md](joins/sharepoint_gold_to_pages.md) | Gold-Metriken → TrackingID via pageUUID |
+| [hr_enrichment.md](joins/hr_enrichment.md) | TNumber ↔ GPN ↔ Region/Division |
+| [cross_channel_via_tracking_id.md](joins/cross_channel_via_tracking_id.md) | iMEP ↔ SharePoint über TrackingId SEG1-4 |
 
 ---
 
@@ -108,11 +108,11 @@ Hier liegen die **fertigen SQL-Kochrezepte** für die am häufigsten gebrauchten
 
 | Diagramm | Umfang |
 |---|---|
-| diagrams/er_imep_bronze.md | Erweiterte Version von Section 2 *(pending)* |
-| diagrams/er_sharepoint_bronze.md | pages × pageviews × sites *(pending)* |
-| diagrams/er_imep_gold.md | final + tbl_pbi_* Tier-Struktur *(pending)* |
-| diagrams/er_sharepoint_gold.md | marketingPageId-FK-Chain *(pending)* |
-| diagrams/er_cross_channel.md | TrackingID-Bridge zwischen Domains *(pending)* |
+| [er_imep_bronze.md](diagrams/er_imep_bronze.md) | Erweiterte Version von Section 2 — 4 iMEP-Bronze + 3 HR-Tabellen |
+| [er_sharepoint_bronze.md](diagrams/er_sharepoint_bronze.md) | pages × pageviews × customevents × sites |
+| [er_imep_gold.md](diagrams/er_imep_gold.md) | final + tbl_pbi_* Tier-Struktur |
+| [er_sharepoint_gold.md](diagrams/er_sharepoint_gold.md) | marketingPageId-FK-Chain (alle Metric-Tables) |
+| [er_cross_channel.md](diagrams/er_cross_channel.md) | TrackingID-Bridge + Employee-Bridge zwischen Domains |
 
 ---
 
