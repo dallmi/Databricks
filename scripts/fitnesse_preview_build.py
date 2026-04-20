@@ -97,13 +97,21 @@ def inline_format(text: str, pages_index: dict[str, str] | None = None) -> str:
         local = raw_path
         if local.startswith(FITNESSE_ROOT_PREFIX):
             local = local[len(FITNESSE_ROOT_PREFIX) :]
+        # Strip any residual leading dot so keys like "JoinStrategy.StrategyContract"
+        # match (pages_index keys have no leading dot).
+        local = local.lstrip(".")
         if local == "":
             target = pages_index.get("", "index.html")
         elif local in pages_index:
             target = pages_index[local]
         else:
-            # Fall back to a best-effort last segment match.
-            target = pages_index.get(local, "index.html")
+            # Last-ditch: best-effort match by trailing segment name.
+            for key, href in pages_index.items():
+                if key.endswith("." + name) or key == name:
+                    target = href
+                    break
+            else:
+                target = "index.html"
         return f'<a href="{target}">{html.escape(name)}</a>'
 
     text = re.sub(r"!see\s+([\w.]+)", _xref, text)
