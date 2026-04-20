@@ -374,6 +374,44 @@ Ziel: Die letzten Schema-Details und Volume-Checks, die wir brauchen, um den kon
 
 → Zeigt wie viel vom 278M-Recipients-Universum nach dem Filter für unsere Email-Seite übrig bleibt, und wie viele distinct Packs wir im Dashboard zu erwarten haben.
 
+### Q25 — UBSGICTrackingID-Verteilung in `pages` (Zeit + Site-Breakdown)
+
+> **Domain context**: `sharepoint_bronze.pages` is the SharePoint page inventory (~48k rows). `UBSGICTrackingID` is populated only for News- and Event-Articles (~4% per Q22). `UBSArticleDate` is the temporal anchor. Each page belongs to a Site — FK likely `siteId` / `webId` / `siteUrl`, use whichever column joins to `sharepoint_bronze.sites`.
+
+> *Analyze `UBSGICTrackingID` coverage in `sharepoint_bronze.pages` in four steps. Return only aggregates — do NOT return sample TrackingID values.*
+>
+> *1. **Overall counts**:*
+>    - *Total rows*
+>    - *Count where `UBSGICTrackingID IS NOT NULL`*
+>    - *Count where `UBSArticleDate IS NOT NULL`*
+>    - *Count where both are populated*
+>    - *Each as raw count + percentage of total*
+>
+> *2. **TrackingID distribution over `UBSArticleDate`**:*
+>    - *Group by `DATE_TRUNC('month', UBSArticleDate)` for the last 60 months.*
+>    - *Per month show: total articles (`UBSArticleDate IS NOT NULL`), articles with `UBSGICTrackingID`, coverage % (with-TID / articles that month).*
+>    - *Flag the first month where coverage ≥ 80% — that's the realistic start date for cross-channel funnel reporting.*
+>
+> *3. **Distinct PageURLs with TrackingID**:*
+>    - *How many distinct page URLs (column `pageUrl` / `webUrl` / `url`) have `UBSGICTrackingID IS NOT NULL`?*
+>    - *How many distinct page URLs exist in total?*
+>    - *Ratio as percentage.*
+>    - *Also: are any page URLs associated with multiple `UBSGICTrackingID`s (historical re-use)? Report the count of URLs with >1 distinct TID.*
+>
+> *4. **Coverage per Site**:*
+>    - *Join `pages` to `sharepoint_bronze.sites` via the site FK.*
+>    - *Per Site (top 30 by total pages) return: site name / URL, total pages, pages with `UBSGICTrackingID`, coverage % within that site, distinct `tracking_pack_id` count (first 2 dash-segments of `UPPER(TRIM(UBSGICTrackingID))`).*
+>    - *Order by `pages_with_tid` DESC.*
+>    - *Highlight the top 5 sites that together cover ≥ 80% of all tracked pages (Pareto).*
+>
+> *Final summary — one paragraph, answer the two build-decisions this analysis should drive:*
+> *(a) Is tracking-ID coverage dense enough on any specific subset of sites that we can restrict the cross-channel funnel to that subset?*
+> *(b) From which date onward does coverage become reliable enough that the dashboard's default time window should start there?*
+>
+> *If the FK between `pages` and `sites` is not obvious, first run `DESCRIBE TABLE sharepoint_bronze.pages` and `DESCRIBE TABLE sharepoint_bronze.sites`, identify matching GUID/ID columns, and explain your join choice before running step 4.*
+
+→ Verfeinert Q22: Die 4%-Coverage global wird aufgeschlüsselt nach Zeit und Site. Ziel: (1) realistischer Dashboard-Default-Zeitraum, (2) Pareto-Subset der Sites, auf dem Coverage tatsächlich hoch genug für einen glaubwürdigen Funnel ist.
+
 ---
 
 ## Nutzungshinweise
