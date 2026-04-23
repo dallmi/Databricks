@@ -2,6 +2,10 @@
 // KQL has no LIKE operator; `contains` is case-insensitive substring match
 // and behaves like SQL `LIKE '%pattern%'`. Use `matches regex` for full regex.
 // Time range is controlled via the Application Insights time picker.
+//
+// UniqueUsers = dcount of distinct Email values from
+//               customDimensions.CustomProps.Email
+//               (NOT the telemetry user_Id — that's device/cookie-scoped).
 
 let TargetUrlPattern = "sitepages/home";   // substring, case-insensitive
 
@@ -16,6 +20,7 @@ pageViews
     view_id          = id,
     session_Id,
     user_Id,
+    Email            = tostring(cp.Email),
     duration_ms      = duration,
     client_OS, client_Browser, client_CountryOrRegion,
     PageId           = tostring(cp.PageId),
@@ -28,30 +33,34 @@ pageViews
 | order by timestamp desc
 
 // ---------------------------------------------------------------------------
-// Summary: total Views and Unique Visitors for the same URL pattern.
-// Views          = row count in pageViews (each row = one page view event).
-// UniqueVisitors = distinct user_Id (dcount is approximate; use
-//                  count_distinct for exact if needed).
+// Summary: total Views and Unique Users for the same URL pattern.
+// Views       = row count in pageViews (each row = one page view event).
+// UniqueUsers = distinct Email from cp.Email (dcount is approximate; use
+//               count_distinct for exact if needed).
 // ---------------------------------------------------------------------------
 pageViews
 | where url contains TargetUrlPattern
+| extend cp = parse_json(tostring(parse_json(tostring(customDimensions)).CustomProps))
+| extend Email = tostring(cp.Email)
 | summarize
     Views          = count(),
-    UniqueVisitors = dcount(user_Id),
+    UniqueUsers    = dcount(Email),
     UniqueSessions = dcount(session_Id),
     FirstSeen      = min(timestamp),
     LastSeen       = max(timestamp)
 
 // ---------------------------------------------------------------------------
-// Breakout: Views and Unique Visitors per PageURL.
+// Breakout: Views and Unique Users per PageURL.
 // Groups by the raw top-level `url` (indexed) — swap for cp.PageURL / cp.PageName
 // if you want the business URL / page title instead.
 // ---------------------------------------------------------------------------
 pageViews
 | where url contains TargetUrlPattern
+| extend cp = parse_json(tostring(parse_json(tostring(customDimensions)).CustomProps))
+| extend Email = tostring(cp.Email)
 | summarize
     Views          = count(),
-    UniqueVisitors = dcount(user_Id),
+    UniqueUsers    = dcount(Email),
     UniqueSessions = dcount(session_Id),
     FirstSeen      = min(timestamp),
     LastSeen       = max(timestamp)
