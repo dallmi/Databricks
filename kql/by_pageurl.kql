@@ -1,13 +1,11 @@
 // Views for PageURLs matching a pattern (LIKE-style).
 // KQL has no LIKE operator; `contains` is case-insensitive substring match
 // and behaves like SQL `LIKE '%pattern%'`. Use `matches regex` for full regex.
+// Time range is controlled via the Application Insights time picker.
 
 let TargetUrlPattern = "sitepages/home";   // substring, case-insensitive
-let StartTime = datetime(2026-03-01);
-let EndTime   = datetime(2026-04-01);
 
 pageViews
-| where timestamp between (StartTime .. EndTime)
 // Top-level URL filter first (indexed, fast):
 | where url contains TargetUrlPattern
 | extend cp = parse_json(tostring(parse_json(tostring(customDimensions)).CustomProps))
@@ -30,13 +28,12 @@ pageViews
 | order by timestamp desc
 
 // ---------------------------------------------------------------------------
-// Summary: total Views and Unique Visitors for the same URL pattern + window.
+// Summary: total Views and Unique Visitors for the same URL pattern.
 // Views          = row count in pageViews (each row = one page view event).
-// UniqueVisitors = distinct user_Id (dcount is approximate; use dcountif/
+// UniqueVisitors = distinct user_Id (dcount is approximate; use
 //                  count_distinct for exact if needed).
 // ---------------------------------------------------------------------------
 pageViews
-| where timestamp between (StartTime .. EndTime)
 | where url contains TargetUrlPattern
 | summarize
     Views          = count(),
@@ -51,7 +48,6 @@ pageViews
 // if you want the business URL / page title instead.
 // ---------------------------------------------------------------------------
 pageViews
-| where timestamp between (StartTime .. EndTime)
 | where url contains TargetUrlPattern
 | summarize
     Views          = count(),
