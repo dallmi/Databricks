@@ -28,3 +28,36 @@ pageViews
     PublishingDate   = tostring(cp.PublishingDate),
     refUri           = tostring(cp.refUri)
 | order by timestamp desc
+
+// ---------------------------------------------------------------------------
+// Summary: total Views and Unique Visitors for the same URL pattern + window.
+// Views          = row count in pageViews (each row = one page view event).
+// UniqueVisitors = distinct user_Id (dcount is approximate; use dcountif/
+//                  count_distinct for exact if needed).
+// ---------------------------------------------------------------------------
+pageViews
+| where timestamp between (StartTime .. EndTime)
+| where url contains TargetUrlPattern
+| summarize
+    Views          = count(),
+    UniqueVisitors = dcount(user_Id),
+    UniqueSessions = dcount(session_Id),
+    FirstSeen      = min(timestamp),
+    LastSeen       = max(timestamp)
+
+// ---------------------------------------------------------------------------
+// Breakout: Views and Unique Visitors per PageURL.
+// Groups by the raw top-level `url` (indexed) — swap for cp.PageURL / cp.PageName
+// if you want the business URL / page title instead.
+// ---------------------------------------------------------------------------
+pageViews
+| where timestamp between (StartTime .. EndTime)
+| where url contains TargetUrlPattern
+| summarize
+    Views          = count(),
+    UniqueVisitors = dcount(user_Id),
+    UniqueSessions = dcount(session_Id),
+    FirstSeen      = min(timestamp),
+    LastSeen       = max(timestamp)
+    by url
+| order by Views desc
