@@ -1,0 +1,140 @@
+// ============================================================================
+// customEvents — flatten click_event interactions
+// ============================================================================
+// Standard exporter for the AppInsights `customEvents` stream, restricted to
+// `name == 'click_event'`. Pendant to `base_flatten.kql` (which targets the
+// `pageViews` stream).
+//
+// `customDimensions` is a JSON string with exactly one key, `CustomProps`,
+// which is itself a JSON string — therefore double-parsed.
+//
+// Source: ported from /Users/micha/Documents/Arbeit/Clicks/clicks_query.kql.
+// For the full profiling suite (event-name discovery, key inventory, link-type
+// distribution etc.) see `clicks_explorer.kql` in the same project.
+// ============================================================================
+
+// === QUERY 0: Flatten click_event ===========================================
+// Adjust the time window before exporting. Excel truncates timestamps to whole
+// seconds — prefer CSV export to preserve the millisecond precision needed for
+// the composite primary key (timestamp, user_Id, session_Id).
+
+let StartTime = datetime(2026-03-01);
+let EndTime   = datetime(2026-04-01);
+
+customEvents
+| where timestamp between (StartTime .. EndTime)
+| where name == 'click_event'
+| extend cd = todynamic(customDimensions)
+| extend cp = todynamic(tostring(cd.CustomProps))
+| project
+    timestamp,
+    event_id           = id,
+    name,
+    user_Id,
+    session_Id,
+    client_Type,
+    client_OS,
+    client_Browser,
+    client_CountryOrRegion,
+    // --- Person ---
+    GPN                = tostring(cp.GPN),
+    Email              = tostring(cp.Email),
+    // --- Page context ---
+    SiteID             = tostring(cp.SiteID),
+    SiteName           = tostring(cp.SiteName),
+    PageId             = tostring(cp.PageId),
+    PageName           = tostring(cp.PageName),
+    PageURL            = tostring(cp.PageURL),
+    PageStatus         = tostring(cp.PageStatus),
+    ContentType        = tostring(cp.ContentType),
+    ContentOwner       = tostring(cp.ContentOwner),
+    NewsCategory       = tostring(cp.NewsCategory),
+    PublishingDate     = tostring(cp.PublishingDate),
+    // --- Click detail ---
+    ComponentName      = tostring(cp.ComponentName),
+    Link_Type          = tostring(cp.Link_Type),
+    Link_label         = tostring(cp.Link_label),
+    Link_address       = tostring(cp.Link_address),
+    Link_ancestors     = tostring(cp.Link_ancestors),
+    // --- Download detail ---
+    FileType_Label     = tostring(cp.FileType_Label),
+    FileName_Label     = tostring(cp.FileName_Label),
+    // --- Targeting (newer fields, may be empty) ---
+    Theme              = tostring(cp.Theme),
+    Topic              = tostring(cp.Topic),
+    TargetOrganisation = tostring(cp.TargetOrganisation),
+    TargetRegion       = tostring(cp.TargetRegion),
+    refUri             = tostring(cp.refUri),
+    // --- Video sub-domain ---
+    Video_Action       = tostring(cp.Video_Action),
+    Video_Id           = tostring(cp.Video_Id),
+    Video_Type         = tostring(cp.Video_Type),
+    Video_Duration     = tostring(cp.Video_Duration)
+| order by timestamp desc
+
+
+// === QUERY 1: Event-name inventory (run separately) =========================
+// Discover which event families exist in customEvents besides `click_event`.
+// Expected: click_event (majority), SEARCH_TRIGGERED, SEARCH_RESULT_CLICK, ...
+//
+// customEvents
+// | where timestamp >= ago(90d)
+// | summarize EventCount = count() by name
+// | order by EventCount desc
+
+
+// === QUERY 2: CustomProps key inventory (run separately) ====================
+// All `CustomProps` keys with occurrence count and a sample value. Use this
+// before extending the flatten projection — fields evolve over time.
+//
+// customEvents
+// | where timestamp >= ago(30d)
+// | where name == 'click_event'
+// | extend cd = todynamic(customDimensions)
+// | extend cp = todynamic(tostring(cd.CustomProps))
+// | extend cpKeys = bag_keys(cp)
+// | mv-expand cpKey = cpKeys to typeof(string)
+// | summarize
+//     KeyCount       = count(),
+//     DistinctValues = dcount(tostring(cp[cpKey])),
+//     SampleValue    = take_any(tostring(cp[cpKey]))
+//     by Key = cpKey
+// | order by KeyCount desc
+
+
+// === QUERY 3: Anonymized export (hash GPN, drop Email) ======================
+// Use when the export leaves App Insights — keeps GPN reversible only via the
+// pepper. Same pepper as in the Clicks project.
+//
+// let StartTime = datetime(2026-03-01);
+// let EndTime   = datetime(2026-04-01);
+// let pepper    = 'f4c6a28e86cfa11e95ee832cabf4c8c1862f78017c044111cae083584f0208cb';
+// customEvents
+// | where timestamp between (StartTime .. EndTime)
+// | where name == 'click_event'
+// | extend cd = todynamic(customDimensions)
+// | extend cp = todynamic(tostring(cd.CustomProps))
+// | extend GPN_hash = hash_sha256(strcat(pepper, tostring(cp.GPN)))
+// | project timestamp, name, user_Id, session_Id, client_CountryOrRegion,
+//           GPN_hash,
+//           SiteName    = tostring(cp.SiteName),
+//           PageURL     = tostring(cp.PageURL),
+//           ComponentName = tostring(cp.ComponentName),
+//           Link_Type   = tostring(cp.Link_Type),
+//           Link_label  = tostring(cp.Link_label),
+//           Link_address= tostring(cp.Link_address)
+// | order by timestamp desc
+
+
+// === QUERY 4: Link_Type distribution (sanity check) =========================
+// Quick health check — the fraction of clicks by Link_Type tells you whether
+// the JSON parse is working at all. Empty result = upstream schema drift.
+//
+// customEvents
+// | where timestamp >= ago(30d)
+// | where name == 'click_event'
+// | extend cd = todynamic(customDimensions)
+// | extend cp = todynamic(tostring(cd.CustomProps))
+// | summarize EventCount = count(), UniqueUsers = dcount(user_Id)
+//             by Link_Type = tostring(cp.Link_Type)
+// | order by EventCount desc

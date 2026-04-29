@@ -32,9 +32,12 @@ erDiagram
     }
     customevents {
         string Id PK "262M rows"
-        string pageId FK
-        string EventName
-        timestamp EventTime
+        string name "click_event / SEARCH_*"
+        string pageId FK "to verify"
+        timestamp timestamp
+        string user_Id "App Insights anon, NOT GPN"
+        string session_Id
+        string customDimensions "JSON · CustomProps double-nested"
     }
     sites {
         string SiteId PK "805 rows"
@@ -99,6 +102,31 @@ Plus historical snapshots:
 **What you do NOT find here**:
 - The TrackingID directly — you must **always** join it in via `pages`.
 
+### `customevents` — schema specifics
+
+`customevents` carries clicks (`name == 'click_event'`), searches (`name`
+starts with `SEARCH_`), and video actions in a single stream. The business
+payload sits inside `customDimensions` as a **double-nested JSON** — the outer
+JSON has exactly one key, `CustomProps`, whose value is itself a JSON string.
+Click events are flat (Level 2), search events nest up to Level 4.
+
+`CustomProps` keys for `click_event` (verified against the Clicks project):
+
+| Bucket | Keys |
+|---|---|
+| Person | `GPN`, `Email` |
+| Page context | `SiteID`, `SiteName`, `PageId`, `PageName`, `PageURL`, `PageStatus`, `ContentType`, `ContentOwner`, `NewsCategory`, `PublishingDate` |
+| Click detail | `ComponentName`, `Link_Type`, `Link_label`, `Link_address`, `Link_ancestors` |
+| Download detail | `FileType_Label`, `FileName_Label` |
+| Targeting (newer) | `Theme`, `Topic`, `TargetOrganisation`, `TargetRegion`, `refUri` |
+| Video sub-domain | `Video_Action`, `Video_Id`, `Video_Type`, `Video_Duration` |
+
+> ⚠️ **No `CammsTrackingID`/`UBSGICTrackingID` on `customevents`** — only
+> `pageViews` carries it. Cross-channel attribution for clicks therefore runs
+> via `pageId → pages.pageUUID → pages.UBSGICTrackingID`.
+
+Full table card: [customevents.md](../tables/sharepoint/customevents.md).
+
 ```sql
 -- The canonical SP Bronze chain
 SELECT pv.user_gpn, pv.ViewTime, p.UBSGICTrackingID, p.PageTitle
@@ -141,8 +169,10 @@ See [hr_enrichment.md](../joins/hr_enrichment.md).
 ## References
 
 - [pages.md](../tables/sharepoint/pages.md) — the cross-channel bridge
+- [customevents.md](../tables/sharepoint/customevents.md) — click + search + video stream (262M)
 - [join_strategy_contract.md](../joins/join_strategy_contract.md) — coverage rules
-- Memory: `sharepoint_pages_inventory.md`, `sharepoint_gold_inventory.md`
+- [`kql/customevents_clicks.kql`](../../kql/customevents_clicks.kql) — flatten exporter for click_event
+- Memory: `sharepoint_pages_inventory.md`, `sharepoint_gold_inventory.md`, `appinsights_source.md`
 
 ---
 
