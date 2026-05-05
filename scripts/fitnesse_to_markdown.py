@@ -369,31 +369,46 @@ def extract_title(text: str) -> str | None:
     return None
 
 
-def build_frontmatter(rel_path: Path, title: str | None) -> str:
-    source = rel_path.with_suffix("").as_posix().replace("/", ".")
+def build_frontmatter(source_path: str, title: str | None) -> str:
     parts = ["---"]
     if title:
         plain = strip_fitnesse_markup(title)
         safe = plain.replace('"', '\\"')
         parts.append(f'title: "{safe}"')
-    parts.append(f"source_path: {source}")
+    parts.append(f"source_path: {source_path}")
     parts.append("---")
     return "\n".join(parts) + "\n\n"
 
 
-def convert_file(source: Path, target: Path, rel_path: Path,
-                 output_root: Path) -> None:
-    global _CURRENT_REL_DIR
-    _CURRENT_REL_DIR = target.parent.relative_to(output_root)
+def render_markdown(text: str, source_path: str, *,
+                    strip_prefix: str = "",
+                    current_rel_dir: Path | None = None) -> str:
+    """Library entry point: take raw FitNesse wiki text plus the page's
+    logical (dotted) source_path, return the full markdown body including
+    YAML frontmatter. Other scripts (e.g. fitnesse_backup_crawl.py) call
+    this directly so they don't have to read intermediate .txt files."""
+    global _STRIP_PREFIX, _CURRENT_REL_DIR
+    prev_prefix, prev_dir = _STRIP_PREFIX, _CURRENT_REL_DIR
     try:
-        text = source.read_text(encoding="utf-8")
+        _STRIP_PREFIX = strip_prefix.strip(".")
+        _CURRENT_REL_DIR = current_rel_dir
         title = extract_title(text)
         body = convert(text).lstrip("\n")
-        frontmatter = build_frontmatter(rel_path, title)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(frontmatter + body + "\n", encoding="utf-8")
+        return build_frontmatter(source_path, title) + body + "\n"
     finally:
-        _CURRENT_REL_DIR = None
+        _STRIP_PREFIX, _CURRENT_REL_DIR = prev_prefix, prev_dir
+
+
+def convert_file(source: Path, target: Path, rel_path: Path,
+                 output_root: Path) -> None:
+    text = source.read_text(encoding="utf-8")
+    source_path = rel_path.with_suffix("").as_posix().replace("/", ".")
+    rel_dir = target.parent.relative_to(output_root)
+    md = render_markdown(text, source_path,
+                         strip_prefix=_STRIP_PREFIX,
+                         current_rel_dir=rel_dir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(md, encoding="utf-8")
 
 
 def main() -> int:

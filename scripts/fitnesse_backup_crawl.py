@@ -7,23 +7,30 @@ FitNesse instances, e.g. v20250219). Instead:
 
   1. Starts from the parent page.
   2. For each page: fetch ?responder=edit, extract raw wiki source from the
-     textarea, save to disk under docs/fitnesse/backup/<YYYYMMDD-HHMM>/.
+     textarea, save the .txt under <backup>/txt/<rel>/_page.txt and the
+     converted markdown under <backup>/md/<rel>/_page.md.
   3. Fetch the page HTML, find all direct-child links, enqueue them.
   4. Breadth-first until the subtree is exhausted.
 
-Result: a mirrored directory tree of raw wiki text files — diffable,
-versionable, and directly viewable without ZIP extraction.
+Result: two parallel mirrored trees — txt/ for diffable raw wiki backup,
+md/ for Copilot Studio (or any RAG) grounding. _INDEX.md at the backup
+root links to the markdown side. Use --no-markdown to skip the .md
+export when only the raw backup is wanted.
 
 Reads FITNESSE_URL and FITNESSE_PARENT_PATH from _config.py (which loads
-.env on import), so there is no duplicated config. Pure stdlib, works on
-Windows (Anaconda Prompt), macOS and Linux. Runs from any working directory.
+.env on import), so there is no duplicated config. Pure stdlib + the
+local fitnesse_to_markdown module; works on Windows (Anaconda Prompt),
+macOS and Linux. Runs from any working directory.
 
 Usage:
-    # Uses defaults from .env / shell env
+    # Uses defaults from .env / shell env. Writes both txt/ and md/.
     python scripts/fitnesse_backup_crawl.py
 
     # Dry-run — no HTTP, show the starting URL and target folder
     python scripts/fitnesse_backup_crawl.py --dry-run
+
+    # Skip the .md conversion
+    python scripts/fitnesse_backup_crawl.py --no-markdown
 
     # Custom subtree
     python scripts/fitnesse_backup_crawl.py --parent-path FrontPage.Some.Other.Page
@@ -53,6 +60,7 @@ from _config import (  # noqa: E402
     FITNESSE_BACKUP_ROOT,
     FITNESSE_REQUEST_DELAY,
 )
+from fitnesse_to_markdown import render_markdown  # noqa: E402
 
 TEXTAREA_RE = re.compile(
     r'<textarea[^>]*name="pageContent"[^>]*>(.*?)</textarea>',
@@ -122,33 +130,55 @@ def discover_children(base_url: str, page_path: str, timeout: int = 30) -> list[
     return sorted(children)
 
 
-def target_path(backup_dir: Path, start_path: str, page_path: str) -> Path:
-    """Map a FitNesse page path to an on-disk .txt path under backup_dir.
+def page_rel_dir(start_path: str, page_path: str) -> Path:
+    """Folder (relative to a format root) where this page lives.
 
-    Pure-tree layout: every page becomes a folder, its content lives at
-    <folder>/_page.txt. The start page goes to backup_dir/_page.txt;
-    descendants mirror the dotted path as nested folders.
+    Pure-tree layout: every page becomes a folder. Returns Path('.') for
+    the start page itself and a nested Path for descendants.
     """
     if page_path == start_path:
-        return backup_dir / "_page.txt"
+        return Path(".")
     prefix = start_path + "."
     if not page_path.startswith(prefix):
-        # Shouldn't happen given how we enqueue, but be defensive.
-        safe = page_path.replace(".", "/")
-        return backup_dir / safe / "_page.txt"
+        return Path(*page_path.split("."))
     rel = page_path[len(prefix):]
-    parts = rel.split(".")
-    return backup_dir / Path(*parts) / "_page.txt"
+    return Path(*rel.split("."))
+
+
+def target_path(format_dir: Path, start_path: str, page_path: str,
+                suffix: str) -> Path:
+    """On-disk path for a page under format_dir/<rel>/<_page><suffix>."""
+    return format_dir / page_rel_dir(start_path, page_path) / f"_page{suffix}"
+
+
+def derive_strip_prefix(start_path: str) -> str:
+    """For internal-link rewriting in the markdown output: drop the leading
+    FrontPage. (if present), since FitNesse internal hrefs are absolute
+    from the wiki root but our markdown tree starts at start_path."""
+    if start_path.startswith("FrontPage."):
+        return start_path[len("FrontPage."):]
+    if start_path == "FrontPage":
+        return ""
+    return start_path
 
 
 def crawl(base_url: str, start_path: str, backup_dir: Path, *,
-          max_depth: int | None, delay: float) -> tuple[dict[str, int], dict[str, dict]]:
-    """BFS crawl from start_path. Returns (counts, entries) where entries maps
-    each visited page_path to {"status", "target", "depth"} for index generation."""
+          max_depth: int | None, delay: float,
+          write_markdown: bool) -> tuple[dict[str, int], dict[str, dict]]:
+    """BFS crawl from start_path. For each saved page, writes the raw wiki
+    source under <backup_dir>/txt/<rel>/_page.txt and (unless disabled)
+    the converted markdown under <backup_dir>/md/<rel>/_page.md.
+
+    Returns (counts, entries) where entries[page_path] tracks status, depth,
+    and the txt/md targets so the _INDEX.md can link to them."""
     counts = {"ok": 0, "missing": 0, "failed": 0, "pages_seen": 0}
     entries: dict[str, dict] = {}
     visited: set[str] = set()
     queue: deque[tuple[str, int]] = deque([(start_path, 0)])
+
+    txt_dir = backup_dir / "txt"
+    md_dir = backup_dir / "md"
+    strip_prefix = derive_strip_prefix(start_path) if write_markdown else ""
 
     while queue:
         page_path, depth = queue.popleft()
@@ -159,40 +189,54 @@ def crawl(base_url: str, start_path: str, backup_dir: Path, *,
 
         label = f"[depth {depth}] {page_path}"
 
-        # 1. Download raw source
         status, body = fetch_raw_source(base_url, page_path)
         if status == 0:
             print(f"  {label} -> network error, skipped")
             counts["failed"] += 1
-            entries[page_path] = {"status": "failed", "target": None, "depth": depth}
+            entries[page_path] = {"status": "failed", "target": None,
+                                  "md_target": None, "depth": depth}
             time.sleep(delay)
             continue
         if status == 404:
             print(f"  {label} -> HTTP 404 (skipped)")
             counts["missing"] += 1
-            entries[page_path] = {"status": "missing", "target": None, "depth": depth}
+            entries[page_path] = {"status": "missing", "target": None,
+                                  "md_target": None, "depth": depth}
             time.sleep(delay)
             continue
         if status != 200:
             print(f"  {label} -> HTTP {status} (skipped)")
             counts["failed"] += 1
-            entries[page_path] = {"status": "failed", "target": None, "depth": depth}
+            entries[page_path] = {"status": "failed", "target": None,
+                                  "md_target": None, "depth": depth}
             time.sleep(delay)
             continue
         if not body:
             print(f"  {label} -> empty content (skipped)")
             counts["missing"] += 1
-            entries[page_path] = {"status": "missing", "target": None, "depth": depth}
+            entries[page_path] = {"status": "missing", "target": None,
+                                  "md_target": None, "depth": depth}
         else:
-            target = target_path(backup_dir, start_path, page_path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(body, encoding="utf-8")
-            rel = target.relative_to(backup_dir.parent)
+            txt_target = target_path(txt_dir, start_path, page_path, ".txt")
+            txt_target.parent.mkdir(parents=True, exist_ok=True)
+            txt_target.write_text(body, encoding="utf-8")
+            md_target: Path | None = None
+            if write_markdown:
+                md_target = target_path(md_dir, start_path, page_path, ".md")
+                md_rel_dir = page_rel_dir(start_path, page_path)
+                md_body = render_markdown(
+                    body, page_path,
+                    strip_prefix=strip_prefix,
+                    current_rel_dir=md_rel_dir,
+                )
+                md_target.parent.mkdir(parents=True, exist_ok=True)
+                md_target.write_text(md_body, encoding="utf-8")
+            rel = txt_target.relative_to(backup_dir.parent)
             print(f"  {label} -> {rel} ({len(body)} chars)")
             counts["ok"] += 1
-            entries[page_path] = {"status": "saved", "target": target, "depth": depth}
+            entries[page_path] = {"status": "saved", "target": txt_target,
+                                  "md_target": md_target, "depth": depth}
 
-        # 2. Discover children and enqueue
         if max_depth is None or depth < max_depth:
             for child in discover_children(base_url, page_path):
                 if child not in visited:
@@ -217,10 +261,13 @@ def build_tree_dict(start_path: str, entries: dict[str, dict]) -> dict:
 
 def render_label(name: str, info: dict | None, backup_dir: Path) -> str:
     """Render a single tree/list entry as markdown. Saved pages link to the
-    .txt; missing/failed pages appear as plain text with a status marker."""
-    if info and info["status"] == "saved" and info.get("target"):
-        rel = info["target"].relative_to(backup_dir).as_posix()
-        return f"[{name}]({rel})"
+    md/ side when available (the readable, Copilot-grounding artifact),
+    falling back to the txt/ side when markdown wasn't requested."""
+    if info and info["status"] == "saved":
+        link_target = info.get("md_target") or info.get("target")
+        if link_target:
+            rel = link_target.relative_to(backup_dir).as_posix()
+            return f"[{name}]({rel})"
     if info and info["status"] == "missing":
         return f"{name} *(missing)*"
     if info and info["status"] == "failed":
@@ -296,6 +343,10 @@ def main() -> int:
     parser.add_argument("--delay", type=float, default=FITNESSE_REQUEST_DELAY,
                         help=f"Seconds to sleep between page fetches "
                              f"(default: {FITNESSE_REQUEST_DELAY}, override via FITNESSE_REQUEST_DELAY).")
+    parser.add_argument("--no-markdown", action="store_true",
+                        help="Skip the .md export. By default each page is "
+                             "written twice: raw wiki source under txt/ and "
+                             "converted markdown under md/.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print configuration and exit without HTTP.")
     args = parser.parse_args()
@@ -313,9 +364,13 @@ def main() -> int:
     backup_root = Path(args.backup_root)
     backup_dir = backup_root / f"{ts}-crawl"
 
+    write_markdown = not args.no_markdown
+    formats = "txt + md" if write_markdown else "txt only"
+
     print(f"Base URL:    {args.base_url}")
     print(f"Start page:  {args.parent_path}")
     print(f"Backup:      {backup_dir.resolve()}")
+    print(f"Formats:     {formats}")
     print(f"Max depth:   {args.max_depth if args.max_depth is not None else 'unlimited'}")
     print(f"Mode:        {'DRY RUN' if args.dry_run else 'LIVE CRAWL'}")
     print()
@@ -329,6 +384,7 @@ def main() -> int:
     counts, entries = crawl(
         args.base_url, args.parent_path, backup_dir,
         max_depth=args.max_depth, delay=args.delay,
+        write_markdown=write_markdown,
     )
 
     index_path: Path | None = None
