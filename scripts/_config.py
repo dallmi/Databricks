@@ -1,12 +1,13 @@
-"""Tiny .env loader (stdlib only).
+"""Central config for FitNesse scripts.
 
-Reads <repo-root>/.env if present and exports KEY=VALUE pairs into
-os.environ. Values already in os.environ win, so shell exports and CI
-variables continue to override the file.
+Reads <repo-root>/.env on import, then exposes the FITNESSE_* constants
+the scripts use as argparse defaults. Shell environment variables win
+over .env values, so CI/one-off overrides work without editing the file.
 
-Call load_env() once at module top, before reading os.environ defaults.
-Lines starting with '#' and blank lines are ignored. Values may be
-optionally wrapped in single or double quotes.
+Add a new managed value by:
+  1. Documenting it in .env.example
+  2. Reading it here as a module-level constant
+  3. Importing the constant in the script that needs it
 """
 
 from __future__ import annotations
@@ -40,3 +41,23 @@ def resolve_path(env_var: str, fallback: Path) -> Path:
         return fallback
     p = Path(value)
     return p if p.is_absolute() else REPO_ROOT / p
+
+
+# Auto-load .env on first import so the constants below pick up its values.
+load_env()
+
+# ---------------------------------------------------------------------------
+# FitNesse — connection, paths, tuning. All four fitnesse_*.py scripts
+# import these directly. To override per-call: export the matching env var
+# (FITNESSE_URL etc.) before invocation; shell wins over .env.
+# ---------------------------------------------------------------------------
+FITNESSE_URL = os.environ.get("FITNESSE_URL", "")
+FITNESSE_PARENT_PATH = os.environ.get("FITNESSE_PARENT_PATH", "")
+FITNESSE_ROOT_NAME = os.environ.get("FITNESSE_ROOT_NAME", "MultiChannelDataModel")
+FITNESSE_PAGES_DIR = resolve_path(
+    "FITNESSE_PAGES_DIR", REPO_ROOT / "docs" / "fitnesse" / "pages"
+)
+FITNESSE_BACKUP_ROOT = resolve_path(
+    "FITNESSE_BACKUP_ROOT", FITNESSE_PAGES_DIR.parent / "backup"
+)
+FITNESSE_REQUEST_DELAY = float(os.environ.get("FITNESSE_REQUEST_DELAY", "0.3"))

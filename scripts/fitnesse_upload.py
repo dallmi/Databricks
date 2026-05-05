@@ -26,7 +26,6 @@ internal infrastructure out of the public repo.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 import urllib.parse
@@ -34,22 +33,15 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-# Make sibling modules importable regardless of CWD, then load .env so the
-# os.environ.get() defaults below pick up values from the repo-root .env file.
+# All FitNesse config lives in _config.py (auto-loads .env on import).
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
-from _config import load_env, resolve_path  # noqa: E402
-load_env()
-
-DEFAULT_BASE_URL = os.environ.get("FITNESSE_URL", "")
-DEFAULT_PARENT_PATH = os.environ.get("FITNESSE_PARENT_PATH", "")
-DEFAULT_ROOT_NAME = os.environ.get("FITNESSE_ROOT_NAME", "MultiChannelDataModel")
-
-# Pages dir defaults to docs/fitnesse/pages, override via FITNESSE_PAGES_DIR.
-DEFAULT_PAGES_DIR = resolve_path(
-    "FITNESSE_PAGES_DIR",
-    SCRIPT_DIR.parent / "docs" / "fitnesse" / "pages",
+from _config import (  # noqa: E402
+    FITNESSE_URL,
+    FITNESSE_PARENT_PATH,
+    FITNESSE_ROOT_NAME,
+    FITNESSE_PAGES_DIR,
 )
 
 # Order of upload — containers first (so !see links resolve as we add leaves).
@@ -156,15 +148,15 @@ def read_content(pages_dir: Path, source: str | None, sub_path: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Upload Cross-Channel KB to FitNesse.")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL,
+    parser.add_argument("--base-url", default=FITNESSE_URL,
                         help="FitNesse base URL, e.g. http://host:port. Defaults to $FITNESSE_URL.")
-    parser.add_argument("--parent-path", default=DEFAULT_PARENT_PATH,
+    parser.add_argument("--parent-path", default=FITNESSE_PARENT_PATH,
                         help="Dotted FitNesse path of the existing parent page. Defaults to $FITNESSE_PARENT_PATH.")
-    parser.add_argument("--root-name", default=DEFAULT_ROOT_NAME,
+    parser.add_argument("--root-name", default=FITNESSE_ROOT_NAME,
                         help="Name of the root page that will be created under parent-path.")
-    parser.add_argument("--pages-dir", default=str(DEFAULT_PAGES_DIR),
+    parser.add_argument("--pages-dir", default=str(FITNESSE_PAGES_DIR),
                         help=f"Local directory holding the .txt source files "
-                             f"(default: {DEFAULT_PAGES_DIR}).")
+                             f"(default: {FITNESSE_PAGES_DIR}).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print the plan without sending any POSTs.")
     parser.add_argument("--delay", type=float, default=0.3,

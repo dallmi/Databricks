@@ -14,12 +14,12 @@ FitNesse instances, e.g. v20250219). Instead:
 Result: a mirrored directory tree of raw wiki text files — diffable,
 versionable, and directly viewable without ZIP extraction.
 
-Reuses DEFAULT_BASE_URL and DEFAULT_PARENT_PATH from fitnesse_upload.py so
-there is no duplicated config. Pure stdlib, works on Windows (Anaconda
-Prompt), macOS and Linux. Runs from any working directory.
+Reads FITNESSE_URL and FITNESSE_PARENT_PATH from _config.py (which loads
+.env on import), so there is no duplicated config. Pure stdlib, works on
+Windows (Anaconda Prompt), macOS and Linux. Runs from any working directory.
 
 Usage:
-    # Uses defaults from fitnesse_upload.py
+    # Uses defaults from .env / shell env
     python scripts/fitnesse_backup_crawl.py
 
     # Dry-run — no HTTP, show the starting URL and target folder
@@ -47,15 +47,12 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-from fitnesse_upload import (  # noqa: E402
-    DEFAULT_BASE_URL,
-    DEFAULT_PARENT_PATH,
-    DEFAULT_PAGES_DIR,
+from _config import (  # noqa: E402
+    FITNESSE_URL,
+    FITNESSE_PARENT_PATH,
+    FITNESSE_BACKUP_ROOT,
+    FITNESSE_REQUEST_DELAY,
 )
-
-# Backup lives as a sibling of the pages directory configured in fitnesse_upload.py.
-# Keeps the docs layout in one place (fitnesse_upload.DEFAULT_PAGES_DIR).
-DEFAULT_BACKUP_ROOT = Path(DEFAULT_PAGES_DIR).parent / "backup"
 
 TEXTAREA_RE = re.compile(
     r'<textarea[^>]*name="pageContent"[^>]*>(.*?)</textarea>',
@@ -212,30 +209,29 @@ def main() -> int:
         description="Back up a FitNesse subtree by crawling child links and fetching "
                     "raw wiki source per page.",
     )
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL,
-                        help="FitNesse base URL. Default: value from fitnesse_upload.py "
-                             "(env var FITNESSE_URL).")
-    parser.add_argument("--parent-path", default=DEFAULT_PARENT_PATH,
-                        help="Dotted path of the subtree root. Default: value from "
-                             "fitnesse_upload.py (env var FITNESSE_PARENT_PATH).")
-    parser.add_argument("--backup-root", default=str(DEFAULT_BACKUP_ROOT),
+    parser.add_argument("--base-url", default=FITNESSE_URL,
+                        help="FitNesse base URL. Default: $FITNESSE_URL (or .env entry).")
+    parser.add_argument("--parent-path", default=FITNESSE_PARENT_PATH,
+                        help="Dotted path of the subtree root. Default: $FITNESSE_PARENT_PATH.")
+    parser.add_argument("--backup-root", default=str(FITNESSE_BACKUP_ROOT),
                         help=f"Folder where the timestamped subfolder is written "
-                             f"(default: {DEFAULT_BACKUP_ROOT}).")
+                             f"(default: {FITNESSE_BACKUP_ROOT}).")
     parser.add_argument("--max-depth", type=int, default=None,
                         help="Limit crawl depth (root = 0). Default: unlimited.")
-    parser.add_argument("--delay", type=float, default=0.3,
-                        help="Seconds to sleep between page fetches (default: 0.3).")
+    parser.add_argument("--delay", type=float, default=FITNESSE_REQUEST_DELAY,
+                        help=f"Seconds to sleep between page fetches "
+                             f"(default: {FITNESSE_REQUEST_DELAY}, override via FITNESSE_REQUEST_DELAY).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print configuration and exit without HTTP.")
     args = parser.parse_args()
 
     if not args.base_url:
-        print("ERROR: --base-url not provided and fitnesse_upload.DEFAULT_BASE_URL is empty "
-              "(set $FITNESSE_URL).", file=sys.stderr)
+        print("ERROR: --base-url not provided and FITNESSE_URL is empty "
+              "(set in .env or export $FITNESSE_URL).", file=sys.stderr)
         return 2
     if not args.parent_path:
-        print("ERROR: --parent-path not provided and fitnesse_upload.DEFAULT_PARENT_PATH is empty "
-              "(set $FITNESSE_PARENT_PATH).", file=sys.stderr)
+        print("ERROR: --parent-path not provided and FITNESSE_PARENT_PATH is empty "
+              "(set in .env or export $FITNESSE_PARENT_PATH).", file=sys.stderr)
         return 2
 
     ts = datetime.datetime.now().strftime("%Y%m%d-%H%M")

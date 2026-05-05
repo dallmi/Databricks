@@ -44,23 +44,14 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-from fitnesse_upload import (  # noqa: E402  (import-after-sys-path)
-    PLAN,
-    build_fitnesse_path,
-    DEFAULT_BASE_URL,
-    DEFAULT_PARENT_PATH,
-    DEFAULT_ROOT_NAME,
-    DEFAULT_PAGES_DIR,
+from _config import (  # noqa: E402
+    FITNESSE_URL,
+    FITNESSE_PARENT_PATH,
+    FITNESSE_ROOT_NAME,
+    FITNESSE_BACKUP_ROOT,
+    FITNESSE_REQUEST_DELAY,
 )
-import os  # noqa: E402
-from _config import resolve_path  # noqa: E402  (load_env() already ran via fitnesse_upload)
-
-# Backup root: defaults to a sibling of the pages dir, overridable via FITNESSE_BACKUP_ROOT.
-DEFAULT_BACKUP_ROOT = resolve_path(
-    "FITNESSE_BACKUP_ROOT",
-    Path(DEFAULT_PAGES_DIR).parent / "backup",
-)
-DEFAULT_REQUEST_DELAY = float(os.environ.get("FITNESSE_REQUEST_DELAY", "0.3"))
+from fitnesse_upload import PLAN, build_fitnesse_path  # noqa: E402
 
 TEXTAREA_RE = re.compile(
     r'<textarea[^>]*name="pageContent"[^>]*>(.*?)</textarea>',
@@ -125,18 +116,18 @@ def update_latest_symlink(backup_root: Path, timestamp: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Download FitNesse pages to a local backup directory.")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL,
+    parser.add_argument("--base-url", default=FITNESSE_URL,
                         help="FitNesse base URL, e.g. http://host:port. Defaults to $FITNESSE_URL.")
-    parser.add_argument("--parent-path", default=DEFAULT_PARENT_PATH,
+    parser.add_argument("--parent-path", default=FITNESSE_PARENT_PATH,
                         help="Dotted FitNesse path of the existing parent page. Defaults to $FITNESSE_PARENT_PATH.")
-    parser.add_argument("--root-name", default=DEFAULT_ROOT_NAME,
+    parser.add_argument("--root-name", default=FITNESSE_ROOT_NAME,
                         help="Name of the root page under parent-path.")
-    parser.add_argument("--backup-root", default=str(DEFAULT_BACKUP_ROOT),
-                        help=f"Root folder for timestamped backups (default: {DEFAULT_BACKUP_ROOT}).")
+    parser.add_argument("--backup-root", default=str(FITNESSE_BACKUP_ROOT),
+                        help=f"Root folder for timestamped backups (default: {FITNESSE_BACKUP_ROOT}).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print the plan without sending any GETs.")
-    parser.add_argument("--delay", type=float, default=DEFAULT_REQUEST_DELAY,
-                        help=f"Seconds to sleep between requests (default: {DEFAULT_REQUEST_DELAY}, "
+    parser.add_argument("--delay", type=float, default=FITNESSE_REQUEST_DELAY,
+                        help=f"Seconds to sleep between requests (default: {FITNESSE_REQUEST_DELAY}, "
                              "override via FITNESSE_REQUEST_DELAY).")
     parser.add_argument("--stop-on-error", action="store_true",
                         help="Abort on the first HTTP error (default: continue).")
