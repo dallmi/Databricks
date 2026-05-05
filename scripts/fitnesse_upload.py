@@ -34,14 +34,23 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+# Make sibling modules importable regardless of CWD, then load .env so the
+# os.environ.get() defaults below pick up values from the repo-root .env file.
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from _config import load_env, resolve_path  # noqa: E402
+load_env()
+
 DEFAULT_BASE_URL = os.environ.get("FITNESSE_URL", "")
 DEFAULT_PARENT_PATH = os.environ.get("FITNESSE_PARENT_PATH", "")
 DEFAULT_ROOT_NAME = os.environ.get("FITNESSE_ROOT_NAME", "MultiChannelDataModel")
 
-# Resolve the pages directory relative to the script itself, not the CWD,
-# so the script works from any working directory.
-SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_PAGES_DIR = SCRIPT_DIR.parent / "docs" / "fitnesse" / "pages"
+# Pages dir defaults to docs/fitnesse/pages, override via FITNESSE_PAGES_DIR.
+DEFAULT_PAGES_DIR = resolve_path(
+    "FITNESSE_PAGES_DIR",
+    SCRIPT_DIR.parent / "docs" / "fitnesse" / "pages",
+)
 
 # Order of upload — containers first (so !see links resolve as we add leaves).
 # Empty-content items get a minimal description; leaves read from disk.

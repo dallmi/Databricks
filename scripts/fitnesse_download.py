@@ -52,9 +52,15 @@ from fitnesse_upload import (  # noqa: E402  (import-after-sys-path)
     DEFAULT_ROOT_NAME,
     DEFAULT_PAGES_DIR,
 )
+import os  # noqa: E402
+from _config import resolve_path  # noqa: E402  (load_env() already ran via fitnesse_upload)
 
-# Backup lives as a sibling of the pages directory configured in fitnesse_upload.py.
-DEFAULT_BACKUP_ROOT = Path(DEFAULT_PAGES_DIR).parent / "backup"
+# Backup root: defaults to a sibling of the pages dir, overridable via FITNESSE_BACKUP_ROOT.
+DEFAULT_BACKUP_ROOT = resolve_path(
+    "FITNESSE_BACKUP_ROOT",
+    Path(DEFAULT_PAGES_DIR).parent / "backup",
+)
+DEFAULT_REQUEST_DELAY = float(os.environ.get("FITNESSE_REQUEST_DELAY", "0.3"))
 
 TEXTAREA_RE = re.compile(
     r'<textarea[^>]*name="pageContent"[^>]*>(.*?)</textarea>',
@@ -129,8 +135,9 @@ def main() -> int:
                         help=f"Root folder for timestamped backups (default: {DEFAULT_BACKUP_ROOT}).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print the plan without sending any GETs.")
-    parser.add_argument("--delay", type=float, default=0.3,
-                        help="Seconds to sleep between requests (default: 0.3).")
+    parser.add_argument("--delay", type=float, default=DEFAULT_REQUEST_DELAY,
+                        help=f"Seconds to sleep between requests (default: {DEFAULT_REQUEST_DELAY}, "
+                             "override via FITNESSE_REQUEST_DELAY).")
     parser.add_argument("--stop-on-error", action="store_true",
                         help="Abort on the first HTTP error (default: continue).")
     parser.add_argument("--only", action="append", default=[], metavar="SUB_PATH",
