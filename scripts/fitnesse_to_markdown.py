@@ -34,6 +34,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -68,6 +69,12 @@ INLINE_INCLUDE_RE = re.compile(r"!include\s+(\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*
 # the --strip-prefix CLI arg (or the matching env value).
 _STRIP_PREFIX = ""
 
+# Directory of the markdown file currently being written, relative to the
+# output root. Used by convert_internal_link to emit links that resolve
+# correctly from the current file's location (e.g. "../Foo/_page.md")
+# rather than from the markdown-root. Set per-file by convert_file.
+_CURRENT_REL_DIR: Path | None = None
+
 
 def normalize_internal_path(path: str) -> tuple[str, str]:
     """Take a raw FitNesse internal path (possibly leading-dot-prefixed),
@@ -89,14 +96,18 @@ def convert_internal_link(url: str) -> str:
     External URLs (http://, https://, mailto:) pass through unchanged.
     A leading dot indicates an absolute FitNesse path; we strip it (and the
     configured --strip-prefix) and turn the dotted path into a slashed link
-    with a .md extension.
+    pointing at the page's _page.md. The link is rendered relative to
+    _CURRENT_REL_DIR when set, so it resolves correctly from the file
+    being written; otherwise it stays markdown-root-relative.
     """
     if url.startswith(("http://", "https://", "mailto:", "/")):
         return url
     _, target = normalize_internal_path(url)
-    if not target:
-        return url
-    return target.replace(".", "/") + ".md"
+    target_rel = "_page.md" if not target else target.replace(".", "/") + "/_page.md"
+    if _CURRENT_REL_DIR is None:
+        return target_rel
+    rel = os.path.relpath(target_rel, _CURRENT_REL_DIR.as_posix())
+    return rel.replace("\\", "/")
 
 
 def convert_inline(text: str) -> str:
@@ -370,13 +381,19 @@ def build_frontmatter(rel_path: Path, title: str | None) -> str:
     return "\n".join(parts) + "\n\n"
 
 
-def convert_file(source: Path, target: Path, rel_path: Path) -> None:
-    text = source.read_text(encoding="utf-8")
-    title = extract_title(text)
-    body = convert(text).lstrip("\n")
-    frontmatter = build_frontmatter(rel_path, title)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(frontmatter + body + "\n", encoding="utf-8")
+def convert_file(source: Path, target: Path, rel_path: Path,
+                 output_root: Path) -> None:
+    global _CURRENT_REL_DIR
+    _CURRENT_REL_DIR = target.parent.relative_to(output_root)
+    try:
+        text = source.read_text(encoding="utf-8")
+        title = extract_title(text)
+        body = convert(text).lstrip("\n")
+        frontmatter = build_frontmatter(rel_path, title)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(frontmatter + body + "\n", encoding="utf-8")
+    finally:
+        _CURRENT_REL_DIR = None
 
 
 def main() -> int:
@@ -446,11 +463,14 @@ def main() -> int:
 
     for src in files:
         rel = src.relative_to(source_dir)
-        target = output_dir / rel.with_suffix(".md")
+        # Pure-tree layout: <folder>/_page.md per page. The source filename
+        # (sans .txt) becomes a directory; the content goes to _page.md
+        # inside it. This keeps a single shape at every depth.
+        target = output_dir / rel.with_suffix("") / "_page.md"
         if args.dry_run:
             print(f"  {rel.as_posix()} -> {target.relative_to(output_dir.parent).as_posix()}")
             continue
-        convert_file(src, target, rel)
+        convert_file(src, target, rel, output_dir)
         print(f"  {rel.as_posix()} -> {target.relative_to(output_dir.parent).as_posix()}")
 
     print()

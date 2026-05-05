@@ -125,19 +125,20 @@ def discover_children(base_url: str, page_path: str, timeout: int = 30) -> list[
 def target_path(backup_dir: Path, start_path: str, page_path: str) -> Path:
     """Map a FitNesse page path to an on-disk .txt path under backup_dir.
 
-    The root page (page_path == start_path) goes to _root.txt. Descendants
-    mirror the dotted path as nested folders, with the leaf as <name>.txt.
+    Pure-tree layout: every page becomes a folder, its content lives at
+    <folder>/_page.txt. The start page goes to backup_dir/_page.txt;
+    descendants mirror the dotted path as nested folders.
     """
     if page_path == start_path:
-        return backup_dir / "_root.txt"
+        return backup_dir / "_page.txt"
     prefix = start_path + "."
     if not page_path.startswith(prefix):
         # Shouldn't happen given how we enqueue, but be defensive.
         safe = page_path.replace(".", "/")
-        return backup_dir / f"{safe}.txt"
+        return backup_dir / safe / "_page.txt"
     rel = page_path[len(prefix):]
     parts = rel.split(".")
-    return backup_dir / Path(*parts[:-1]) / f"{parts[-1]}.txt"
+    return backup_dir / Path(*parts) / "_page.txt"
 
 
 def crawl(base_url: str, start_path: str, backup_dir: Path, *,
