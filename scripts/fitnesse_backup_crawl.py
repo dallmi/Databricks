@@ -179,6 +179,10 @@ def derive_strip_prefix(start_path: str) -> str:
 
 STATE_FILENAME = "_state.json"
 
+# Set once when state-write fails after all retries, so the crawl doesn't
+# spam stderr if every page hits the same OneDrive/AV contention.
+_state_save_warned = False
+
 
 def state_file(backup_dir: Path) -> Path:
     return backup_dir / STATE_FILENAME
@@ -190,9 +194,14 @@ def save_state(backup_dir: Path, *, visited: set[str],
                max_depth: int | None, write_markdown: bool) -> None:
     """Persist crawl progress so a crashed/timed-out run can be resumed.
 
-    Atomic: writes to <backup>/_state.json.tmp then renames. Path objects
-    in entries are stored as backup_dir-relative strings so the file can
-    survive moving the backup folder."""
+    Atomic: writes to a per-pid .tmp then renames. The unique tmp name
+    avoids colliding with a leftover .tmp from a previous crashed run.
+    Retries on PermissionError/OSError (common on Windows when OneDrive
+    or antivirus briefly holds the new file). If all retries fail the
+    crawl continues — saved pages are still on disk, only fast-resume
+    via state file is lost; --resume will fall back to the disk path."""
+    global _state_save_warned
+
     def _rel(p: Path | None) -> str | None:
         return p.relative_to(backup_dir).as_posix() if p else None
 
@@ -216,9 +225,33 @@ def save_state(backup_dir: Path, *, visited: set[str],
         },
     }
     sp = state_file(backup_dir)
-    tmp = sp.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, sp)
+    tmp = backup_dir / f"{STATE_FILENAME}.{os.getpid()}.tmp"
+    body = json.dumps(payload, indent=2)
+
+    backoffs = (0.2, 0.5, 1.0, 2.0)
+    last_err: Exception | None = None
+    for delay_s in backoffs:
+        try:
+            tmp.write_text(body, encoding="utf-8")
+            os.replace(tmp, sp)
+            return
+        except (PermissionError, OSError) as e:
+            last_err = e
+            time.sleep(delay_s)
+
+    # Best-effort cleanup; ignore if even unlink is blocked.
+    try:
+        if tmp.exists():
+            tmp.unlink()
+    except OSError:
+        pass
+
+    if not _state_save_warned:
+        print(f"  WARNING: state checkpoint blocked ({last_err}); "
+              f"crawl will keep running, but resume must use the disk "
+              f"fallback. Often caused by OneDrive/antivirus briefly "
+              f"locking newly written files.", file=sys.stderr)
+        _state_save_warned = True
 
 
 def load_state(backup_dir: Path) -> dict | None:
