@@ -96,14 +96,21 @@ def convert_internal_link(url: str) -> str:
     External URLs (http://, https://, mailto:) pass through unchanged.
     A leading dot indicates an absolute FitNesse path; we strip it (and the
     configured --strip-prefix) and turn the dotted path into a slashed link
-    pointing at the page's _page.md. The link is rendered relative to
-    _CURRENT_REL_DIR when set, so it resolves correctly from the file
-    being written; otherwise it stays markdown-root-relative.
+    pointing at <folder>/<leaf>.md (the page's content file matches its
+    folder name, e.g. DataGlossary/Hr/TblHrEmployee/TblHrEmployee.md).
+    Links are rendered relative to _CURRENT_REL_DIR when set.
     """
     if url.startswith(("http://", "https://", "mailto:", "/")):
         return url
     _, target = normalize_internal_path(url)
-    target_rel = "_page.md" if not target else target.replace(".", "/") + "/_page.md"
+    if not target:
+        # Link points at the strip prefix itself (the start page). Use the
+        # prefix's own leaf so the link lands on its <leaf>.md.
+        leaf = _STRIP_PREFIX.rsplit(".", 1)[-1] if _STRIP_PREFIX else "index"
+        target_rel = f"{leaf}.md"
+    else:
+        leaf = target.rsplit(".", 1)[-1]
+        target_rel = target.replace(".", "/") + f"/{leaf}.md"
     if _CURRENT_REL_DIR is None:
         return target_rel
     rel = os.path.relpath(target_rel, _CURRENT_REL_DIR.as_posix())
@@ -478,10 +485,11 @@ def main() -> int:
 
     for src in files:
         rel = src.relative_to(source_dir)
-        # Pure-tree layout: <folder>/_page.md per page. The source filename
-        # (sans .txt) becomes a directory; the content goes to _page.md
-        # inside it. This keeps a single shape at every depth.
-        target = output_dir / rel.with_suffix("") / "_page.md"
+        # Pure-tree layout: <folder>/<leaf>.md per page. The source filename
+        # (sans .txt) becomes a directory; the content goes to <leaf>.md
+        # inside it so editor tabs / grep show a meaningful name.
+        leaf = rel.with_suffix("").name
+        target = output_dir / rel.with_suffix("") / f"{leaf}.md"
         if args.dry_run:
             print(f"  {rel.as_posix()} -> {target.relative_to(output_dir.parent).as_posix()}")
             continue

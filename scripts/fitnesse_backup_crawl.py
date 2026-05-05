@@ -147,8 +147,13 @@ def page_rel_dir(start_path: str, page_path: str) -> Path:
 
 def target_path(format_dir: Path, start_path: str, page_path: str,
                 suffix: str) -> Path:
-    """On-disk path for a page under format_dir/<rel>/<_page><suffix>."""
-    return format_dir / page_rel_dir(start_path, page_path) / f"_page{suffix}"
+    """On-disk path for a page: format_dir/<rel>/<leaf><suffix>.
+
+    Every page becomes its own folder (so children nest cleanly underneath)
+    and the file inside is named after the page's leaf segment, so editor
+    tabs and grep results show a meaningful name instead of `_page`."""
+    leaf = page_path.rsplit(".", 1)[-1]
+    return format_dir / page_rel_dir(start_path, page_path) / f"{leaf}{suffix}"
 
 
 def derive_strip_prefix(start_path: str) -> str:
