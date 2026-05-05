@@ -141,9 +141,11 @@ def target_path(backup_dir: Path, start_path: str, page_path: str) -> Path:
 
 
 def crawl(base_url: str, start_path: str, backup_dir: Path, *,
-          max_depth: int | None, delay: float) -> dict[str, int]:
-    """BFS crawl from start_path. Returns counter dict (ok/missing/failed/pages)."""
+          max_depth: int | None, delay: float) -> tuple[dict[str, int], dict[str, dict]]:
+    """BFS crawl from start_path. Returns (counts, entries) where entries maps
+    each visited page_path to {"status", "target", "depth"} for index generation."""
     counts = {"ok": 0, "missing": 0, "failed": 0, "pages_seen": 0}
+    entries: dict[str, dict] = {}
     visited: set[str] = set()
     queue: deque[tuple[str, int]] = deque([(start_path, 0)])
 
@@ -161,21 +163,25 @@ def crawl(base_url: str, start_path: str, backup_dir: Path, *,
         if status == 0:
             print(f"  {label} -> network error, skipped")
             counts["failed"] += 1
+            entries[page_path] = {"status": "failed", "target": None, "depth": depth}
             time.sleep(delay)
             continue
         if status == 404:
             print(f"  {label} -> HTTP 404 (skipped)")
             counts["missing"] += 1
+            entries[page_path] = {"status": "missing", "target": None, "depth": depth}
             time.sleep(delay)
             continue
         if status != 200:
             print(f"  {label} -> HTTP {status} (skipped)")
             counts["failed"] += 1
+            entries[page_path] = {"status": "failed", "target": None, "depth": depth}
             time.sleep(delay)
             continue
         if not body:
             print(f"  {label} -> empty content (skipped)")
             counts["missing"] += 1
+            entries[page_path] = {"status": "missing", "target": None, "depth": depth}
         else:
             target = target_path(backup_dir, start_path, page_path)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -183,6 +189,7 @@ def crawl(base_url: str, start_path: str, backup_dir: Path, *,
             rel = target.relative_to(backup_dir.parent)
             print(f"  {label} -> {rel} ({len(body)} chars)")
             counts["ok"] += 1
+            entries[page_path] = {"status": "saved", "target": target, "depth": depth}
 
         # 2. Discover children and enqueue
         if max_depth is None or depth < max_depth:
@@ -191,7 +198,74 @@ def crawl(base_url: str, start_path: str, backup_dir: Path, *,
                     queue.append((child, depth + 1))
         time.sleep(delay)
 
-    return counts
+    return counts, entries
+
+
+def build_tree_dict(start_path: str, entries: dict[str, dict]) -> dict:
+    """Build a nested dict mirroring the page hierarchy under start_path."""
+    tree: dict = {}
+    prefix = start_path + "."
+    for page_path in entries:
+        if page_path == start_path or not page_path.startswith(prefix):
+            continue
+        node = tree
+        for part in page_path[len(prefix):].split("."):
+            node = node.setdefault(part, {})
+    return tree
+
+
+def render_label(name: str, info: dict | None, backup_dir: Path) -> str:
+    """Render a single tree/list entry as markdown. Saved pages link to the
+    .txt; missing/failed pages appear as plain text with a status marker."""
+    if info and info["status"] == "saved" and info.get("target"):
+        rel = info["target"].relative_to(backup_dir).as_posix()
+        return f"[{name}]({rel})"
+    if info and info["status"] == "missing":
+        return f"{name} *(missing)*"
+    if info and info["status"] == "failed":
+        return f"{name} *(failed)*"
+    return name
+
+
+def render_tree_md(node: dict, current_path: str, indent: int,
+                   entries: dict[str, dict], backup_dir: Path,
+                   lines: list[str]) -> None:
+    for key in sorted(node.keys()):
+        child_path = f"{current_path}.{key}"
+        info = entries.get(child_path)
+        lines.append("  " * indent + "- " + render_label(key, info, backup_dir))
+        render_tree_md(node[key], child_path, indent + 1, entries, backup_dir, lines)
+
+
+def write_index_md(backup_dir: Path, start_path: str, base_url: str,
+                   entries: dict[str, dict], counts: dict[str, int],
+                   timestamp: str) -> Path:
+    """Write _INDEX.md at backup_dir: header, hierarchical tree, flat list."""
+    lines: list[str] = []
+    lines.append(f"# FitNesse Backup — {timestamp}")
+    lines.append("")
+    lines.append(f"- **Base URL:** `{base_url}`")
+    lines.append(f"- **Start page:** `{start_path}`")
+    lines.append(f"- **Pages seen:** {counts['pages_seen']}")
+    lines.append(f"- **Saved:** {counts['ok']}")
+    lines.append(f"- **Missing:** {counts['missing']}")
+    lines.append(f"- **Failed:** {counts['failed']}")
+    lines.append("")
+    lines.append("## Tree")
+    lines.append("")
+    root_info = entries.get(start_path)
+    lines.append("- " + render_label(start_path, root_info, backup_dir))
+    tree = build_tree_dict(start_path, entries)
+    render_tree_md(tree, start_path, 1, entries, backup_dir, lines)
+    lines.append("")
+    lines.append("## All pages (alphabetical)")
+    lines.append("")
+    for page_path in sorted(entries.keys()):
+        lines.append("- " + render_label(page_path, entries[page_path], backup_dir))
+
+    index_path = backup_dir / "_INDEX.md"
+    index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return index_path
 
 
 def update_latest_symlink(backup_root: Path, timestamp: str) -> None:
@@ -251,10 +325,16 @@ def main() -> int:
 
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    counts = crawl(
+    counts, entries = crawl(
         args.base_url, args.parent_path, backup_dir,
         max_depth=args.max_depth, delay=args.delay,
     )
+
+    index_path: Path | None = None
+    if entries:
+        index_path = write_index_md(
+            backup_dir, args.parent_path, args.base_url, entries, counts, ts,
+        )
 
     if counts["ok"] > 0:
         update_latest_symlink(backup_root, f"{ts}-crawl")
@@ -267,6 +347,8 @@ def main() -> int:
         latest = backup_root / "latest"
         if latest.is_symlink():
             print(f"Latest: {latest}")
+    if index_path is not None:
+        print(f"Index:  {index_path}")
     return 0 if counts["failed"] == 0 else 1
 
 
