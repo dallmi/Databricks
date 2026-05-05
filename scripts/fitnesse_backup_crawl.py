@@ -32,6 +32,14 @@ Usage:
     # Skip the .md conversion
     python scripts/fitnesse_backup_crawl.py --no-markdown
 
+    # Resume after a crash / timeout. Picks up the most recent <ts>-crawl
+    # folder under --backup-root and continues from its _state.json
+    # checkpoint (or, if missing, falls back to "skip pages whose .txt
+    # is already on disk"). Pass an explicit folder name to resume one
+    # other than the most recent.
+    python scripts/fitnesse_backup_crawl.py --resume
+    python scripts/fitnesse_backup_crawl.py --resume 20260505-1430-crawl
+
     # Custom subtree
     python scripts/fitnesse_backup_crawl.py --parent-path FrontPage.Some.Other.Page
 
@@ -44,6 +52,8 @@ from __future__ import annotations
 import argparse
 import datetime
 import html
+import json
+import os
 import re
 import sys
 import time
@@ -167,23 +177,118 @@ def derive_strip_prefix(start_path: str) -> str:
     return start_path
 
 
+STATE_FILENAME = "_state.json"
+
+
+def state_file(backup_dir: Path) -> Path:
+    return backup_dir / STATE_FILENAME
+
+
+def save_state(backup_dir: Path, *, visited: set[str],
+               queue: "deque[tuple[str, int]]", counts: dict[str, int],
+               entries: dict[str, dict], base_url: str, start_path: str,
+               max_depth: int | None, write_markdown: bool) -> None:
+    """Persist crawl progress so a crashed/timed-out run can be resumed.
+
+    Atomic: writes to <backup>/_state.json.tmp then renames. Path objects
+    in entries are stored as backup_dir-relative strings so the file can
+    survive moving the backup folder."""
+    def _rel(p: Path | None) -> str | None:
+        return p.relative_to(backup_dir).as_posix() if p else None
+
+    payload = {
+        "version": 1,
+        "base_url": base_url,
+        "start_path": start_path,
+        "max_depth": max_depth,
+        "write_markdown": write_markdown,
+        "visited": sorted(visited),
+        "queue": [[p, d] for p, d in queue],
+        "counts": counts,
+        "entries": {
+            page: {
+                "status": e["status"],
+                "depth": e["depth"],
+                "target": _rel(e.get("target")),
+                "md_target": _rel(e.get("md_target")),
+            }
+            for page, e in entries.items()
+        },
+    }
+    sp = state_file(backup_dir)
+    tmp = sp.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp, sp)
+
+
+def load_state(backup_dir: Path) -> dict | None:
+    """Inverse of save_state. Returns None when no state file is present."""
+    sp = state_file(backup_dir)
+    if not sp.exists():
+        return None
+    payload = json.loads(sp.read_text(encoding="utf-8"))
+    visited: set[str] = set(payload["visited"])
+    queue: "deque[tuple[str, int]]" = deque((p, d) for p, d in payload["queue"])
+    counts = dict(payload["counts"])
+    entries: dict[str, dict] = {}
+    for page, e in payload["entries"].items():
+        entries[page] = {
+            "status": e["status"],
+            "depth": e["depth"],
+            "target": (backup_dir / e["target"]) if e.get("target") else None,
+            "md_target": (backup_dir / e["md_target"]) if e.get("md_target") else None,
+        }
+    return {
+        "visited": visited,
+        "queue": queue,
+        "counts": counts,
+        "entries": entries,
+        "base_url": payload["base_url"],
+        "start_path": payload["start_path"],
+        "max_depth": payload.get("max_depth"),
+        "write_markdown": payload.get("write_markdown", True),
+    }
+
+
+def discard_state(backup_dir: Path) -> None:
+    sp = state_file(backup_dir)
+    if sp.exists():
+        sp.unlink()
+
+
 def crawl(base_url: str, start_path: str, backup_dir: Path, *,
           max_depth: int | None, delay: float,
-          write_markdown: bool) -> tuple[dict[str, int], dict[str, dict]]:
+          write_markdown: bool,
+          visited: set[str] | None = None,
+          queue: "deque[tuple[str, int]] | None" = None,
+          counts: dict[str, int] | None = None,
+          entries: dict[str, dict] | None = None,
+          ) -> tuple[dict[str, int], dict[str, dict]]:
     """BFS crawl from start_path. For each saved page, writes the raw wiki
-    source under <backup_dir>/txt/<rel>/_page.txt and (unless disabled)
-    the converted markdown under <backup_dir>/md/<rel>/_page.md.
+    source under <backup_dir>/txt/<rel>/<leaf>.txt and (unless disabled)
+    the converted markdown under <backup_dir>/md/<rel>/<leaf>.md.
 
-    Returns (counts, entries) where entries[page_path] tracks status, depth,
-    and the txt/md targets so the _INDEX.md can link to them."""
-    counts = {"ok": 0, "missing": 0, "failed": 0, "pages_seen": 0}
-    entries: dict[str, dict] = {}
-    visited: set[str] = set()
-    queue: deque[tuple[str, int]] = deque([(start_path, 0)])
+    Resume support: pass visited/queue/counts/entries from load_state() to
+    pick up where a prior run left off. Also skips fetching any page whose
+    .txt is already on disk (handles the case where state was lost)."""
+    counts = counts if counts is not None else {
+        "ok": 0, "missing": 0, "failed": 0, "pages_seen": 0,
+    }
+    entries = entries if entries is not None else {}
+    visited = visited if visited is not None else set()
+    queue = queue if queue is not None else deque([(start_path, 0)])
 
     txt_dir = backup_dir / "txt"
     md_dir = backup_dir / "md"
     strip_prefix = derive_strip_prefix(start_path) if write_markdown else ""
+
+    def _persist() -> None:
+        save_state(backup_dir, visited=visited, queue=queue, counts=counts,
+                   entries=entries, base_url=base_url, start_path=start_path,
+                   max_depth=max_depth, write_markdown=write_markdown)
+
+    def _md_target_for(page_path: str) -> Path | None:
+        return target_path(md_dir, start_path, page_path, ".md") if write_markdown else None
 
     while queue:
         page_path, depth = queue.popleft()
@@ -193,59 +298,77 @@ def crawl(base_url: str, start_path: str, backup_dir: Path, *,
         counts["pages_seen"] += 1
 
         label = f"[depth {depth}] {page_path}"
+        txt_target = target_path(txt_dir, start_path, page_path, ".txt")
+        already_recorded = page_path in entries
 
-        status, body = fetch_raw_source(base_url, page_path)
-        if status == 0:
-            print(f"  {label} -> network error, skipped")
-            counts["failed"] += 1
-            entries[page_path] = {"status": "failed", "target": None,
-                                  "md_target": None, "depth": depth}
-            time.sleep(delay)
-            continue
-        if status == 404:
-            print(f"  {label} -> HTTP 404 (skipped)")
-            counts["missing"] += 1
-            entries[page_path] = {"status": "missing", "target": None,
-                                  "md_target": None, "depth": depth}
-            time.sleep(delay)
-            continue
-        if status != 200:
-            print(f"  {label} -> HTTP {status} (skipped)")
-            counts["failed"] += 1
-            entries[page_path] = {"status": "failed", "target": None,
-                                  "md_target": None, "depth": depth}
-            time.sleep(delay)
-            continue
-        if not body:
-            print(f"  {label} -> empty content (skipped)")
-            counts["missing"] += 1
-            entries[page_path] = {"status": "missing", "target": None,
-                                  "md_target": None, "depth": depth}
+        # Skip fetch when the .txt is already on disk. Covers both fresh
+        # disk-only resume (no state file) and re-traversal with state.
+        if txt_target.exists():
+            if not already_recorded:
+                counts["ok"] += 1
+                entries[page_path] = {
+                    "status": "saved",
+                    "target": txt_target,
+                    "md_target": _md_target_for(page_path),
+                    "depth": depth,
+                }
+            print(f"  {label} -> already saved, skipping fetch")
         else:
-            txt_target = target_path(txt_dir, start_path, page_path, ".txt")
-            txt_target.parent.mkdir(parents=True, exist_ok=True)
-            txt_target.write_text(body, encoding="utf-8")
-            md_target: Path | None = None
-            if write_markdown:
-                md_target = target_path(md_dir, start_path, page_path, ".md")
-                md_rel_dir = page_rel_dir(start_path, page_path)
-                md_body = render_markdown(
-                    body, page_path,
-                    strip_prefix=strip_prefix,
-                    current_rel_dir=md_rel_dir,
-                )
-                md_target.parent.mkdir(parents=True, exist_ok=True)
-                md_target.write_text(md_body, encoding="utf-8")
-            rel = txt_target.relative_to(backup_dir.parent)
-            print(f"  {label} -> {rel} ({len(body)} chars)")
-            counts["ok"] += 1
-            entries[page_path] = {"status": "saved", "target": txt_target,
-                                  "md_target": md_target, "depth": depth}
+            status, body = fetch_raw_source(base_url, page_path)
+            if status == 0:
+                print(f"  {label} -> network error, skipped")
+                counts["failed"] += 1
+                entries[page_path] = {"status": "failed", "target": None,
+                                      "md_target": None, "depth": depth}
+                _persist()
+                time.sleep(delay)
+                continue
+            if status == 404:
+                print(f"  {label} -> HTTP 404 (skipped)")
+                counts["missing"] += 1
+                entries[page_path] = {"status": "missing", "target": None,
+                                      "md_target": None, "depth": depth}
+                _persist()
+                time.sleep(delay)
+                continue
+            if status != 200:
+                print(f"  {label} -> HTTP {status} (skipped)")
+                counts["failed"] += 1
+                entries[page_path] = {"status": "failed", "target": None,
+                                      "md_target": None, "depth": depth}
+                _persist()
+                time.sleep(delay)
+                continue
+            if not body:
+                print(f"  {label} -> empty content (skipped)")
+                counts["missing"] += 1
+                entries[page_path] = {"status": "missing", "target": None,
+                                      "md_target": None, "depth": depth}
+            else:
+                txt_target.parent.mkdir(parents=True, exist_ok=True)
+                txt_target.write_text(body, encoding="utf-8")
+                md_target: Path | None = None
+                if write_markdown:
+                    md_target = _md_target_for(page_path)
+                    md_rel_dir = page_rel_dir(start_path, page_path)
+                    md_body = render_markdown(
+                        body, page_path,
+                        strip_prefix=strip_prefix,
+                        current_rel_dir=md_rel_dir,
+                    )
+                    md_target.parent.mkdir(parents=True, exist_ok=True)
+                    md_target.write_text(md_body, encoding="utf-8")
+                rel = txt_target.relative_to(backup_dir.parent)
+                print(f"  {label} -> {rel} ({len(body)} chars)")
+                counts["ok"] += 1
+                entries[page_path] = {"status": "saved", "target": txt_target,
+                                      "md_target": md_target, "depth": depth}
 
         if max_depth is None or depth < max_depth:
             for child in discover_children(base_url, page_path):
                 if child not in visited:
                     queue.append((child, depth + 1))
+        _persist()
         time.sleep(delay)
 
     return counts, entries
@@ -352,6 +475,12 @@ def main() -> int:
                         help="Skip the .md export. By default each page is "
                              "written twice: raw wiki source under txt/ and "
                              "converted markdown under md/.")
+    parser.add_argument("--resume", nargs="?", const="latest", default=None,
+                        metavar="<ts>-crawl",
+                        help="Resume an existing crawl. With no value, picks "
+                             "the most recent <ts>-crawl folder under "
+                             "--backup-root. Pass a specific timestamp folder "
+                             "to resume that one.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print configuration and exit without HTTP.")
     args = parser.parse_args()
@@ -365,11 +494,57 @@ def main() -> int:
               "(set in .env or export $FITNESSE_PARENT_PATH).", file=sys.stderr)
         return 2
 
-    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M")
     backup_root = Path(args.backup_root)
-    backup_dir = backup_root / f"{ts}-crawl"
-
     write_markdown = not args.no_markdown
+
+    initial_visited: set[str] | None = None
+    initial_queue: "deque[tuple[str, int]] | None" = None
+    initial_counts: dict[str, int] | None = None
+    initial_entries: dict[str, dict] | None = None
+    resume_note = ""
+
+    if args.resume is not None:
+        if args.resume == "latest":
+            candidates = sorted(backup_root.glob("*-crawl"))
+            if not candidates:
+                print(f"ERROR: no <ts>-crawl folders under {backup_root} to resume.",
+                      file=sys.stderr)
+                return 2
+            backup_dir = candidates[-1]
+        else:
+            backup_dir = backup_root / args.resume
+            if not backup_dir.exists():
+                print(f"ERROR: --resume target does not exist: {backup_dir}",
+                      file=sys.stderr)
+                return 2
+
+        state = load_state(backup_dir)
+        if state is None:
+            resume_note = (f"resume {backup_dir.name} "
+                           f"(no _state.json — disk-only fallback)")
+        else:
+            if state["start_path"] != args.parent_path:
+                print(f"ERROR: --parent-path does not match the saved state "
+                      f"({state['start_path']!r} vs {args.parent_path!r}). "
+                      f"Pass --parent-path {state['start_path']} to resume "
+                      f"this crawl.", file=sys.stderr)
+                return 2
+            if state["base_url"] != args.base_url:
+                print(f"WARNING: --base-url differs from saved state "
+                      f"({state['base_url']!r}); proceeding with "
+                      f"{args.base_url!r}.", file=sys.stderr)
+            initial_visited = state["visited"]
+            initial_queue = state["queue"]
+            initial_counts = state["counts"]
+            initial_entries = state["entries"]
+            write_markdown = state["write_markdown"]
+            resume_note = (f"resume {backup_dir.name}: "
+                           f"{len(initial_visited)} visited, "
+                           f"{len(initial_queue)} queued")
+    else:
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M")
+        backup_dir = backup_root / f"{ts}-crawl"
+
     formats = "txt + md" if write_markdown else "txt only"
 
     print(f"Base URL:    {args.base_url}")
@@ -377,7 +552,8 @@ def main() -> int:
     print(f"Backup:      {backup_dir.resolve()}")
     print(f"Formats:     {formats}")
     print(f"Max depth:   {args.max_depth if args.max_depth is not None else 'unlimited'}")
-    print(f"Mode:        {'DRY RUN' if args.dry_run else 'LIVE CRAWL'}")
+    mode = "DRY RUN" if args.dry_run else ("LIVE CRAWL — " + resume_note if resume_note else "LIVE CRAWL")
+    print(f"Mode:        {mode}")
     print()
 
     if args.dry_run:
@@ -390,16 +566,25 @@ def main() -> int:
         args.base_url, args.parent_path, backup_dir,
         max_depth=args.max_depth, delay=args.delay,
         write_markdown=write_markdown,
+        visited=initial_visited, queue=initial_queue,
+        counts=initial_counts, entries=initial_entries,
     )
 
+    index_label = backup_dir.name.replace("-crawl", "")
     index_path: Path | None = None
     if entries:
         index_path = write_index_md(
-            backup_dir, args.parent_path, args.base_url, entries, counts, ts,
+            backup_dir, args.parent_path, args.base_url, entries, counts,
+            index_label,
         )
 
     if counts["ok"] > 0:
-        update_latest_symlink(backup_root, f"{ts}-crawl")
+        update_latest_symlink(backup_root, backup_dir.name)
+
+    # Crawl finished cleanly (queue is empty). Drop the state file so a
+    # later --resume against this folder doesn't try to pick it back up.
+    if counts["failed"] == 0:
+        discard_state(backup_dir)
 
     print()
     print(f"Done: {counts['ok']} saved, {counts['missing']} missing, "
@@ -411,6 +596,9 @@ def main() -> int:
             print(f"Latest: {latest}")
     if index_path is not None:
         print(f"Index:  {index_path}")
+    if counts["failed"] > 0:
+        print(f"State:  {state_file(backup_dir)} "
+              f"(re-run with --resume to retry failed pages)")
     return 0 if counts["failed"] == 0 else 1
 
 
