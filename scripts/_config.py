@@ -60,4 +60,7 @@ FITNESSE_PAGES_DIR = resolve_path(
 FITNESSE_BACKUP_ROOT = resolve_path(
     "FITNESSE_BACKUP_ROOT", FITNESSE_PAGES_DIR.parent / "backup"
 )
+FITNESSE_MARKDOWN_DIR = resolve_path(
+    "FITNESSE_MARKDOWN_DIR", FITNESSE_PAGES_DIR.parent / "markdown"
+)
 FITNESSE_REQUEST_DELAY = float(os.environ.get("FITNESSE_REQUEST_DELAY", "0.3"))
