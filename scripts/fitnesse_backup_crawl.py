@@ -23,25 +23,30 @@ local fitnesse_to_markdown module; works on Windows (Anaconda Prompt),
 macOS and Linux. Runs from any working directory.
 
 Usage:
-    # Uses defaults from .env / shell env. Writes both txt/ and md/.
+    # Default target — backs up FITNESSE_PARENT_PATH to backup/main/.
+    # Writes both txt/ and md/.
     python scripts/fitnesse_backup_crawl.py
 
-    # Dry-run — no HTTP, show the starting URL and target folder
+    # Alternative target — backs up FITNESSE_ALT_PARENT_PATH to backup/alt/.
+    python scripts/fitnesse_backup_crawl.py --target alt
+
+    # One-off override — backs up an arbitrary subtree to backup/custom/.
+    python scripts/fitnesse_backup_crawl.py --parent-path FrontPage.Some.Other.Page
+
+    # Dry-run — no HTTP, show the resolved target and folder
     python scripts/fitnesse_backup_crawl.py --dry-run
+    python scripts/fitnesse_backup_crawl.py --dry-run --target alt
 
     # Skip the .md conversion
     python scripts/fitnesse_backup_crawl.py --no-markdown
 
-    # Resume after a crash / timeout. Picks up the most recent <ts>-crawl
-    # folder under --backup-root and continues from its _state.json
-    # checkpoint (or, if missing, falls back to "skip pages whose .txt
-    # is already on disk"). Pass an explicit folder name to resume one
-    # other than the most recent.
+    # Resume after a crash / timeout. Scoped to the chosen target's
+    # subfolder (backup/<target>/), so --resume picks the latest
+    # <ts>-crawl folder for that target. Pass an explicit folder name
+    # to resume one other than the most recent.
     python scripts/fitnesse_backup_crawl.py --resume
+    python scripts/fitnesse_backup_crawl.py --target alt --resume
     python scripts/fitnesse_backup_crawl.py --resume 20260505-1430-crawl
-
-    # Custom subtree
-    python scripts/fitnesse_backup_crawl.py --parent-path FrontPage.Some.Other.Page
 
     # Cap crawl depth (defensive, default unlimited)
     python scripts/fitnesse_backup_crawl.py --max-depth 3
@@ -67,6 +72,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from _config import (  # noqa: E402
     FITNESSE_URL,
     FITNESSE_PARENT_PATH,
+    FITNESSE_ALT_PARENT_PATH,
     FITNESSE_BACKUP_ROOT,
     FITNESSE_REQUEST_DELAY,
 )
@@ -487,6 +493,19 @@ def update_latest_symlink(backup_root: Path, timestamp: str) -> None:
         pass
 
 
+def resolve_target(target: str, explicit_parent: str | None) -> tuple[str, str]:
+    """Map (--target, --parent-path) to (parent_path, label).
+
+    Explicit --parent-path always wins and is labelled "custom" so its
+    backups go into their own subfolder and never collide with main/alt.
+    """
+    if explicit_parent:
+        return explicit_parent, "custom"
+    if target == "alt":
+        return FITNESSE_ALT_PARENT_PATH, "alt"
+    return FITNESSE_PARENT_PATH, "main"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Back up a FitNesse subtree by crawling child links and fetching "
@@ -494,10 +513,16 @@ def main() -> int:
     )
     parser.add_argument("--base-url", default=FITNESSE_URL,
                         help="FitNesse base URL. Default: $FITNESSE_URL (or .env entry).")
-    parser.add_argument("--parent-path", default=FITNESSE_PARENT_PATH,
-                        help="Dotted path of the subtree root. Default: $FITNESSE_PARENT_PATH.")
+    parser.add_argument("--target", choices=("main", "alt"), default="main",
+                        help="Which named parent to back up: 'main' uses "
+                             "FITNESSE_PARENT_PATH, 'alt' uses FITNESSE_ALT_PARENT_PATH. "
+                             "Backups land in <backup-root>/<target>/ so the slots "
+                             "do not share their 'latest' symlinks.")
+    parser.add_argument("--parent-path", default=None,
+                        help="Override the dotted path of the subtree root. When set, "
+                             "--target is ignored and backups land in <backup-root>/custom/.")
     parser.add_argument("--backup-root", default=str(FITNESSE_BACKUP_ROOT),
-                        help=f"Folder where the timestamped subfolder is written "
+                        help=f"Parent folder for per-target backup subfolders "
                              f"(default: {FITNESSE_BACKUP_ROOT}).")
     parser.add_argument("--max-depth", type=int, default=None,
                         help="Limit crawl depth (root = 0). Default: unlimited.")
@@ -522,12 +547,17 @@ def main() -> int:
         print("ERROR: --base-url not provided and FITNESSE_URL is empty "
               "(set in .env or export $FITNESSE_URL).", file=sys.stderr)
         return 2
-    if not args.parent_path:
-        print("ERROR: --parent-path not provided and FITNESSE_PARENT_PATH is empty "
-              "(set in .env or export $FITNESSE_PARENT_PATH).", file=sys.stderr)
-        return 2
 
-    backup_root = Path(args.backup_root)
+    parent_path, label = resolve_target(args.target, args.parent_path)
+    if not parent_path:
+        env_var = {"main": "FITNESSE_PARENT_PATH",
+                   "alt":  "FITNESSE_ALT_PARENT_PATH"}[args.target]
+        print(f"ERROR: --parent-path not provided and {env_var} is empty "
+              f"(set in .env or export ${env_var}).", file=sys.stderr)
+        return 2
+    args.parent_path = parent_path  # downstream code reads args.parent_path
+
+    backup_root = Path(args.backup_root) / label
     write_markdown = not args.no_markdown
 
     initial_visited: set[str] | None = None
@@ -581,6 +611,7 @@ def main() -> int:
     formats = "txt + md" if write_markdown else "txt only"
 
     print(f"Base URL:    {args.base_url}")
+    print(f"Target:      {label}")
     print(f"Start page:  {args.parent_path}")
     print(f"Backup:      {backup_dir.resolve()}")
     print(f"Formats:     {formats}")

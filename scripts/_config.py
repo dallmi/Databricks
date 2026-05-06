@@ -53,6 +53,8 @@ load_env()
 # ---------------------------------------------------------------------------
 FITNESSE_URL = os.environ.get("FITNESSE_URL", "")
 FITNESSE_PARENT_PATH = os.environ.get("FITNESSE_PARENT_PATH", "")
+# Optional second subtree, used by `fitnesse_backup_crawl.py --target alt`.
+FITNESSE_ALT_PARENT_PATH = os.environ.get("FITNESSE_ALT_PARENT_PATH", "")
 FITNESSE_ROOT_NAME = os.environ.get("FITNESSE_ROOT_NAME", "MultiChannelDataModel")
 FITNESSE_PAGES_DIR = resolve_path(
     "FITNESSE_PAGES_DIR", REPO_ROOT / "docs" / "fitnesse" / "pages"
