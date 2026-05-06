@@ -92,7 +92,13 @@ SEGMENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 def fetch(url: str, timeout: int = 30) -> tuple[int, str]:
-    """HTTP GET, returning (status, body). Status 0 means network error."""
+    """HTTP GET, returning (status, body). Status 0 means network error.
+
+    OSError catches everything socket-level: URLError (connect failures),
+    TimeoutError raised mid-read by socket.recv_into, ConnectionResetError,
+    etc. HTTPError is checked first because it's a URLError subclass and
+    we want the response code, not a "network error" log line.
+    """
     req = urllib.request.Request(url, headers={"User-Agent": "fitnesse-backup-crawl.py"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -100,7 +106,7 @@ def fetch(url: str, timeout: int = 30) -> tuple[int, str]:
             return resp.status, body
     except urllib.error.HTTPError as e:
         return e.code, ""
-    except urllib.error.URLError as e:
+    except OSError as e:
         print(f"    network error on {url}: {e}", file=sys.stderr)
         return 0, ""
 
