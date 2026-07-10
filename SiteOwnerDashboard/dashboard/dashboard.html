@@ -770,8 +770,8 @@ async function computeLifecycle(w){
       GROUP BY 1)`))[0];
 
   const shares = (await query(`SELECT COUNT(*) known,
-      COALESCE(SUM(CASE WHEN age BETWEEN 0 AND 30 THEN 1 ELSE 0 END),0) fresh,
-      COALESCE(SUM(CASE WHEN age > 90 THEN 1 ELSE 0 END),0) ever
+      COALESCE(SUM(CASE WHEN age BETWEEN 0 AND 30 THEN 1 ELSE 0 END),0)::BIGINT fresh,
+      COALESCE(SUM(CASE WHEN age > 90 THEN 1 ELSE 0 END),0)::BIGINT ever
     FROM (SELECT date_diff('day', publishing_date, timestamp) age
           FROM pv WHERE ${win(w.from,w.to)} AND publishing_date IS NOT NULL)`))[0];
 
@@ -795,9 +795,9 @@ async function computeLifecycle(w){
   const cadence = await query(`WITH ${pubsCte()},
     mv AS (SELECT strftime(date_trunc('month', timestamp),'%Y-%m') m,
         COALESCE(SUM(CASE WHEN publishing_date IS NOT NULL
-          AND date_diff('day', publishing_date, timestamp) BETWEEN 0 AND 30 THEN 1 ELSE 0 END),0) fresh,
+          AND date_diff('day', publishing_date, timestamp) BETWEEN 0 AND 30 THEN 1 ELSE 0 END),0)::BIGINT fresh,
         COALESCE(SUM(CASE WHEN publishing_date IS NULL
-          OR date_diff('day', publishing_date, timestamp) NOT BETWEEN 0 AND 30 THEN 1 ELSE 0 END),0) older
+          OR date_diff('day', publishing_date, timestamp) NOT BETWEEN 0 AND 30 THEN 1 ELSE 0 END),0)::BIGINT older
       FROM pv WHERE TRUE${langClause()} GROUP BY 1),
     mp AS (SELECT strftime(date_trunc('month', pd),'%Y-%m') m, COUNT(*) published
       FROM pubs WHERE pd >= TIMESTAMP '${iso(dataMin)}' GROUP BY 1)
