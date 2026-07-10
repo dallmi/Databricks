@@ -92,9 +92,10 @@
   .kpi-sub { font-size: 0.72rem; color: var(--grey-4); margin-top: 0.25rem; display: flex; align-items: center; gap: 0.3rem; }
   .delta { font-weight: 600; } .delta.up { color: var(--success); } .delta.down { color: var(--bordeaux-1); } .delta.flat { color: var(--grey-4); }
 
-  .charts-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-bottom: 1.25rem; }
-  .chart-card { background: var(--white); border: 1px solid var(--grey-1); border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 1rem 1.1rem; }
+  .charts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
+  .chart-card { background: var(--white); border: 1px solid var(--grey-1); border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 1rem 1.1rem; min-width: 0; }
   .chart-card.full-width { grid-column: 1 / -1; }
+  .chart-container { min-width: 0; }
   .chart-title { font-size: 0.95rem; font-weight: 600; color: var(--black); margin-bottom: 0.85rem; padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--grey-1); display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
   .chart-title .st { font-size: 0.7rem; color: var(--grey-4); font-weight: 400; }
@@ -215,7 +216,7 @@
                 <option value="avg_tos">Avg time on page</option>
               </select></span>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.75rem;">
+          <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1.75rem;">
             <div><div class="st" style="margin-bottom:0.5rem;color:var(--grey-5);font-weight:600;">Top 5</div>
               <div class="chart-container" style="height:190px"><canvas id="chartTop5"></canvas></div></div>
             <div><div class="st" style="margin-bottom:0.5rem;color:var(--grey-5);font-weight:600;">Bottom 5</div>
