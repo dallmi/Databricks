@@ -31,22 +31,35 @@ so the script is safe to re-run after dropping new chunks into input/.
 """
 
 import argparse
+import csv
 import re
 import sys
 from pathlib import Path
 
 import pandas as pd
 
-TIMESTAMP_COLUMNS = ["timestamp [UTC]", "timestamp"]
+TIMESTAMP_COLUMNS = ["timestamp [utc]", "timestamp"]  # matched case-insensitively
 RENAMED_PATTERN = re.compile(r"^Digital_\d{8}_\d{8}\.csv$")
 FMT = "%Y%m%d"
 DEFAULT_INPUT_DIR = Path(__file__).resolve().parent.parent / "input"
 
 
-def find_timestamp_column(path: Path) -> str | None:
-    header = pd.read_csv(path, nrows=0)
-    for col in TIMESTAMP_COLUMNS:
-        if col in header.columns:
+def sniff_delimiter(path: Path) -> str:
+    # Azure/Excel exports vary between comma and semicolon; sniff instead of assuming.
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        sample = f.read(64 * 1024)
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+    except csv.Error:
+        return ","
+
+
+def find_timestamp_column(path: Path, sep: str) -> str | None:
+    # encoding="utf-8-sig" strips the BOM that Azure exports prepend
+    # (otherwise the first column is named "﻿timestamp" and never matches).
+    header = pd.read_csv(path, nrows=0, sep=sep, encoding="utf-8-sig")
+    for col in header.columns:
+        if col.strip().lower() in TIMESTAMP_COLUMNS:
             return col
     return None
 
@@ -56,13 +69,15 @@ def rename_file(path: Path, dry_run: bool) -> bool:
         print(f"  SKIP {path.name} (already renamed)")
         return False
 
-    col = find_timestamp_column(path)
+    sep = sniff_delimiter(path)
+    col = find_timestamp_column(path, sep)
     if col is None:
         print(f"  SKIP {path.name} (no timestamp column, expected one of {TIMESTAMP_COLUMNS})")
         return False
 
     ts = pd.to_datetime(
-        pd.read_csv(path, usecols=[col])[col], utc=True, format="mixed", errors="coerce"
+        pd.read_csv(path, usecols=[col], sep=sep, encoding="utf-8-sig")[col],
+        utc=True, format="mixed", errors="coerce",
     ).dropna()
     if ts.empty:
         print(f"  SKIP {path.name} (no parseable timestamps in '{col}')")
