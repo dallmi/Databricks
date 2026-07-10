@@ -5,7 +5,9 @@ the box without any AppInsights export.
 Emits data/site_pageviews.parquet with the SAME columns build_site_parquet.py
 produces from a real export, for one site ("News and events"): ~13 months of
 page views grouped into sessions, with HR division/region, content type,
-language (from URL), time-on-page and CammsTrackingID on the News articles.
+language (from URL), time-on-page, CammsTrackingID on the News articles, and
+staggered publishing dates with age-weighted views (burst + decay) so the
+Content Lifecycle tab shows realistic curves.
 
 Run:  python generate_demo_data.py
 """
@@ -25,27 +27,39 @@ SITE_ID = "5313b145-5ead-43ba-b317-6955e804881a"
 REF_TODAY = datetime(2026, 7, 1)
 START = REF_TODAY - timedelta(days=395)  # ~13 months so 12mo trend + prior-period MoM both have data
 
-# --- Page catalogue: (name, content_type, language, base_popularity) ----------
+# --- Page catalogue: (name, content_type, language, base_popularity, publish_offset) ---
+# publish_offset = days from START; negative = published before the data window
+# (evergreen). Views are weighted by content age so news burst after publish and
+# decay — this is what the Content Lifecycle tab visualises.
 PAGES = [
-    ("Q1 2026 Results Announced",        "Article",  "EN", 1.00),
-    ("Q1 2026 Ergebnisse",               "Article",  "DE", 0.62),
-    ("CEO Town Hall Recording",          "Video",    "EN", 0.78),
-    ("New Operating Model Explained",    "Article",  "EN", 0.71),
-    ("Sustainability Report 2025 (PDF)", "Download", "EN", 0.55),
-    ("Nachhaltigkeitsbericht 2025",      "Download", "DE", 0.34),
-    ("Leadership Changes Q2",            "Article",  "EN", 0.66),
-    ("Rapport annuel 2025",              "Download", "FR", 0.22),
-    ("Employee Benefits Update",         "Article",  "EN", 0.58),
-    ("Cyber Security Awareness Week",    "Article",  "EN", 0.49),
-    ("Relazione trimestrale",            "Article",  "IT", 0.15),
-    ("Office Reopening Guidelines",      "Article",  "EN", 0.44),
-    ("Innovation Awards 2026",           "Article",  "EN", 0.52),
-    ("Diversity & Inclusion Panel",      "Video",    "EN", 0.41),
-    ("Town Hall — Slides (PDF)",         "Download", "EN", 0.38),
-    ("Year in Review 2025",              "Video",    "EN", 0.47),
-    ("Volunteering Day Highlights",      "Article",  "EN", 0.29),
-    ("Nouveau modèle opérationnel",      "Article",  "FR", 0.19),
+    ("Q1 2026 Results Announced",        "Article",  "EN", 1.00, 318),
+    ("Q1 2026 Ergebnisse",               "Article",  "DE", 0.62, 318),
+    ("CEO Town Hall Recording",          "Video",    "EN", 0.78, 254),
+    ("New Operating Model Explained",    "Article",  "EN", 0.71,  30),
+    ("Sustainability Report 2025 (PDF)", "Download", "EN", 0.55, 273),
+    ("Nachhaltigkeitsbericht 2025",      "Download", "DE", 0.34, 273),
+    ("Leadership Changes Q2",            "Article",  "EN", 0.66, 353),
+    ("Rapport annuel 2025",              "Download", "FR", 0.22, 277),
+    ("Employee Benefits Update",         "Article",  "EN", 0.58, -30),
+    ("Cyber Security Awareness Week",    "Article",  "EN", 0.49, 122),
+    ("Relazione trimestrale",            "Article",  "IT", 0.15, 323),
+    ("Office Reopening Guidelines",      "Article",  "EN", 0.44, -90),
+    ("Innovation Awards 2026",           "Article",  "EN", 0.52, 365),
+    ("Diversity & Inclusion Panel",      "Video",    "EN", 0.41, 233),
+    ("Town Hall — Slides (PDF)",         "Download", "EN", 0.38, 254),
+    ("Year in Review 2025",              "Video",    "EN", 0.47, 197),
+    ("Volunteering Day Highlights",      "Article",  "EN", 0.29,   9),
+    ("Nouveau modèle opérationnel",      "Article",  "FR", 0.19,  30),
 ]
+
+
+def age_factor(age_days: float, content_type: str) -> float:
+    """Interest in a page as a function of its age: burst after publish,
+    fast decay over ~2 weeks, then a slow tail (Downloads stay referenced)."""
+    if age_days < 0:
+        return 0.0
+    tail = 0.30 if content_type == "Download" else 0.12
+    return 6.0 * np.exp(-age_days / 4.0) + 1.2 * np.exp(-age_days / 45.0) + tail
 
 DIVISIONS = [
     ("Investment Bank",              0.27),
@@ -84,7 +98,15 @@ def weighted_choice(pairs):
 def main():
     page_ids = [str(uuid.UUID(bytes=bytes(RNG.integers(0, 256, size=16, dtype=np.uint8)))) for _ in PAGES]
     pop = np.array([p[3] for p in PAGES], dtype=float)
-    pop = pop / pop.sum()
+    pub_dt = {i: START + timedelta(days=p[4], hours=9) for i, p in enumerate(PAGES)}
+
+    # Per-day page weights: popularity x age_factor(day - publish_day).
+    days_total = (REF_TODAY - START).days
+    day_page_w = np.zeros((days_total, len(PAGES)))
+    for d in range(days_total):
+        for i, p in enumerate(PAGES):
+            day_page_w[d, i] = pop[i] * age_factor(d - p[4], p[1])
+    day_page_w = day_page_w / day_page_w.sum(axis=1, keepdims=True)
 
     div_labels, div_p = weighted_choice(DIVISIONS)
     reg_labels, reg_p = weighted_choice(REGIONS)
@@ -116,9 +138,9 @@ def main():
         n_views = 1 + int(RNG.poisson(1.1))  # ~bounce-heavy: many 1-2 page sessions
         n_views = min(n_views, 6)
         t = start
-        chosen = RNG.choice(len(PAGES), size=n_views, p=pop)
+        chosen = RNG.choice(len(PAGES), size=n_views, p=day_page_w[int(sess_days[s])])
         for vi, pidx in enumerate(chosen):
-            name, ct, lang, _ = PAGES[pidx]
+            name, ct, lang = PAGES[pidx][:3]
             has_tid = ct == "Article"  # only News articles carry a CammsTrackingID
             rows.append({
                 "view_id": str(uuid.uuid4()),
@@ -132,6 +154,7 @@ def main():
                 "site_name": SITE_NAME,
                 "content_type": ct,
                 "content_owner": "Group Internal Communications",
+                "publishing_date": pub_dt[int(pidx)],
                 "language": lang,
                 "gpn": user_gpn[u],
                 "hr_division": user_div[u],

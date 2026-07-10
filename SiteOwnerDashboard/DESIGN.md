@@ -39,6 +39,44 @@ temporal HR join. It then denormalises, derives `language`, filters to one site.
 Reference date = `MAX(timestamp)` in the data. Timeframe presets
 (30d/90d/YTD/12mo/All) and the previous period are computed relative to it.
 
+## Content Lifecycle tab (pageViews only)
+
+Uses `publishing_date` (from `CustomProps.PublishingDate`, normalised to
+TIMESTAMP via `TRY_CAST` at load). If the column is missing or all-NULL the tab
+shows an empty state; everything else is unaffected.
+
+- KPI row: Pages Published (in window) · Median 1st-Week Reach (visits in first
+  7 days; only pages whose first week lies fully inside the window) · Fresh
+  Content Share (views on ≤ 30d-old content, of views with a known publish
+  date) · Evergreen Share (> 90d).
+- **Decay chart**: views per age bucket ÷ observable page-days in that bucket —
+  exposure-normalised so a page published late in the window doesn't deflate
+  old-age buckets it never reached.
+- **Cadence chart**: monthly stacked views (fresh ≤ 30d dark grey, older light
+  grey) + pages-published line (bronze, right axis).
+- **Published pages table**: publish date, age, first-7d visits, 7d share
+  (first week ÷ lifetime visits), window visits.
+
+## Audience & Sessions tab (pageViews only)
+
+- KPI row: New Visitors (first-ever visit ≥ window start) · Returning Share ·
+  Bounce Rate (single-page sessions; **delta colour inverted**) · Pages/Session ·
+  Visits/Visitor. Deltas vs. prior equal-length window.
+- New vs. returning stacked monthly bars (full history; "new" = first ever
+  visit in that month — computed within the current language scope).
+- Visit-frequency and session-depth distribution bars.
+- Entry-pages table: `arg_min(page_id, timestamp)` per session → entries,
+  share, bounce rate, avg depth.
+
+## Rendering model
+
+Filter changes mark all tabs dirty and re-render only the active tab; hidden
+tabs render lazily on switch (Chart.js canvases can't size inside
+`display:none`). The XLSX export recomputes any still-dirty dataset first, so
+the workbook always matches the current filters. Column presence is detected
+via `DESCRIBE` at load — missing `hr_*` shows a hint in the Division donut,
+missing `publishing_date` collapses the Lifecycle tab to its empty state.
+
 ## Phase 2 — customEvents (planned, additive)
 
 customEvents scopes to a site the **same way** (SiteName/SiteID/PageId in
