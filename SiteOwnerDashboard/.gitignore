@@ -1,0 +1,5 @@
+# Site data — exports and built parquets may contain GPN/Email; never commit.
+# Regenerate the demo with:  python generate_demo_data.py
+data/*.parquet
+data/*.csv
+data/*.xlsx

@@ -277,9 +277,10 @@ def build_clean_table(df: pd.DataFrame) -> pd.DataFrame:
     flat = flat.rename(columns=existing_renames)
 
     if "timestamp_utc" in flat.columns:
-        flat["timestamp_utc"] = pd.to_datetime(flat["timestamp_utc"], errors="coerce")
-        flat["timestamp_utc"] = flat["timestamp_utc"].dt.tz_localize("UTC")
-        flat["timestamp"] = flat["timestamp_utc"].dt.tz_convert(TIMEZONE)
+        # utc=True parses both naive strings (assumed UTC) and tz-aware ISO
+        # timestamps ending in 'Z' or with an offset — uniformly to UTC.
+        ts = pd.to_datetime(flat["timestamp_utc"], errors="coerce", utc=True)
+        flat["timestamp"] = ts.dt.tz_convert(TIMEZONE)
         flat = flat.drop(columns=["timestamp_utc"])
 
     if "publishing_date" in flat.columns:
