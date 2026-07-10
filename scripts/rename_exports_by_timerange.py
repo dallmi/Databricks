@@ -7,11 +7,11 @@ names like "query_data.csv". This script inspects every CSV in the input
 folder, determines the min and max timestamp inside the file, and renames
 it to:
 
-    Digital_<minTimestamp>_<maxTimestamp>.csv
-    e.g. Digital_20250601-000000_20250630-235959.csv
+    Digital_<minDate>_<maxDate>.csv
+    e.g. Digital_20250601_20250630.csv
 
 Timestamps are taken from the "timestamp [UTC]" column (Azure Portal CSV
-export) or "timestamp" as fallback, and formatted as YYYYMMDD-HHMMSS in UTC.
+export) or "timestamp" as fallback, and formatted as YYYYMMDD in UTC.
 
 Usage:
     # Rename all CSVs in input/ (default)
@@ -35,8 +35,8 @@ from pathlib import Path
 import pandas as pd
 
 TIMESTAMP_COLUMNS = ["timestamp [UTC]", "timestamp"]
-RENAMED_PATTERN = re.compile(r"^Digital_\d{8}-\d{6}_\d{8}-\d{6}\.csv$")
-FMT = "%Y%m%d-%H%M%S"
+RENAMED_PATTERN = re.compile(r"^Digital_\d{8}_\d{8}\.csv$")
+FMT = "%Y%m%d"
 
 
 def find_timestamp_column(path: Path) -> str | None:
