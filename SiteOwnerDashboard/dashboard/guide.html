@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Site Owner Dashboard — Guide</title>
+<style>
+  :root {
+    --primary: #E60000;
+    --primary-dark: #8A000A;
+    --black: #000000;
+    --white: #FFFFFF;
+    --grey-1: #CCCABC;
+    --grey-3: #8E8D83;
+    --grey-4: #7A7870;
+    --grey-5: #5A5D5C;
+    --grey-6: #404040;
+    --info: #0C7EC6;
+    --bg: #F7F7F5;
+    --surface: #ECEBE4;
+    --surface-alt: #F5F0E1;
+    --radius: 2px;
+    --font-sans: "Frutiger 45 Light", "Frutiger", "Helvetica Neue", Helvetica, Arial, "Segoe UI", Roboto, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font-sans); background: var(--bg); color: var(--grey-6); font-size: 16px; line-height: 1.5; }
+
+  /* position:sticky is screen-only: Safari's real "Save as PDF" writer can silently
+     emit an empty content stream when a sticky element exists anywhere in the DOM. */
+  .top {
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--white); border-bottom: 2px solid var(--primary);
+    padding: 0.7rem 1.25rem;
+  }
+  @media screen {
+    .top { position: sticky; top: 0; z-index: 10; }
+  }
+  .top .brand { display: flex; align-items: center; gap: 0.6rem; font-size: 1.05rem; color: var(--black); text-decoration: none; }
+  .top .brand::before { content: ""; display: block; width: 4px; height: 1.5rem; background: var(--primary); }
+  .top .brand b { font-weight: 700; }
+  .top .brand span { color: var(--grey-4); font-weight: 400; }
+  .top-actions { display: flex; gap: 0.5rem; }
+  .btn {
+    display: inline-block; padding: 0.45rem 0.95rem; font-family: var(--font-sans); font-size: 0.85rem; font-weight: 600;
+    border: 1px solid var(--grey-1); border-radius: var(--radius); background: var(--white); color: var(--grey-6);
+    text-decoration: none; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--grey-4); }
+  .btn-primary { background: var(--primary); border-color: var(--primary); color: var(--white); }
+  .btn-primary:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
+
+  main { background: var(--white); }
+  .guide { max-width: 880px; margin: 0; padding: 2rem 1.5rem 4rem 2rem; }
+
+  .guide-cover { padding: 1.25rem 0 1.9rem; border-bottom: 2px solid var(--primary); margin-bottom: 2.25rem; }
+  .kicker { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--primary); }
+  .guide-cover h1 { font-size: 2.5rem; font-weight: 300; line-height: 1.12; color: var(--black); margin: 0.4rem 0 0.8rem; letter-spacing: -0.01em; }
+  .guide-cover p { font-size: 1rem; color: var(--grey-5); max-width: 48rem; }
+  .guide-meta { margin-top: 1rem; font-size: 0.85rem; color: var(--grey-4); }
+  .guide-meta b { color: var(--grey-6); }
+
+  .step { display: grid; grid-template-columns: 2.4rem 1fr; gap: 0 1.1rem; margin-bottom: 2.75rem; align-items: start; }
+  .step-num {
+    width: 2.4rem; height: 2.4rem; display: flex; align-items: center; justify-content: center;
+    background: var(--primary); color: var(--white); border-radius: var(--radius);
+    font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums;
+  }
+  .step-body h2 { font-size: 1.3rem; font-weight: 600; color: var(--black); margin: 0.15rem 0 0.55rem; line-height: 1.25; }
+  .step-body p { font-size: 0.95rem; color: var(--grey-6); margin: 0 0 0.6rem; }
+  .step-body ul { margin: 0.2rem 0 0.7rem; padding-left: 1.15rem; }
+  .step-body li { font-size: 0.92rem; color: var(--grey-6); margin-bottom: 0.25rem; }
+  .step-body b { color: var(--black); }
+  .shot { margin-top: 0.5rem; border: 1px solid var(--grey-1); border-radius: var(--radius); overflow: hidden; background: var(--white); box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+  .shot img { display: block; width: 100%; height: auto; }
+  .cap { font-size: 0.78rem; color: var(--grey-4); margin-top: 0.45rem; margin-bottom: 0.9rem; }
+
+  /* Glossary term links inside the guide text */
+  a.term { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--grey-3); cursor: help; }
+  a.term:hover { color: var(--black); border-bottom-color: var(--primary); }
+
+  .tip { background: var(--surface-alt); border-left: 3px solid var(--primary); border-radius: var(--radius); padding: 0.95rem 1.15rem; margin: 2rem 0 0; font-size: 0.9rem; color: var(--grey-6); }
+  .tip b { color: var(--black); }
+
+  /* --- Glossary --- */
+  .gloss-h { font-size: 1.6rem; font-weight: 300; color: var(--black); margin: 0.5rem 0 0.3rem; padding-top: 2rem; border-top: 2px solid var(--primary); }
+  .gloss-sub { font-size: 0.9rem; color: var(--grey-4); margin-bottom: 1.4rem; }
+  .gloss-group { font-size: 1.05rem; font-weight: 600; color: var(--black); margin: 1.6rem 0 0.4rem; }
+  dl.gloss { margin: 0; }
+  dl.gloss > div { display: grid; grid-template-columns: 200px 1fr; gap: 0 1.25rem; padding: 0.45rem 0.5rem; border-bottom: 1px solid var(--surface); border-radius: var(--radius); }
+  dl.gloss > div:nth-child(even) { background: #F8F7F2; }
+  dl.gloss dt { font-size: 0.88rem; font-weight: 700; color: var(--black); }
+  dl.gloss dd { font-size: 0.88rem; color: var(--grey-6); }
+  dl.gloss dd .f { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.8rem; color: var(--grey-5); white-space: nowrap; }
+  dl.gloss > div:target { background: var(--surface-alt); outline: 1px solid var(--primary); }
+  dl.gloss > div:target dt { color: var(--primary-dark); }
+  /* land targets below the sticky header */
+  dl.gloss > div { scroll-margin-top: 4.5rem; }
+
+  @media (max-width: 700px) {
+    .guide-cover h1 { font-size: 1.9rem; }
+    dl.gloss > div { grid-template-columns: 1fr; }
+    dl.gloss dt { margin-bottom: 0.15rem; }
+  }
+  @media print {
+    .no-print { display: none !important; }
+    body, main { background: var(--white); }
+    .guide { max-width: none; padding: 0; }
+    /* CSS Grid + break-inside:avoid is a known Chromium print bug — fall back to
+       block flow for print only; screen keeps the grid. */
+    .step { display: block; }
+    .step-num { display: inline-flex; margin-bottom: 0.5rem; }
+    dl.gloss > div { break-inside: avoid; page-break-inside: avoid; }
+    .shot, .tip { break-inside: avoid; page-break-inside: avoid; }
+    .guide-cover { break-after: avoid; }
+    h2, .gloss-h, .gloss-group { break-after: avoid; }
+    a { color: inherit; text-decoration: none; }
+    a.term { border-bottom: none; }
+    html { -webkit-print-color-adjust: exact; color-adjust: exact; print-color-adjust: exact; }
+    @page { margin: 12mm 12mm 14mm; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top no-print">
+  <a class="brand" href="./dashboard.html"><b>Site Analytics</b> <span>Owner Dashboard Guide</span></a>
+  <div class="top-actions">
+    <a class="btn" href="#glossary">Glossary</a>
+    <button class="btn btn-primary" onclick="window.print()">Print / PDF</button>
+    <a class="btn" href="./dashboard.html">Open the dashboard</a>
+  </div>
+</header>
+
+<main>
+<div class="guide">
+
+  <section class="guide-cover">
+    <div class="kicker">Site Analytics · Owner Dashboard · Quick Guide</div>
+    <h1>How to read your site dashboard — in five minutes</h1>
+    <p>The dashboard shows how your SharePoint site is consumed: how much traffic it gets, who reads it,
+    how new content performs over its lifetime, and whether your audience keeps coming back. It runs
+    entirely in your browser on one Parquet extract of your site's page views.</p>
+    <div class="guide-meta">Open <b>dashboard.html</b> in Chrome or Edge. Every dotted-underlined term in this
+    guide links to its definition in the <a class="term" href="#glossary">Glossary</a> at the end. Save this
+    guide as a PDF via <b>Print / PDF</b> in the top right.</div>
+  </section>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <h2>Set the analysis window</h2>
+      <p>The header controls the time window for <b>everything</b> on all three tabs. Use the presets
+      (30d / 90d / YTD / 12mo / All) or pick a custom <b>from – to</b> range; the <b>Language</b> filter
+      restricts every number to one content language (derived from the page URL). The green <b>Ready</b>
+      dot confirms all sections rendered; <b>Export XLSX</b> writes the tables and KPIs of all tabs into
+      one corporate-formatted Excel workbook.</p>
+      <div class="shot"><img src="img/guide/shot-header.png" alt="Dashboard header with timeframe presets, custom range, language filter and XLSX export"></div>
+      <div class="cap">The header — timeframe presets, custom range, language filter, guide, XLSX export and the status dot. The active preset is highlighted in red.</div>
+      <p>Every KPI compares the selected window against the <a class="term" href="#g-prior-period">prior
+      equal-length period</a> — the ▲/▼ deltas below the numbers. Three tabs organise the analysis:
+      <b>Overview</b> (traffic and pages), <b>Content Lifecycle</b> (how content earns its reach) and
+      <b>Audience &amp; Sessions</b> (who comes, and how they behave).</p>
+      <div class="shot"><img src="img/guide/shot-tabs.png" alt="The three dashboard tabs"></div>
+      <div class="cap">One question per tab — traffic, content performance, audience behaviour.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <h2>Read the headline numbers</h2>
+      <p>The Overview opens with five KPIs. Counts sit on the left, behaviour on the right — a rate is
+      only as interesting as the counts behind it, so always read both.</p>
+      <ul>
+        <li><b>Reach</b> — <a class="term" href="#g-page-views">Page Views</a>,
+        <a class="term" href="#g-visits">Page Visits</a> and
+        <a class="term" href="#g-unique-visitors">Unique Visitors</a>: how much traffic, in how many
+        sessions, from how many people.</li>
+        <li><b>Behaviour</b> — <a class="term" href="#g-avg-session">Avg. Session</a> (engaged time) and
+        <a class="term" href="#g-engagement">Engagement</a> (unique ÷ visits): do people spend time, and
+        is traffic broad or driven by a few heavy users?</li>
+      </ul>
+      <div class="shot"><img src="img/guide/shot-kpis.png" alt="Five overview KPIs: Page Views, Page Visits, Unique Visitors, Avg. Session, Engagement"></div>
+      <div class="cap">The KPI strip — each delta compares against the prior equal-length period.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <h2>Follow the traffic over time</h2>
+      <p><b>Traffic over time</b> shows monthly bars for the full history — the selected window is
+      emphasised in dark grey, the rest stays as light-grey context, so a "good" quarter is always judged
+      against what came before. Toggle between <b>Visits</b> and <b>Unique</b> to separate activity
+      growth from audience growth.</p>
+      <div class="shot"><img src="img/guide/shot-traffic.png" alt="Monthly traffic bars with the selected window highlighted"></div>
+      <div class="cap">Monthly visits — dark bars are the selected window, light bars are context.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <h2>Know your audience mix</h2>
+      <p><b>Audience by Division</b> splits visits by the reader's HR division — it answers whether your
+      site reaches the whole organisation or one silo. It needs the optional HR enrichment at build time;
+      without it the card explains what is missing instead of guessing.</p>
+      <div class="shot"><img src="img/guide/shot-division.png" alt="Audience by division donut"></div>
+      <div class="cap">Share of visits by division — each division keeps the same grey across all dashboards.</div>
+      <p><b>Content Type</b> shows what kind of content carries the traffic — articles, videos,
+      downloads. A download-heavy mix means your site is used as a reference archive; an article-heavy
+      mix means it is read as news.</p>
+      <div class="shot"><img src="img/guide/shot-contenttype.png" alt="Content type donut"></div>
+      <div class="cap">Share of page views by content type.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-body">
+      <h2>Rank your pages</h2>
+      <p><b>Top &amp; Bottom Pages</b> shows the 5 strongest and 5 weakest pages side by side — switch the
+      ranking metric (Visits, Page Views, Unique Visitors, Engagement, Avg time on page) to ask different
+      questions. A page high on views but low on avg time is being opened and abandoned.</p>
+      <div class="shot"><img src="img/guide/shot-ranking.png" alt="Top 5 and bottom 5 pages by the selected metric"></div>
+      <div class="cap">Top / Bottom 5 — same metric, both ends of the ranking. The dropdown changes the metric.</div>
+      <p>The <b>Pages table</b> lists every page with views, visits, unique visitors, engagement, avg
+      time, a weekly trend sparkline and the <a class="term" href="#g-mom">MoM</a> delta. Click any column
+      header to sort — sorting by MoM surfaces the risers and fallers instantly.</p>
+      <div class="shot"><img src="img/guide/shot-pagestable.png" alt="Pages performance table with sparklines and MoM deltas"></div>
+      <div class="cap">Every page on the site — the sparkline shows the weekly shape, the MoM column the direction.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">6</div>
+    <div class="step-body">
+      <h2>See how content earns its reach</h2>
+      <p>The <b>Content Lifecycle</b> tab needs a publish date per page (from
+      <span style="font-family:ui-monospace,Menlo,monospace;font-size:0.85em;">PublishingDate</span> in the
+      export). Its KPIs: pages published in the window, the
+      <a class="term" href="#g-first-week">Median 1st-Week Reach</a>, and how the traffic splits between
+      <a class="term" href="#g-fresh">fresh</a> and <a class="term" href="#g-evergreen">evergreen</a> content.</p>
+      <div class="shot"><img src="img/guide/shot-lifecycle-kpis.png" alt="Lifecycle KPIs: pages published, median first-week reach, fresh and evergreen share"></div>
+      <div class="cap">Lifecycle KPIs — fresh vs. evergreen tells you whether your site lives off new publishing or its archive.</div>
+      <p><b>Content decay</b> shows the average daily views a page gets on each day after publication —
+      the shape every news site has: a launch burst, a fast decay over the first two weeks, then a long
+      tail. The curve is <a class="term" href="#g-normalised">exposure-normalised</a>, so a page published
+      late in the window doesn't distort the old-age buckets. Read it to decide how long a story stays on
+      the homepage: once the curve flattens, the slot is better spent on the next story.</p>
+      <div class="shot"><img src="img/guide/shot-decay.png" alt="Content decay chart: average daily views per page by content age"></div>
+      <div class="cap">Content decay — most of a page's lifetime reach arrives in its first week.</div>
+      <p><b>Publishing cadence vs. earned traffic</b> overlays monthly views (split into fresh ≤ 30d,
+      dark, vs. older content, light) with the number of pages published (bronze line, right axis). If
+      the dark share shrinks while publishing stays flat, new content is underperforming; if total
+      traffic holds while publishing drops, the archive is carrying the site.</p>
+      <div class="shot"><img src="img/guide/shot-cadence.png" alt="Publishing cadence vs. earned traffic combo chart"></div>
+      <div class="cap">Cadence vs. traffic — does publishing effort translate into fresh-content views?</div>
+      <p>The <b>Published pages table</b> gives the per-page view: publish date, age,
+      <a class="term" href="#g-first-week">first-7-day visits</a>, the
+      <a class="term" href="#g-7d-share">7d share</a> and visits in the current window. Sort by First 7d
+      to compare launches; a high 7d share with few window visits marks a story that flared and died.</p>
+      <div class="shot"><img src="img/guide/shot-articles.png" alt="Published pages table with first-week reach and longevity"></div>
+      <div class="cap">Launch reach &amp; longevity per page — sortable like every table in the dashboard.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">7</div>
+    <div class="step-body">
+      <h2>Understand loyalty…</h2>
+      <p>The <b>Audience &amp; Sessions</b> tab answers "do people come back?". Its KPIs:
+      <a class="term" href="#g-new-visitor">New Visitors</a>, <a class="term" href="#g-returning">Returning
+      Share</a>, <a class="term" href="#g-bounce">Bounce Rate</a> (note: its delta colours are inverted —
+      a falling bounce rate is shown green), Pages / Session and Visits / Visitor.</p>
+      <div class="shot"><img src="img/guide/shot-audience-kpis.png" alt="Audience KPIs: new visitors, returning share, bounce rate, pages per session, visits per visitor"></div>
+      <div class="cap">Audience KPIs — loyalty on the left, session behaviour on the right.</div>
+      <p><b>New vs. returning visitors</b> stacks both groups per month over the full history. A healthy
+      site converts the light segment (new) into the dark base (returning) over time — a base that stops
+      growing while new stays high means visitors sample the site once and don't return.</p>
+      <div class="shot"><img src="img/guide/shot-newret.png" alt="Monthly stacked bars of new and returning visitors"></div>
+      <div class="cap">New vs. returning per month — the dark base is your loyal audience.</div>
+      <p><b>Visit frequency</b> distributes visitors by how often they came in the window
+      (1 / 2 / 3–5 / 6–10 / 10+ visits) — the direct measure of habit.</p>
+      <div class="shot"><img src="img/guide/shot-freq.png" alt="Visit frequency distribution"></div>
+      <div class="cap">Visits per visitor — the further right the mass sits, the stronger the reading habit.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">8</div>
+    <div class="step-body">
+      <h2>…and how sessions move through the site</h2>
+      <p><b>Session depth</b> distributes sessions by pages viewed (1 / 2 / 3–5 / 6+). The 1-page bar is
+      your <a class="term" href="#g-bounce">bounce</a> volume; everything to its right is journeys.</p>
+      <div class="shot"><img src="img/guide/shot-depth.png" alt="Session depth distribution"></div>
+      <div class="cap">Pages per session — depth beyond the entry page shows the site's internal pull.</div>
+      <p>The <b>Entry pages table</b> shows where sessions <i>start</i> — which is often not your top
+      page. Each entry page lists its entries, share, bounce rate and average session depth. An entry
+      page with a high bounce rate is a dead end: readers land there (from a link, an email, search) and
+      leave without touching the rest of the site — fix it with related-content links.</p>
+      <div class="shot"><img src="img/guide/shot-entry.png" alt="Entry pages table with entries, share, bounce and average depth"></div>
+      <div class="cap">Where sessions start — sort by Bounce to find the dead ends, by Entries to find the front doors.</div>
+    </div>
+  </div>
+
+  <div class="tip"><b>Tip:</b> the fastest route to a stakeholder answer is always the same three clicks —
+  set the timeframe, pick the language if it matters, then <b>Export XLSX</b>. The workbook mirrors what
+  you see across all tabs (KPIs, Pages, Audience, Content Lifecycle) in the corporate report format.
+  <i>Screenshots in this guide show generated demo data, not production numbers.</i></div>
+
+  <!-- ================= GLOSSARY ================= -->
+  <h2 class="gloss-h" id="glossary">Glossary</h2>
+  <div class="gloss-sub">Definitions match the dashboard's queries and the XLSX export.
+  Dotted-underlined terms throughout the guide link here.</div>
+
+  <div class="gloss-group">Reach &amp; Behaviour</div>
+  <dl class="gloss">
+    <div id="g-page-views"><dt>Page Views</dt><dd>Total page loads in the window. One person re-opening a page counts each time.</dd></div>
+    <div id="g-visits"><dt>Page Visits (Sessions)</dt><dd>Distinct browsing sessions with at least one page view. One visitor can have many sessions.</dd></div>
+    <div id="g-unique-visitors"><dt>Unique Visitors</dt><dd>Distinct people in the window, counted via the telemetry user identifier. This is a device-based identifier — one person on two devices counts twice, so treat it as an upper bound on distinct employees.</dd></div>
+    <div id="g-avg-session"><dt>Avg. Session</dt><dd>Mean engaged time per session, from the per-page time-on-page (gap to the next page view, capped at 30 minutes; the last page of a session has no measurable time). <span class="f">AVG(Σ time-on-page per session)</span></dd></div>
+    <div id="g-engagement"><dt>Engagement</dt><dd>Breadth of the audience relative to activity: 1.0 means every visit came from a different person; low values mean few people visiting often. <span class="f">Unique Visitors ÷ Visits</span></dd></div>
+    <div id="g-mom"><dt>MoM</dt><dd>Change vs. the <a class="term" href="#g-prior-period">prior equal-length period</a>, as a percentage. Shown per page in the Pages table and under every KPI.</dd></div>
+    <div id="g-prior-period"><dt>Prior equal-length period</dt><dd>The window immediately before the selected one, with the same length (e.g. 90d selected → compared against the 90d before it). "All" has no prior period, so deltas show "–".</dd></div>
+    <div id="g-language"><dt>Language</dt><dd>Content language derived from the page URL segment (/en/ /de/ /fr/ /it/ → EN/DE/FR/IT, anything else → Other). The filter applies to every number on every tab.</dd></div>
+  </dl>
+
+  <div class="gloss-group">Content Lifecycle</div>
+  <dl class="gloss">
+    <div id="g-publish-date"><dt>Publish date</dt><dd>From the page's <span class="f">PublishingDate</span> property in the telemetry. Pages without it are excluded from the Lifecycle tab (and counted as "older" in the cadence chart); if no page has one, the tab shows an empty state.</dd></div>
+    <div id="g-first-week"><dt>First-7-day visits / Median 1st-Week Reach</dt><dd>Visits a page collects in the 7 days after its publish date — the standard launch metric. The KPI takes the median over pages published in the window whose first week is fully observable (no partial weeks, no survivor bias).</dd></div>
+    <div id="g-7d-share"><dt>7d share</dt><dd>How front-loaded a page's lifetime reach is. High share = news that flared and died; low share = evergreen. <span class="f">First-7-day visits ÷ lifetime visits</span></dd></div>
+    <div id="g-fresh"><dt>Fresh Content Share</dt><dd>Share of page views (with a known publish date) landing on content that was ≤ 30 days old at view time.</dd></div>
+    <div id="g-evergreen"><dt>Evergreen Share</dt><dd>Share of page views landing on content &gt; 90 days old at view time — the archive's contribution.</dd></div>
+    <div id="g-normalised"><dt>Exposure-normalised</dt><dd>The decay chart divides the views in each age bucket by the number of page-days observable at that age inside the window — so a page published 10 days before the window's end cannot drag down the 30-day bucket it never reached. <span class="f">views ÷ observable page-days</span></dd></div>
+  </dl>
+
+  <div class="gloss-group">Audience &amp; Sessions</div>
+  <dl class="gloss">
+    <div id="g-new-visitor"><dt>New Visitor</dt><dd>A visitor whose first-ever visit (in the whole dataset, within the current language scope) falls inside the selected window. Early months of the data history over-count "new" — nobody can be older than the data.</dd></div>
+    <div id="g-returning"><dt>Returning Share</dt><dd>Share of the window's visitors who were already seen before the window started. <span class="f">1 − New ÷ Visitors</span></dd></div>
+    <div id="g-bounce"><dt>Bounce Rate</dt><dd>Share of sessions that end after a single page view. Falling is good — the KPI's delta colours are inverted accordingly. <span class="f">1-page sessions ÷ sessions</span></dd></div>
+    <div id="g-entry-page"><dt>Entry Page</dt><dd>The first page of a session (earliest page view). The entry-page table aggregates sessions by where they started — entries, share of all sessions, bounce rate and average depth from that entry.</dd></div>
+    <div id="g-pages-session"><dt>Pages / Session</dt><dd>Average session depth. <span class="f">Page Views ÷ Sessions</span></dd></div>
+    <div id="g-visits-visitor"><dt>Visits / Visitor</dt><dd>Average visit frequency in the window. <span class="f">Sessions ÷ Unique Visitors</span></dd></div>
+  </dl>
+
+  <div class="gloss-group">Data Notes</div>
+  <dl class="gloss">
+    <div id="g-timezone"><dt>Timezone</dt><dd>All timestamps are Central European Time (CET/CEST), converted from UTC in the build pipeline.</dd></div>
+    <div id="g-division"><dt>Division / HR enrichment</dt><dd>The Audience-by-Division donut joins each view to the reader's HR division (temporal join on the personnel record). It requires the optional <span class="f">--hr</span> build flag; without it the card shows a hint instead.</dd></div>
+    <div id="g-window"><dt>Reference date</dt><dd>The newest timestamp in the data — presets (30d/90d/…) count back from it, not from today. A stale extract therefore never silently shows an empty "last 30 days".</dd></div>
+    <div id="g-one-site"><dt>One site per file</dt><dd>The dashboard shows exactly one SharePoint site — the KQL export is scoped by page URL. For another site, run the export + build again; the dashboard file itself is reusable unchanged.</dd></div>
+  </dl>
+
+</div>
+</main>
+
+<footer class="no-print" style="font-size:0.82rem;color:var(--grey-4);padding:1.25rem 2rem 2rem;background:var(--bg);">
+  Site Analytics — Owner Dashboard · <a href="./dashboard.html" style="color:var(--grey-5);">Open the dashboard</a>
+</footer>
+
+</body>
+</html>

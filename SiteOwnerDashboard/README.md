@@ -143,6 +143,8 @@ engagement, downloads, link types, component performance, video, search).
 | `scripts/build_standalone_dashboard.py` | dashboard + parquet + vendored libs → `output/site_dashboard_standalone.html` |
 | `scripts/vendor_libs.py` | Refresh `dashboard/vendor/` from the CDN (only on version bumps) |
 | `dashboard/dashboard.html` | The dashboard (DuckDB-WASM + Chart.js), loads `../output/` |
+| `dashboard/guide.html` | Illustrated user guide (steps + glossary, printable to PDF) — linked from the dashboard header |
+| `dashboard/img/guide/` | Guide screenshots (demo data) |
 | `dashboard/vendor/` | Vendored Chart.js / date adapter / ExcelJS for the standalone build |
 | `output/` | Built parquets + standalone HTML (gitignored — may contain GPN/Email) |
 | `DESIGN.md` | Design decisions + Phase-2 architecture |

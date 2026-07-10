@@ -22,6 +22,7 @@ scripts/vendor_libs.py on a machine with internet access.
 """
 import argparse
 import base64
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -133,6 +134,9 @@ def build(template_path: Path, parquet_dir: Path, output_path: Path) -> Path:
         print(f"Embedded {filename} as '{view}-parquet-b64' ({len(data) / 1024:.0f} KB)")
 
     html = inline_libs(html)
+
+    # The standalone file travels alone — drop the relative Guide link.
+    html = re.sub(r'<a class="btn" id="guideLink"[^>]*>Guide</a>\s*', "", html, count=1)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")
