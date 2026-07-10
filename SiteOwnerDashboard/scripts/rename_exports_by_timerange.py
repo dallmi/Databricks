@@ -13,7 +13,7 @@ it to:
 Timestamps are taken from the "timestamp [UTC]" column (Azure Portal CSV
 export) or "timestamp" as fallback, and formatted as YYYYMMDD in UTC.
 
-Usage:
+Usage (from SiteOwnerDashboard/):
     # Rename all CSVs in input/ (default)
     python scripts/rename_exports_by_timerange.py
 
@@ -22,6 +22,9 @@ Usage:
 
     # Dry run — show what would be renamed without touching anything
     python scripts/rename_exports_by_timerange.py --dry-run
+
+Without an explicit folder argument the script always targets
+SiteOwnerDashboard/input/, regardless of the current working directory.
 
 Files already matching the Digital_<min>_<max>.csv pattern are skipped,
 so the script is safe to re-run after dropping new chunks into input/.
@@ -37,6 +40,7 @@ import pandas as pd
 TIMESTAMP_COLUMNS = ["timestamp [UTC]", "timestamp"]
 RENAMED_PATTERN = re.compile(r"^Digital_\d{8}_\d{8}\.csv$")
 FMT = "%Y%m%d"
+DEFAULT_INPUT_DIR = Path(__file__).resolve().parent.parent / "input"
 
 
 def find_timestamp_column(path: Path) -> str | None:
@@ -83,8 +87,8 @@ def rename_file(path: Path, dry_run: bool) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     parser.add_argument(
-        "folder", nargs="?", default="input",
-        help="Folder containing the exported CSV chunks (default: input/)",
+        "folder", nargs="?", default=DEFAULT_INPUT_DIR,
+        help="Folder containing the exported CSV chunks (default: SiteOwnerDashboard/input/)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
