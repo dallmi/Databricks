@@ -6,26 +6,29 @@ build one Parquet, open one HTML file — DuckDB-WASM computes every KPI, chart
 and table in the browser. No server-side backend, no Databricks connection.
 
 ```
-export_site_pageviews.kql   AppInsights pageViews for ONE site (PageURL contains)
-        │  Export → CSV
+export_site_pageviews.kql          AppInsights pageViews for ONE site (PageURL contains)
+        │  Export → CSV → input/
         ▼
-build_site_parquet.py       flatten + HR-join + language-from-URL → data/site_pageviews.parquet
+scripts/process_site_pageviews.py  flatten + HR-join + language-from-URL → output/site_pageviews.parquet
         │
         ▼
-index.html                  DuckDB-WASM + Chart.js — loads the Parquet, renders the dashboard
+dashboard/dashboard.html           DuckDB-WASM + Chart.js — loads ../output/, renders the dashboard
+        │
+        ▼ (optional)
+scripts/build_standalone_dashboard.py → output/site_dashboard_standalone.html (single file, runs from file://)
 ```
 
 ## Quick start (demo — runs out of the box)
 
 ```bash
 pip install pandas duckdb pyarrow openpyxl numpy
-python generate_demo_data.py          # writes data/site_pageviews.parquet (fake "News and events")
+python scripts/generate_demo_data.py  # writes output/site_pageviews.parquet (fake "News and events")
 python -m http.server 8000
-# open http://localhost:8000/index.html
+# open http://localhost:8000/dashboard/dashboard.html
 ```
 
 The dashboard can't `fetch()` a Parquet over `file://`, so it must be served
-over HTTP (any static server works).
+over HTTP (any static server works) — or use the standalone build below.
 
 ## Real data — one site
 
@@ -35,21 +38,37 @@ over HTTP (any static server works).
    month-over-month deltas both have data). Run it in Azure Portal → Logs →
    **Export → CSV (all columns)**. Azure caps ~65k rows per export — narrow the
    window and export in chunks for large sites.
-2. **Build.** Drop the CSV into `data/` and run:
+2. **Build.** Drop the CSV into `input/` and run:
    ```bash
-   python build_site_parquet.py data/<export>.csv
+   python scripts/process_site_pageviews.py input/<export>.csv
    # optional HR enrichment (enables the Audience-by-Division donut):
-   python build_site_parquet.py data/<export>.csv --hr ../../SearchAnalytics/output/hr_history.parquet
+   python scripts/process_site_pageviews.py input/<export>.csv --hr ../SearchAnalytics/output/hr_history.parquet
    # re-filter locally by URL if you exported broadly:
-   python build_site_parquet.py data/<export>.csv --url-contains news-and-events
+   python scripts/process_site_pageviews.py input/<export>.csv --url-contains news-and-events
    ```
-3. **Open.** `python -m http.server 8000` → `http://localhost:8000/index.html`.
+3. **Open.** `python -m http.server 8000` → `http://localhost:8000/dashboard/dashboard.html`.
 
-`build_site_parquet.py` reuses the exact flatten / UTC→CET / GPN-normalise /
-CammsTrackingID-split / temporal-HR-join logic from
+`scripts/process_site_pageviews.py` reuses the exact flatten / UTC→CET /
+GPN-normalise / CammsTrackingID-split / temporal-HR-join logic from
 [`../scripts/flatten_appinsights.py`](../scripts/flatten_appinsights.py), then
 denormalises fact + page dimension into one wide table and derives `language`
 from the PageURL (`/en/ /de/ /fr/ /it/` → EN/DE/FR/IT, else `Other`).
+
+## Standalone build (SharePoint / offline distribution)
+
+```bash
+python scripts/build_standalone_dashboard.py
+# → output/site_dashboard_standalone.html
+```
+
+One self-contained HTML that runs from `file://` — no server needed. The
+parquet is ZSTD-recompressed and embedded as a base64 data island; Chart.js,
+the date adapter and ExcelJS are inlined from `dashboard/vendor/` (no network
+needed behind the corporate proxy). Only DuckDB-WASM still loads from the CDN
+at open time. Same mechanism as the SearchAnalytics / CampaignWe standalones.
+The standalone embeds the site data (may contain GPN/Email) and is gitignored.
+To refresh the vendored libraries after a version bump:
+`python scripts/vendor_libs.py`.
 
 ## What the dashboard shows
 
@@ -106,20 +125,24 @@ equal-length period.
 ## Phase 2 — customEvents (clicks, downloads, video, search)
 
 The dashboard is built to grow. Drop a second Parquet
-`data/site_interactions.parquet` (built from the customEvents stream — clicks,
-downloads, video, on-site search for the same site) and a **Content &
+`output/site_interactions.parquet` (built from the customEvents stream —
+clicks, downloads, video, on-site search for the same site) and a **Content &
 Interactions** tab appears. Without that file the dashboard runs fully on
 pageViews alone — nothing to configure. See [`DESIGN.md`](DESIGN.md) for the
 `fact_interaction` schema and the analyses it unlocks (top/bottom pages by
 engagement, downloads, link types, component performance, video, search).
 
-## Files
+## Project layout
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
 | `export_site_pageviews.kql` | AppInsights export for one site (PageURL contains), raw customDimensions |
-| `build_site_parquet.py` | CSV/XLSX → `data/site_pageviews.parquet` (reuses the main pipeline) |
-| `generate_demo_data.py` | Fake single-site Parquet so the dashboard runs with no export |
-| `index.html` | The standalone dashboard (DuckDB-WASM + Chart.js) |
-| `data/` | Parquets land here (gitignored — may contain GPN/Email) |
+| `input/` | Raw CSV/XLSX exports land here (gitignored — may contain GPN/Email) |
+| `scripts/process_site_pageviews.py` | `input/` CSV/XLSX → `output/site_pageviews.parquet` (reuses the main pipeline) |
+| `scripts/generate_demo_data.py` | Fake single-site Parquet so the dashboard runs with no export |
+| `scripts/build_standalone_dashboard.py` | dashboard + parquet + vendored libs → `output/site_dashboard_standalone.html` |
+| `scripts/vendor_libs.py` | Refresh `dashboard/vendor/` from the CDN (only on version bumps) |
+| `dashboard/dashboard.html` | The dashboard (DuckDB-WASM + Chart.js), loads `../output/` |
+| `dashboard/vendor/` | Vendored Chart.js / date adapter / ExcelJS for the standalone build |
+| `output/` | Built parquets + standalone HTML (gitignored — may contain GPN/Email) |
 | `DESIGN.md` | Design decisions + Phase-2 architecture |

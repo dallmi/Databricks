@@ -20,7 +20,7 @@ dashboard — DuckDB-WASM does all aggregation in the browser. Reusable per site
 | 8 | **Phase 2 additive, dashboard works without it** | customEvents (`site_interactions.parquet`) is loaded only if present; its tab appears only then. Phase 1 is fully functional on pageViews alone. |
 
 ## Reused from the main pipeline
-`build_site_parquet.py` imports `read_input`, `flatten_appinsights`,
+`scripts/process_site_pageviews.py` imports `read_input`, `flatten_appinsights`,
 `build_clean_table`, `join_hr_data`, `build_fact_page_view`, `build_dim_page`
 from [`../scripts/flatten_appinsights.py`](../scripts/flatten_appinsights.py) —
 same customDimensions flatten, UTC→CET, GPN normalise, CammsTrackingID split and
@@ -82,7 +82,7 @@ missing `publishing_date` collapses the Lifecycle tab to its empty state.
 customEvents scopes to a site the **same way** (SiteName/SiteID/PageId in
 CustomProps) and shares `page_id` with pageViews → `dim_page` — **no
 CammsTrackingID needed** (customEvents doesn't carry it). A second export
-+ build produces `data/site_interactions.parquet`:
++ build produces `output/site_interactions.parquet`:
 
 **`fact_interaction`** — one row per interaction, `event_name` discriminates the
 family (as customEvents itself does):

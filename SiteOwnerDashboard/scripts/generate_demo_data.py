@@ -2,14 +2,16 @@
 Generate a realistic demo Parquet for the SiteOwnerDashboard so it runs out of
 the box without any AppInsights export.
 
-Emits data/site_pageviews.parquet with the SAME columns build_site_parquet.py
-produces from a real export, for one site ("News and events"): ~13 months of
-page views grouped into sessions, with HR division/region, content type,
-language (from URL), time-on-page, CammsTrackingID on the News articles, and
-staggered publishing dates with age-weighted views (burst + decay) so the
-Content Lifecycle tab shows realistic curves.
+Emits output/site_pageviews.parquet with the SAME columns
+process_site_pageviews.py produces from a real export, for one site
+("News and events"): ~13 months of page views grouped into sessions, with HR
+division/region, content type, language (from URL), time-on-page,
+CammsTrackingID on the News articles, and staggered publishing dates with
+age-weighted views (burst + decay) so the Content Lifecycle tab shows
+realistic curves.
 
-Run:  python generate_demo_data.py
+Run (from the SiteOwnerDashboard project root):
+    python scripts/generate_demo_data.py
 """
 
 from __future__ import annotations
@@ -182,7 +184,7 @@ def main():
     df["time_on_page_sec"] = tos
     df = df.drop(columns=["_seq"])
 
-    out = Path(__file__).resolve().parent / "data" / "site_pageviews.parquet"
+    out = Path(__file__).resolve().parents[1] / "output" / "site_pageviews.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out, index=False)
 

@@ -1,31 +1,31 @@
 """
 Build a single-site Parquet for the SiteOwnerDashboard.
 
-Thin wrapper around ../scripts/flatten_appinsights.py: reuses the exact same
-customDimensions flatten, UTC->CET, GPN-normalise, CammsTrackingID-split and
-temporal HR-join logic, then
+Thin wrapper around ../../scripts/flatten_appinsights.py (repo pipeline):
+reuses the exact same customDimensions flatten, UTC->CET, GPN-normalise,
+CammsTrackingID-split and temporal HR-join logic, then
 
   1. joins the fact with its page dimension (denormalised — one wide table),
   2. derives `language` from the PageURL (/en/ /de/ /fr/ /it/ segment),
   3. filters to ONE site (SiteName or SiteID),
 
-and writes SiteOwnerDashboard/data/site_pageviews.parquet — the single file the
-standalone dashboard loads via DuckDB-WASM.
+and writes SiteOwnerDashboard/output/site_pageviews.parquet — the single file
+the standalone dashboard loads via DuckDB-WASM.
 
-Usage:
+Usage (from the SiteOwnerDashboard project root; raw exports go in input/):
     # Site owner: export their site via export_site_pageviews.kql, then:
-    python build_site_parquet.py data/news_and_events.csv --site "News and events"
+    python scripts/build_site_parquet.py input/news_and_events.csv --site "News and events"
 
     # By SiteID instead of name:
-    python build_site_parquet.py data/export.csv --site-id 5313b145-...
+    python scripts/build_site_parquet.py input/export.csv --site-id 5313b145-...
 
     # HR enrichment (division/region donut). Optional — omit to skip:
-    python build_site_parquet.py data/export.csv --site "..." --hr /path/hr_history.parquet
+    python scripts/build_site_parquet.py input/export.csv --site "..." --hr /path/hr_history.parquet
 
     # No --site given: keeps every site present in the export (use when the KQL
     # already scoped to one site).
 
-Output: data/site_pageviews.parquet
+Output: output/site_pageviews.parquet
 """
 
 from __future__ import annotations
@@ -37,9 +37,11 @@ from pathlib import Path
 
 import pandas as pd
 
-# Reuse the canonical pipeline from ../scripts/flatten_appinsights.py
-SCRIPT_DIR = Path(__file__).resolve().parent
-PIPELINE_DIR = SCRIPT_DIR.parent / "scripts"
+# Reuse the canonical pipeline from ../../scripts/flatten_appinsights.py
+# (this file lives in SiteOwnerDashboard/scripts/, the repo pipeline in
+# Databricks/scripts/).
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+PIPELINE_DIR = PROJECT_DIR.parent / "scripts"
 if str(PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(PIPELINE_DIR))
 
@@ -129,7 +131,7 @@ def main():
     ap.add_argument("--site", help="SiteName to keep (case-insensitive exact match)")
     ap.add_argument("--site-id", help="SiteID to keep (alternative to --site)")
     ap.add_argument("--hr", help="Path to hr_history.parquet (optional, enables division donut)")
-    ap.add_argument("-o", "--output", help="Output parquet (default: data/site_pageviews.parquet)")
+    ap.add_argument("-o", "--output", help="Output parquet (default: output/site_pageviews.parquet)")
     args = ap.parse_args()
 
     input_path = Path(args.input)
@@ -137,14 +139,15 @@ def main():
         sys.exit(f"Input not found: {input_path}")
 
     hr_path = Path(args.hr) if args.hr else None
-    out_path = Path(args.output) if args.output else SCRIPT_DIR / "data" / "site_pageviews.parquet"
+    out_path = Path(args.output) if args.output else PROJECT_DIR / "output" / "site_pageviews.parquet"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Building from {input_path.name} ...")
     wide = build(input_path, hr_path, args.site, args.site_id, args.url_contains)
     wide.to_parquet(out_path, index=False)
     print(f"\nWrote {len(wide):,} rows -> {out_path}")
-    print("Open the dashboard:  python -m http.server 8000  ->  http://localhost:8000/index.html")
+    print("Open the dashboard:  python -m http.server 8000  ->  "
+          "http://localhost:8000/dashboard/dashboard.html")
 
 
 if __name__ == "__main__":

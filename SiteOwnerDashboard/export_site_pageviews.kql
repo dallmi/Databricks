@@ -1,8 +1,9 @@
 // =============================================================================
 // SiteOwnerDashboard — pageViews export for ONE site
 // =============================================================================
-// Returns customDimensions as an UNMODIFIED JSON string so build_site_parquet.py
-// applies its own flatten logic (same contract as ../kql/export_for_pipeline.kql).
+// Returns customDimensions as an UNMODIFIED JSON string so
+// scripts/process_site_pageviews.py applies its own flatten logic
+// (same contract as ../kql/export_for_pipeline.kql).
 //
 // Procedure:
 //   1. Set PageUrlFilter to a substring that identifies your site — matched
@@ -13,8 +14,8 @@
 //      period. Azure caps ~65k rows / export; page through by narrowing the
 //      window if your site is large.
 //   3. Azure Portal -> Logs -> run -> "Export -> CSV (all columns)".
-//   4. Drop the CSV into SiteOwnerDashboard/data/ and run:
-//        python build_site_parquet.py data/<export>.csv
+//   4. Drop the CSV into SiteOwnerDashboard/input/ and run:
+//        python scripts/process_site_pageviews.py input/<export>.csv
 //      (the KQL already scoped to one site, so --site is optional here.)
 // =============================================================================
 

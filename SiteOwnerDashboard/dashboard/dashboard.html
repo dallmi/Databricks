@@ -179,7 +179,7 @@
       <button class="tab" data-tab="lifecycle" onclick="switchTab('lifecycle')">Content Lifecycle</button>
       <button class="tab" data-tab="audience" onclick="switchTab('audience')">Audience &amp; Sessions</button>
       <!-- Phase 2: a "Content &amp; Interactions" tab is added here once
-           data/site_interactions.parquet (customEvents) is present. -->
+           output/site_interactions.parquet (customEvents) is present. -->
     </div>
   </div>
 
@@ -448,24 +448,40 @@ async function init(){
     console.error(e);
     document.getElementById('loading').innerHTML =
       `<div class="error-message"><b>Failed to load data.</b><br>${e.message}<br><br>
-       Generate the demo data with <code>python generate_demo_data.py</code> (or build a real site with
-       <code>python build_site_parquet.py &lt;export.csv&gt; --site "…"</code>), then serve with
-       <code>python -m http.server 8000</code>.</div>`;
+       Generate the demo data with <code>python scripts/generate_demo_data.py</code> (or build a real site with
+       <code>python scripts/build_site_parquet.py input/&lt;export&gt;.csv --site "…"</code>), then serve the
+       project root with <code>python -m http.server 8000</code> and open
+       <code>/dashboard/dashboard.html</code>.</div>`;
     setStatus('error','Error');
   }
 }
 
 async function loadData(){
+  // Parquets live in ../output/ (project layout: dashboard/ + output/), with
+  // fallbacks for serving from other roots.
   const base = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/,'');
-  const paths = [`${base}/data/`, `${window.location.origin}/data/`, `data/`];
+  const paths = [`${base}/../output/`, `${window.location.origin}/output/`, `../output/`, `output/`];
   async function reg(view,file,required){
+    // Standalone build (scripts/build_standalone_dashboard.py) embeds each parquet
+    // as a base64 data island (<script type="text/plain" id="<view>-parquet-b64">)
+    // so the file runs from file://. Read via textContent, not a JS string literal —
+    // a multi-MB literal is too large for the JS compiler.
+    const island = document.getElementById(`${view}-parquet-b64`);
+    if (island && island.textContent.trim()){
+      const bin = atob(island.textContent.trim());
+      const bytes = new Uint8Array(bin.length);
+      for (let i=0; i<bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      await db.registerFileBuffer(file, bytes);
+      await conn.query(`CREATE OR REPLACE VIEW ${view} AS SELECT * FROM read_parquet('${file}')`);
+      return true;
+    }
     for (const p of paths){ try {
       const resp = await fetch(`${p}${file}`); if (!resp.ok) continue;
       await db.registerFileBuffer(file, new Uint8Array(await resp.arrayBuffer()));
       await conn.query(`CREATE OR REPLACE VIEW ${view} AS SELECT * FROM read_parquet('${file}')`);
       return true;
     } catch(e){} }
-    if (required) throw new Error(`Could not load ${file}. Run generate_demo_data.py or build_site_parquet.py first.`);
+    if (required) throw new Error(`Could not load output/${file}. Run scripts/generate_demo_data.py or scripts/build_site_parquet.py first.`);
     return false;
   }
   await reg('pv','site_pageviews.parquet',true);
