@@ -1,0 +1,1103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<title>Site Analytics — Owner Dashboard</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script type="module">
+  import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm';
+  window.duckdb = duckdb;
+  window.dispatchEvent(new Event('duckdb-ready'));
+</script>
+
+<style>
+  /* Corporate Design System (Global Banking) — tokens mirror
+     Arbeit/design-system/corporate-design-system.css verbatim. */
+  :root {
+    --primary: #E60000; --primary-dark: #8A000A; --black: #000000; --white: #FFFFFF;
+    --grey-1: #CCCABC; --grey-2: #B8B3A2; --grey-3: #8E8D83; --grey-4: #7A7870; --grey-5: #5A5D5C; --grey-6: #404040;
+    --bordeaux-1: #BD000C; --bordeaux-2: #8A000A; --bordeaux-3: #620004;
+    --bronze-1: #B98E2C; --bronze-2: #946F29; --bronze-3: #6C5312;
+    --bg: #F7F7F5; --surface: #ECEBE4; --surface-alt: #F5F0E1; --row-alt: #F8F7F2;
+    --success: #6F7A1A; --success-bg: #F0F2E6; --warning: #E4A911; --warning-bg: #FDF6E3;
+    --danger: #BD000C; --danger-bg: #FBE6E7; --info: #0C7EC6; --info-bg: #E5F1F8;
+    --radius: 2px; --shadow-card: 0 1px 3px rgba(0,0,0,0.06); --shadow-hover: 0 2px 8px rgba(0,0,0,0.10);
+    --font-sans: "Frutiger 45 Light","Frutiger","Helvetica Neue",Helvetica,Arial,"Segoe UI",Roboto,system-ui,sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: var(--font-sans); background: var(--bg); color: var(--grey-6); line-height: 1.5;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+  /* Sticky topbar: header + tabs pinned together */
+  .topbar { position: sticky; top: 0; z-index: 100; }
+  .header { background: var(--white); color: var(--black); padding: 0.75rem 1.5rem; display: flex;
+    justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;
+    border-bottom: 2px solid var(--primary); box-shadow: var(--shadow-card); }
+  .header h1 { font-size: 1.25rem; font-weight: 300; padding-left: 0.75rem; border-left: 3px solid var(--primary);
+    color: var(--black); letter-spacing: -0.01em; }
+  .header h1 b { font-weight: 600; }
+  .header .sub { font-size: 0.75rem; color: var(--grey-4); margin-top: 0.15rem; padding-left: 0.75rem; }
+  .header-controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+
+  .seg { display: flex; border: 1px solid var(--grey-1); border-radius: var(--radius); overflow: hidden; }
+  .seg button { padding: 0.35rem 0.7rem; background: var(--white); border: none; border-right: 1px solid var(--grey-1);
+    cursor: pointer; font-family: var(--font-sans); font-size: 0.75rem; color: var(--grey-4); white-space: nowrap; transition: all 0.15s; }
+  .seg button:last-child { border-right: none; }
+  .seg button:hover { background: var(--surface); color: var(--grey-6); }
+  .seg button.active { background: var(--primary); color: var(--white); }
+
+  .field { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: var(--grey-4); }
+  .field select { font-family: var(--font-sans); padding: 0.35rem 0.5rem; border: 1px solid var(--grey-1);
+    border-radius: var(--radius); font-size: 0.75rem; color: var(--grey-6); background: var(--white); }
+  .field select:focus { outline: none; border-color: var(--primary); }
+  .field input[type=date] { font-family: var(--font-sans); padding: 0.3rem 0.4rem; border: 1px solid var(--grey-1);
+    border-radius: var(--radius); font-size: 0.72rem; color: var(--grey-6); background: var(--white); }
+  .field input[type=date]:focus { outline: none; border-color: var(--primary); }
+
+  .status { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; }
+  .status .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .status.loading { color: var(--grey-4); } .status.loading .dot { background: var(--warning); animation: pulse 1s infinite; }
+  .status.ok { color: var(--success); } .status.ok .dot { background: var(--success); }
+  .status.error { color: var(--danger); } .status.error .dot { background: var(--danger); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  .btn { padding: 0.4rem 0.85rem; border: 1px solid var(--grey-1); border-radius: var(--radius); font-family: var(--font-sans);
+    font-size: 0.8rem; cursor: pointer; background: var(--white); color: var(--grey-6); font-weight: 600; transition: all 0.15s; }
+  .btn:hover { background: var(--surface); border-color: var(--grey-3); }
+
+  .tabs { display: flex; gap: 0; background: var(--white); border-bottom: 1px solid var(--grey-1); padding: 0 1.5rem; }
+  .tab { padding: 0.6rem 1.25rem; cursor: pointer; font-size: 0.85rem; font-weight: 500; color: var(--grey-5);
+    border-bottom: 2px solid transparent; transition: all 0.15s; background: none; border-top: none; border-left: none; border-right: none; font-family: var(--font-sans); }
+  .tab:hover { color: var(--black); }
+  .tab.active { color: var(--black); border-bottom-color: var(--primary); font-weight: 600; }
+
+  .container { max-width: 1800px; margin: 0 auto; padding: 1.25rem 1.5rem; }
+  .tab-content { display: none; } .tab-content.active { display: block; }
+
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 0.75rem; margin-bottom: 1.25rem; }
+  .kpi-card { background: var(--white); border: 1px solid var(--grey-1); border-radius: var(--radius); box-shadow: var(--shadow-card);
+    padding: 0.85rem 1rem; position: relative; overflow: hidden; transition: box-shadow 0.2s; }
+  .kpi-card:hover { box-shadow: var(--shadow-hover); }
+  .kpi-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--grey-3); }
+  .kpi-card.highlight::before { background: var(--primary); }
+  .kpi-card.info::before { background: var(--info); }
+  .kpi-card.success::before { background: var(--success); }
+  .kpi-label { font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; color: var(--grey-4); margin-bottom: 0.3rem; }
+  .kpi-value { font-size: 1.55rem; font-weight: 300; color: var(--black); line-height: 1.15; }
+  .kpi-sub { font-size: 0.72rem; color: var(--grey-4); margin-top: 0.25rem; display: flex; align-items: center; gap: 0.3rem; }
+  .delta { font-weight: 600; } .delta.up { color: var(--success); } .delta.down { color: var(--bordeaux-1); } .delta.flat { color: var(--grey-4); }
+
+  .charts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
+  .chart-card { background: var(--white); border: 1px solid var(--grey-1); border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 1rem 1.1rem; min-width: 0; }
+  .chart-card.full-width { grid-column: 1 / -1; }
+  .chart-container { min-width: 0; }
+  .chart-title { font-size: 0.95rem; font-weight: 600; color: var(--black); margin-bottom: 0.85rem; padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--grey-1); display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  .chart-title .st { font-size: 0.7rem; color: var(--grey-4); font-weight: 400; }
+  .chart-container { position: relative; height: 230px; }
+  .chart-container.tall { height: 300px; }
+
+  .table-wrapper { background: var(--white); border: 1px solid var(--grey-1); border-radius: var(--radius); box-shadow: var(--shadow-card); margin-bottom: 1.25rem; overflow: hidden; }
+  .table-header { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; border-bottom: 1px solid var(--grey-1); gap: 1rem; }
+  .table-header h3 { font-size: 0.95rem; font-weight: 600; color: var(--black); }
+  .table-header .st { font-size: 0.7rem; color: var(--grey-4); font-weight: 400; }
+  .table-scroll { overflow-x: auto; max-height: 620px; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.8rem; color: var(--grey-6); }
+  thead th { position: sticky; top: 0; z-index: 10; background: var(--white); color: var(--black); font-weight: 600;
+    padding: 0.5rem 0.75rem; text-align: left; white-space: nowrap; cursor: pointer; border-top: 1px solid var(--black); border-bottom: 1px solid var(--black); }
+  thead th.num { text-align: right; }
+  thead th:hover { background: var(--surface); }
+  thead th .arr { color: var(--primary); font-size: 0.65rem; margin-left: 3px; }
+  tbody td { padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--surface); white-space: nowrap; }
+  tbody td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody td.name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+  tbody tr:nth-child(even) td { background: var(--row-alt); }
+  tbody tr:hover td { background: var(--surface); }
+  tbody tr:last-child td { border-bottom: 1px solid var(--black); }
+  .ct-badge { display: inline-block; padding: 0.05rem 0.4rem; border-radius: var(--radius); font-size: 0.68rem; font-weight: 600;
+    background: var(--surface); color: var(--grey-5); }
+
+  .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 4rem 2rem; gap: 0.75rem; text-align: center; background: var(--white);
+    border: 1px solid var(--grey-1); border-radius: var(--radius); box-shadow: var(--shadow-card); }
+  .empty-state h3 { font-size: 1rem; font-weight: 600; color: var(--black); }
+  .empty-state p { font-size: 0.8rem; color: var(--grey-4); max-width: 460px; }
+  .empty-state code { background: var(--surface); padding: 0.05rem 0.3rem; border-radius: var(--radius); }
+  .chart-empty { display: flex; align-items: center; justify-content: center; height: 100%;
+    color: var(--grey-4); font-size: 0.8rem; }
+
+  .loading-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60vh; gap: 1rem; }
+  .spinner { width: 38px; height: 38px; border: 3px solid var(--surface); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-text { color: var(--grey-4); font-size: 0.85rem; }
+  .error-message { background: var(--danger-bg); color: var(--danger); padding: 1rem 1.25rem; border-radius: var(--radius); margin: 2rem; font-size: 0.9rem; }
+  .error-message code { background: rgba(0,0,0,0.06); padding: 0.1rem 0.3rem; border-radius: var(--radius); }
+
+  @media (max-width: 900px) {
+    .charts-grid { grid-template-columns: 1fr; }
+    .header { padding: 0.5rem 1rem; }
+    .container { padding: 1rem; }
+  }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="header">
+      <div>
+        <h1><b id="siteTitle">Site Analytics</b></h1>
+        <div class="sub" id="siteSub">Page Analytics · Owner Dashboard</div>
+      </div>
+      <div class="header-controls">
+        <div class="seg" id="timeframeSeg">
+          <button data-tf="30d" onclick="setTimeframe('30d')">30d</button>
+          <button data-tf="90d" class="active" onclick="setTimeframe('90d')">90d</button>
+          <button data-tf="ytd" onclick="setTimeframe('ytd')">YTD</button>
+          <button data-tf="12mo" onclick="setTimeframe('12mo')">12mo</button>
+          <button data-tf="all" onclick="setTimeframe('all')">All</button>
+        </div>
+        <div class="field"><input type="date" id="dateFrom" onchange="applyCustomDates()">
+          <span style="color:var(--grey-4)">–</span>
+          <input type="date" id="dateTo" onchange="applyCustomDates()"></div>
+        <div class="field">Language
+          <select id="langSelect" onchange="setLanguage(this.value)">
+            <option value="all">All</option>
+            <option value="EN">EN</option><option value="DE">DE</option>
+            <option value="FR">FR</option><option value="IT">IT</option>
+          </select>
+        </div>
+        <a class="btn" id="guideLink" href="guide.html" style="text-decoration:none;display:inline-block;">Guide</a>
+        <button class="btn" onclick="exportXlsx(event)">Export XLSX</button>
+        <div class="status loading" id="status"><span class="dot"></span><span id="statusText">Loading…</span></div>
+      </div>
+    </div>
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+      <button class="tab" data-tab="lifecycle" onclick="switchTab('lifecycle')">Content Lifecycle</button>
+      <button class="tab" data-tab="audience" onclick="switchTab('audience')">Audience &amp; Sessions</button>
+      <!-- Phase 2: a "Content &amp; Interactions" tab is added here once
+           output/site_interactions.parquet (customEvents) is present. -->
+    </div>
+  </div>
+
+  <main class="container">
+    <div class="loading-screen" id="loading">
+      <div class="spinner"></div>
+      <div class="loading-text" id="loadingText">Initializing DuckDB…</div>
+    </div>
+
+    <div id="dashboard" style="display:none;">
+      <div class="tab-content active" id="tab-overview">
+        <div class="kpi-grid" id="kpiGrid"></div>
+        <div class="charts-grid">
+          <div class="chart-card full-width">
+            <div class="chart-title">
+              Traffic over time
+              <span style="display:flex;gap:0.75rem;align-items:center;">
+                <span class="st" id="trafficSub">selected window highlighted · rest for context</span>
+                <span class="seg">
+                  <button id="tmVisits" class="active" onclick="setTrafficMetric('visits')">Visits</button>
+                  <button id="tmUnique" onclick="setTrafficMetric('unique')">Unique</button>
+                </span>
+              </span>
+            </div>
+            <div class="chart-container tall"><canvas id="chartTraffic"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Audience by Division <span class="st">share of visits</span></div>
+            <div class="chart-container"><canvas id="chartDivision"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Content Type <span class="st">share of page views</span></div>
+            <div class="chart-container"><canvas id="chartContentType"></canvas></div>
+          </div>
+        </div>
+
+        <div class="chart-card full-width" style="margin-bottom:1.25rem;">
+          <div class="chart-title">Top &amp; Bottom Pages
+            <span class="field">rank by
+              <select id="rankMetric" onchange="setRankMetric(this.value)">
+                <option value="visits">Visits</option>
+                <option value="views">Page Views</option>
+                <option value="uniques">Unique Visitors</option>
+                <option value="engagement">Engagement</option>
+                <option value="avg_tos">Avg time on page</option>
+              </select></span>
+          </div>
+          <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1.75rem;">
+            <div><div class="st" style="margin-bottom:0.5rem;color:var(--grey-5);font-weight:600;">Top 5</div>
+              <div class="chart-container" style="height:190px"><canvas id="chartTop5"></canvas></div></div>
+            <div><div class="st" style="margin-bottom:0.5rem;color:var(--grey-5);font-weight:600;">Bottom 5</div>
+              <div class="chart-container" style="height:190px"><canvas id="chartBottom5"></canvas></div></div>
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <div class="table-header">
+            <div><h3>Pages — performance &amp; trend</h3>
+              <div class="st" id="pagesSub">click a column to sort · MoM = vs. prior equal period</div></div>
+          </div>
+          <div class="table-scroll"><table id="pagesTable">
+            <thead><tr id="pagesHead"></tr></thead>
+            <tbody id="pagesBody"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <!-- ==== Content Lifecycle ==== -->
+      <div class="tab-content" id="tab-lifecycle">
+        <div class="empty-state" id="lifecycleEmpty" style="display:none;">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--grey-1)" stroke-width="1.2"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/>
+            <rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="m14 14-4 4"/><path d="m10 14 4 4"/></svg>
+          <h3>No publishing dates in this export</h3>
+          <p>The <code>publishing_date</code> column is missing or empty — re-export with
+            <code>CustomProps.PublishingDate</code> included to unlock the lifecycle view.</p>
+        </div>
+        <div id="lifecycleContent">
+          <div class="kpi-grid" id="lifecycleKpis"></div>
+          <div class="charts-grid">
+            <div class="chart-card full-width">
+              <div class="chart-title">Content decay — avg. daily views per page, by content age
+                <span class="st">days since publication · normalised by pages observable at that age</span></div>
+              <div class="chart-container tall"><canvas id="chartDecay"></canvas></div>
+            </div>
+            <div class="chart-card full-width">
+              <div class="chart-title">Publishing cadence vs. earned traffic
+                <span class="st">full history · bars = page views by content age · line = pages published</span></div>
+              <div class="chart-container tall"><canvas id="chartCadence"></canvas></div>
+            </div>
+          </div>
+          <div class="table-wrapper">
+            <div class="table-header">
+              <div><h3>Published pages — launch reach &amp; longevity</h3>
+                <div class="st" id="articlesSub">click a column to sort</div></div>
+            </div>
+            <div class="table-scroll"><table>
+              <thead><tr id="articlesHead"></tr></thead>
+              <tbody id="articlesBody"></tbody>
+            </table></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==== Audience & Sessions ==== -->
+      <div class="tab-content" id="tab-audience">
+        <div class="kpi-grid" id="audienceKpis"></div>
+        <div class="charts-grid">
+          <div class="chart-card full-width">
+            <div class="chart-title">New vs. returning visitors
+              <span class="st">full history · new = first ever visit in that month</span></div>
+            <div class="chart-container tall"><canvas id="chartNewRet"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Visit frequency <span class="st">visits per visitor in window</span></div>
+            <div class="chart-container"><canvas id="chartFreq"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Session depth <span class="st">pages per session in window</span></div>
+            <div class="chart-container"><canvas id="chartDepth"></canvas></div>
+          </div>
+        </div>
+        <div class="table-wrapper">
+          <div class="table-header">
+            <div><h3>Entry pages — where sessions start</h3>
+              <div class="st" id="entrySub">click a column to sort · bounce = single-page sessions</div></div>
+          </div>
+          <div class="table-scroll"><table>
+            <thead><tr id="entryHead"></tr></thead>
+            <tbody id="entryBody"></tbody>
+          </table></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+<script>
+// ==== Brand chart defaults ====
+if (window.Chart) {
+  const C = Chart.defaults;
+  C.font.family = "'Frutiger 45 Light','Frutiger','Helvetica Neue',Helvetica,Arial,'Segoe UI',system-ui,sans-serif";
+  C.font.size = 11; C.color = '#404040'; C.borderColor = '#ECEBE4';
+  C.plugins.legend.labels.boxWidth = 12; C.plugins.legend.labels.boxHeight = 12;
+  try { C.scale.grid.display = false; } catch(e){}
+  ['linear','logarithmic','category','time','timeseries'].forEach(t => {
+    try { C.scales[t].grid = Object.assign({}, C.scales[t].grid, { display:false }); } catch(e){}
+  });
+}
+
+// ==== Colours (design-system entity maps) ====
+const DIVISION_COLOR_MAP = {
+  'Investment Bank':'#404040','Global Wealth Management':'#B8B3A2','Asset Management':'#5A5D5C',
+  'Group Functions':'#CCCABC','Personal & Corporate Banking':'#7A7870',
+};
+const DIVISION_GRAYS_FALLBACK = ['#8E8D83','#404040','#B8B3A2','#5A5D5C','#CCCABC','#7A7870'];
+let divFallbackIdx = 0;
+function divisionColor(name){ if (DIVISION_COLOR_MAP[name]) return DIVISION_COLOR_MAP[name];
+  const c = DIVISION_GRAYS_FALLBACK[divFallbackIdx % DIVISION_GRAYS_FALLBACK.length]; divFallbackIdx++; return c; }
+// Ordinary <=10-cat donuts: greys + bronze accent (never the 20-colour rainbow).
+const DONUT_PALETTE = ['#404040','#B98E2C','#8E8D83','#CCCABC','#5A5D5C','#946F29','#B8B3A2','#7A7870','#6C5312'];
+const BAR_EMPHASIS = '#404040';   // selected window
+const BAR_CONTEXT  = '#CCCABC';   // rest, for context
+
+// doughnut legend: "Label  1,234 (45.2%)"
+Chart.register({ id:'donutLegend', beforeInit(ch){
+  if (ch.config.type !== 'doughnut') return;
+  ch.options.plugins.legend.labels.generateLabels = function(c){
+    const ds = c.data.datasets[0]; const total = ds.data.reduce((a,b)=>a+b,0);
+    return c.data.labels.map((l,i)=>({ text:`${l}  ${ds.data[i].toLocaleString()} (${total?(ds.data[i]/total*100).toFixed(1):0}%)`,
+      fillStyle: ds.backgroundColor[i], strokeStyle: ds.backgroundColor[i], hidden:false, index:i }));
+  };
+}});
+
+// ==== State ====
+let db=null, conn=null, hasInteractions=false;
+let dataMin=null, dataMax=null;
+let pvCols=new Set(), hasPubDates=false;
+let timeframe='90d', language='all', trafficMetric='visits', rankMetric='visits';
+let customFrom=null, customTo=null;
+let sortCol='visits', sortDir='desc';
+let articleSort={col:'pd', dir:'desc'}, entrySort={col:'entries', dir:'desc'};
+let charts={};
+let activeTab='overview', dirtyTabs={};
+let lastPages=[], lastKpiRows=[];
+let lastArticles=[], lastLifecycleKpis=[], lastEntryPages=[], lastAudienceKpis=[];
+
+// ==== Helpers ====
+function fmt(n){ return n==null ? '–' : Number(n).toLocaleString('en-US'); }
+function fmtDur(sec){ if (sec==null || isNaN(sec)) return '–'; sec=Math.round(sec);
+  const m=Math.floor(sec/60), s=sec%60; return m>0 ? `${m}m ${s}s` : `${s}s`; }
+function iso(d){ return d.toISOString().slice(0,19).replace('T',' '); }
+function addDays(d,n){ const x=new Date(d); x.setUTCDate(x.getUTCDate()+n); return x; }
+function destroy(id){ if (charts[id]){ charts[id].destroy(); delete charts[id]; } }
+
+async function query(sql){
+  const res = await conn.query(sql);
+  return res.toArray().map(row=>{ const o={};
+    for (const k of Object.keys(row)){ let v=row[k];
+      if (v!==null && typeof v==='object' && typeof v.toString==='function' && !(v instanceof Date)) v=v.toString();
+      if (typeof v==='bigint') v=Number(v); o[k]=v; } return o; });
+}
+
+function windows(){
+  let to = dataMax, from;
+  if (timeframe==='custom'){ to = customTo || dataMax; from = customFrom || dataMin; }
+  else if (timeframe==='30d') from = addDays(to,-30);
+  else if (timeframe==='90d') from = addDays(to,-90);
+  else if (timeframe==='ytd') from = new Date(Date.UTC(to.getUTCFullYear(),0,1));
+  else if (timeframe==='12mo') from = addDays(to,-365);
+  else from = dataMin; // all
+  const len = to - from;
+  const prevTo = from, prevFrom = new Date(from.getTime()-len);
+  return { from, to, prevFrom, prevTo, hasPrev: timeframe!=='all' };
+}
+function langClause(){ return language==='all' ? '' : ` AND language = '${language}'`; }
+function win(a,b){ return `timestamp >= TIMESTAMP '${iso(a)}' AND timestamp <= TIMESTAMP '${iso(b)}'${langClause()}`; }
+
+function sparkline(vals, w=104, h=22){
+  if (!vals || vals.length===0) return '';
+  const max=Math.max(...vals,1), min=Math.min(...vals,0), span=(max-min)||1;
+  const n=vals.length, step = n>1 ? w/(n-1) : w;
+  const pts = vals.map((v,i)=>`${(i*step).toFixed(1)},${(h-2 - (v-min)/span*(h-4)).toFixed(1)}`).join(' ');
+  // Neutral grey — the sparkline shows shape; direction is carried by the MoM column.
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="display:block">
+    <polyline points="${pts}" fill="none" stroke="#5A5D5C" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+// invert: an increase is bad (e.g. bounce rate) — swap the colours, keep the arrow.
+function deltaHtml(cur, prev, invert=false){
+  if (prev==null || prev===0) return `<span class="delta flat">–</span>`;
+  const d=(cur-prev)/prev*100;
+  let cls=d>0.05?'up':(d<-0.05?'down':'flat');
+  if (invert && cls!=='flat') cls = cls==='up'?'down':'up';
+  const arr=d>0.05?'▲':(d<-0.05?'▼':'–'); return `<span class="delta ${cls}">${arr} ${Math.abs(d).toFixed(1)}%</span>`;
+}
+function chartEmpty(canvasId, msg){
+  const el=document.getElementById(canvasId); if (!el) return;
+  el.parentElement.innerHTML = `<div class="chart-empty">${msg}</div>`;
+}
+
+// ==== Init ====
+async function init(){
+  try {
+    setStatus('loading','Waiting for DuckDB…');
+    if (!window.duckdb) await Promise.race([
+      new Promise(r=>window.addEventListener('duckdb-ready', r, {once:true})),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('DuckDB failed to load after 30s.')),30000))
+    ]);
+    setLoading('Initializing DuckDB…');
+    const m = window.duckdb;
+    const bundle = await m.selectBundle(m.getJsDelivrBundles());
+    const wurl = URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], {type:'text/javascript'}));
+    const worker = new Worker(wurl);
+    db = new m.AsyncDuckDB(new m.ConsoleLogger(), worker);
+    await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+    URL.revokeObjectURL(wurl);
+    conn = await db.connect();
+
+    setLoading('Loading data…');
+    await loadData();
+
+    document.getElementById('loading').style.display='none';
+    document.getElementById('dashboard').style.display='block';
+    setStatus('ok','Ready');
+    await render();
+  } catch(e){
+    console.error(e);
+    document.getElementById('loading').innerHTML =
+      `<div class="error-message"><b>Failed to load data.</b><br>${e.message}<br><br>
+       Generate the demo data with <code>python scripts/generate_demo_data.py</code> (or build a real site with
+       <code>python scripts/build_site_parquet.py input/&lt;export&gt;.csv --site "…"</code>), then serve the
+       project root with <code>python -m http.server 8000</code> and open
+       <code>/dashboard/dashboard.html</code>.</div>`;
+    setStatus('error','Error');
+  }
+}
+
+async function loadData(){
+  // Parquets live in ../output/ (project layout: dashboard/ + output/), with
+  // fallbacks for serving from other roots.
+  const base = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/,'');
+  const paths = [`${base}/../output/`, `${window.location.origin}/output/`, `../output/`, `output/`];
+  async function reg(view,file,required){
+    // Standalone build (scripts/build_standalone_dashboard.py) embeds each parquet
+    // as a base64 data island (<script type="text/plain" id="<view>-parquet-b64">)
+    // so the file runs from file://. Read via textContent, not a JS string literal —
+    // a multi-MB literal is too large for the JS compiler.
+    const island = document.getElementById(`${view}-parquet-b64`);
+    if (island && island.textContent.trim()){
+      const bin = atob(island.textContent.trim());
+      const bytes = new Uint8Array(bin.length);
+      for (let i=0; i<bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      await db.registerFileBuffer(file, bytes);
+      await conn.query(`CREATE OR REPLACE VIEW ${view} AS SELECT * FROM read_parquet('${file}')`);
+      return true;
+    }
+    for (const p of paths){ try {
+      const resp = await fetch(`${p}${file}`); if (!resp.ok) continue;
+      await db.registerFileBuffer(file, new Uint8Array(await resp.arrayBuffer()));
+      await conn.query(`CREATE OR REPLACE VIEW ${view} AS SELECT * FROM read_parquet('${file}')`);
+      return true;
+    } catch(e){} }
+    if (required) throw new Error(`Could not load output/${file}. Run scripts/generate_demo_data.py or scripts/build_site_parquet.py first.`);
+    return false;
+  }
+  await reg('pv','site_pageviews.parquet',true);
+  // Phase 2 (customEvents) — optional; dashboard runs fully without it.
+  hasInteractions = await reg('ix','site_interactions.parquet',false);
+
+  // Column inventory — real exports vary (no --hr => no hr_*; PublishingDate may be absent).
+  pvCols = new Set((await query(`DESCRIBE SELECT * FROM pv`)).map(r=>r.column_name));
+  if (pvCols.has('publishing_date')){
+    // Normalise: some exports carry it as VARCHAR — make it a TIMESTAMP for date maths.
+    await conn.query(`CREATE OR REPLACE VIEW pv AS
+      SELECT * REPLACE (TRY_CAST(publishing_date AS TIMESTAMP) AS publishing_date)
+      FROM read_parquet('site_pageviews.parquet')`);
+    const pd = (await query(`SELECT COUNT(publishing_date) n FROM pv`))[0];
+    hasPubDates = pd.n > 0;
+  }
+
+  const meta = (await query(`SELECT MIN(timestamp)::VARCHAR mn, MAX(timestamp)::VARCHAR mx,
+    any_value(site_name) site FROM pv`))[0];
+  dataMin = new Date(meta.mn.replace(' ','T')+'Z');
+  dataMax = new Date(meta.mx.replace(' ','T')+'Z');
+  const ymd = d => d.toISOString().slice(0,10);
+  ['dateFrom','dateTo'].forEach(id=>{ const el=document.getElementById(id); el.min=ymd(dataMin); el.max=ymd(dataMax); });
+  if (meta.site){ document.getElementById('siteTitle').textContent = meta.site;
+    document.getElementById('siteSub').textContent = 'Page Analytics · Owner Dashboard'; }
+  document.title = (meta.site || 'Site') + ' — Owner Dashboard';
+}
+
+// ==== Render ====
+// Filter changes mark every tab dirty; only the visible tab renders (charts can't
+// size themselves inside display:none). Hidden tabs render lazily on switch.
+async function render(){
+  dirtyTabs = { overview:true, lifecycle:true, audience:true };
+  lastArticles=[]; lastLifecycleKpis=[]; lastEntryPages=[]; lastAudienceKpis=[];
+  await renderActiveTab();
+}
+async function renderActiveTab(){
+  if (!dirtyTabs[activeTab]) return;
+  dirtyTabs[activeTab] = false;
+  const w = windows();
+  if (activeTab==='overview')
+    await Promise.all([ renderKpis(w), renderTraffic(w), renderDivision(w), renderContentType(w), renderPages(w) ]);
+  else if (activeTab==='lifecycle') await renderLifecycle(w);
+  else if (activeTab==='audience') await renderAudience(w);
+}
+
+async function metricsFor(a,b){
+  const base = (await query(`SELECT COUNT(*) AS n_views, COUNT(DISTINCT session_id) visits,
+    COUNT(DISTINCT user_id) uniques FROM pv WHERE ${win(a,b)}`))[0];
+  const avg = (await query(`SELECT AVG(t) a FROM
+    (SELECT session_id, SUM(time_on_page_sec) t FROM pv WHERE ${win(a,b)} GROUP BY session_id)`))[0];
+  const views=base.n_views||0, visits=base.visits||0, uniques=base.uniques||0;
+  return { views, visits, uniques, avgSession: avg.a, engagement: visits? uniques/visits : 0 };
+}
+
+async function renderKpis(w){
+  const cur = await metricsFor(w.from, w.to);
+  const prev = w.hasPrev ? await metricsFor(w.prevFrom, w.prevTo) : null;
+  const cards = [
+    { cls:'highlight', label:'Page Views', value:fmt(cur.views), c:cur.views, p:prev?prev.views:null, sub:'total page loads' },
+    { cls:'', label:'Page Visits', value:fmt(cur.visits), c:cur.visits, p:prev?prev.visits:null, sub:'sessions started' },
+    { cls:'info', label:'Unique Visitors', value:fmt(cur.uniques), c:cur.uniques, p:prev?prev.uniques:null, sub:'distinct people' },
+    { cls:'', label:'Avg. Session', value:fmtDur(cur.avgSession), c:cur.avgSession, p:prev?prev.avgSession:null, sub:'engaged time on site' },
+    { cls:'success', label:'Engagement', value:cur.engagement.toFixed(2), c:cur.engagement, p:prev?prev.engagement:null, sub:'unique ÷ visits' },
+  ];
+  document.getElementById('kpiGrid').innerHTML = cards.map(k=>`
+    <div class="kpi-card ${k.cls}">
+      <div class="kpi-label">${k.label}</div>
+      <div class="kpi-value">${k.value}</div>
+      <div class="kpi-sub">${deltaHtml(k.c,k.p)} <span>${k.sub}</span></div>
+    </div>`).join('');
+  lastKpiRows = cards.map(k=>[k.label, k.value, k.p==null?'':(((k.c-k.p)/k.p)*100).toFixed(1)+'%']);
+}
+
+async function renderTraffic(w){
+  const rows = await query(`SELECT strftime(date_trunc('month', timestamp), '%Y-%m') m,
+    COUNT(DISTINCT session_id) visits, COUNT(DISTINCT user_id) unique_ct
+    FROM pv WHERE TRUE${langClause()} GROUP BY 1 ORDER BY 1`);
+  const labels = rows.map(r=>r.m);
+  const vals = rows.map(r=> trafficMetric==='visits' ? r.visits : r.unique_ct);
+  const fromM = `${w.from.getUTCFullYear()}-${String(w.from.getUTCMonth()+1).padStart(2,'0')}`;
+  const toM   = `${w.to.getUTCFullYear()}-${String(w.to.getUTCMonth()+1).padStart(2,'0')}`;
+  const colors = labels.map(m => (m>=fromM && m<=toM) ? BAR_EMPHASIS : BAR_CONTEXT);
+  document.getElementById('trafficSub').textContent =
+    timeframe==='all' ? 'all months' : 'selected window highlighted · rest for context';
+  destroy('traffic');
+  charts.traffic = new Chart(document.getElementById('chartTraffic'), {
+    type:'bar',
+    data:{ labels, datasets:[{ data:vals, backgroundColor:colors, borderRadius:0, maxBarThickness:34 }] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:c=>`${trafficMetric==='visits'?'Visits':'Unique'}: ${c.parsed.y.toLocaleString()}` } } },
+      scales:{ x:{ grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10}, maxRotation:0, autoSkip:true } },
+               y:{ beginAtZero:true, grid:{display:false}, border:{display:false}, ticks:{ font:{size:10} } } } }
+  });
+}
+
+async function renderDivision(w){
+  if (!pvCols.has('hr_division')){
+    chartEmpty('chartDivision','No HR enrichment — rebuild with --hr to see divisions.'); return; }
+  const rows = await query(`SELECT COALESCE(hr_division,'Unknown') d, COUNT(DISTINCT session_id) v
+    FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1 ORDER BY 2 DESC`);
+  divFallbackIdx=0;
+  const labels=rows.map(r=>r.d), vals=rows.map(r=>r.v), colors=labels.map(divisionColor);
+  destroy('division');
+  charts.division = new Chart(document.getElementById('chartDivision'), {
+    type:'doughnut',
+    data:{ labels, datasets:[{ data:vals, backgroundColor:colors, borderWidth:1, borderColor:'#fff' }] },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'64%',
+      plugins:{ legend:{ position:'right', labels:{ font:{size:10} } } } }
+  });
+}
+
+async function renderContentType(w){
+  const rows = await query(`SELECT COALESCE(content_type,'Unknown') ct, COUNT(*) v
+    FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1 ORDER BY 2 DESC`);
+  const labels=rows.map(r=>r.ct), vals=rows.map(r=>r.v);
+  const colors = labels.map((_,i)=>DONUT_PALETTE[i % DONUT_PALETTE.length]);
+  destroy('contentType');
+  charts.contentType = new Chart(document.getElementById('chartContentType'), {
+    type:'doughnut',
+    data:{ labels, datasets:[{ data:vals, backgroundColor:colors, borderWidth:1, borderColor:'#fff' }] },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'64%',
+      plugins:{ legend:{ position:'right', labels:{ font:{size:10} } } } }
+  });
+}
+
+async function renderPages(w){
+  await computePages(w);
+  drawPagesTable();
+  drawRanking();
+}
+async function computePages(w){
+  const cur = await query(`SELECT page_id, any_value(page_name) AS pname, any_value(content_type) ct,
+    COUNT(*) AS n_views, COUNT(DISTINCT session_id) visits, COUNT(DISTINCT user_id) uniques,
+    AVG(time_on_page_sec) avg_tos FROM pv WHERE ${win(w.from,w.to)} GROUP BY page_id`);
+  const prev = w.hasPrev ? await query(`SELECT page_id, COUNT(DISTINCT session_id) visits_prev
+    FROM pv WHERE ${win(w.prevFrom,w.prevTo)} GROUP BY page_id`) : [];
+  const trend = await query(`SELECT page_id, strftime(date_trunc('week', timestamp),'%Y-%m-%d') wk,
+    COUNT(DISTINCT session_id) v FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1,2 ORDER BY 1,2`);
+  const prevMap = Object.fromEntries(prev.map(r=>[r.page_id, r.visits_prev]));
+  const trendMap = {}; for (const t of trend){ (trendMap[t.page_id] ||= []).push(t.v); }
+
+  lastPages = cur.map(r=>{
+    const vp = prevMap[r.page_id];
+    return { name:r.pname, ct:r.ct, views:r.n_views, visits:r.visits, uniques:r.uniques,
+      avg_tos:r.avg_tos, engagement: r.visits? r.uniques/r.visits : 0,
+      mom: (vp!=null && vp>0) ? (r.visits-vp)/vp*100 : null, trend: trendMap[r.page_id]||[] };
+  });
+}
+
+const PAGE_COLS = [
+  { key:'name', label:'Page', num:false },
+  { key:'ct', label:'Type', num:false },
+  { key:'views', label:'Views', num:true },
+  { key:'visits', label:'Visits', num:true },
+  { key:'uniques', label:'Unique', num:true },
+  { key:'engagement', label:'Engmt', num:true },
+  { key:'avg_tos', label:'Avg time', num:true },
+  { key:'trend', label:'Trend', num:false },
+  { key:'mom', label:'MoM', num:true },
+];
+function drawPagesTable(){
+  const head = document.getElementById('pagesHead');
+  head.innerHTML = PAGE_COLS.map(c=>`<th class="${c.num?'num':''}" onclick="sortPages('${c.key}')">${c.label}${
+    sortCol===c.key?`<span class="arr">${sortDir==='asc'?'▲':'▼'}</span>`:''}</th>`).join('');
+  const rows = [...lastPages].sort((a,b)=>{
+    let x=a[sortCol], y=b[sortCol];
+    if (sortCol==='trend'){ x=a.trend.at(-1)||0; y=b.trend.at(-1)||0; }
+    if (x==null) x=-Infinity; if (y==null) y=-Infinity;
+    if (typeof x==='string') return sortDir==='asc'? x.localeCompare(y): y.localeCompare(x);
+    return sortDir==='asc'? x-y : y-x;
+  });
+  document.getElementById('pagesBody').innerHTML = rows.map(r=>`
+    <tr>
+      <td class="name" title="${r.name}">${r.name}</td>
+      <td><span class="ct-badge">${r.ct}</span></td>
+      <td class="num">${fmt(r.views)}</td>
+      <td class="num">${fmt(r.visits)}</td>
+      <td class="num">${fmt(r.uniques)}</td>
+      <td class="num">${r.engagement.toFixed(2)}</td>
+      <td class="num">${fmtDur(r.avg_tos)}</td>
+      <td>${sparkline(r.trend)}</td>
+      <td class="num">${r.mom==null?'<span class="delta flat">–</span>':deltaHtml(1+r.mom/100,1)}</td>
+    </tr>`).join('');
+  document.getElementById('pagesSub').textContent =
+    `${rows.length} pages · click a column to sort · MoM = vs. prior equal period`;
+}
+function sortPages(col){ if (sortCol===col) sortDir = sortDir==='asc'?'desc':'asc';
+  else { sortCol=col; sortDir = (col==='name'||col==='ct')?'asc':'desc'; } drawPagesTable(); }
+
+// ==== Top / Bottom 5 (selectable KPI) ====
+const RANK_LABELS = { visits:'Visits', views:'Page Views', uniques:'Unique Visitors',
+  engagement:'Engagement', avg_tos:'Avg time on page' };
+function fmtMetric(v){ if (v==null) return '–';
+  if (rankMetric==='engagement') return (+v).toFixed(2);
+  if (rankMetric==='avg_tos') return fmtDur(v);
+  return fmt(Math.round(v)); }
+const rankLabelPlugin = { id:'rankLabel', afterDatasetsDraw(chart){
+  const {ctx}=chart, meta=chart.getDatasetMeta(0);
+  meta.data.forEach((bar,i)=>{ const v=chart.data.datasets[0].data[i]; if (v==null) return;
+    ctx.save(); ctx.fillStyle='#5A5D5C'; ctx.font='11px Helvetica,Arial,sans-serif';
+    ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.fillText(fmtMetric(v), bar.x+6, bar.y); ctx.restore(); }); } };
+function drawRanking(){
+  if (!lastPages.length) return;
+  const sorted=[...lastPages].filter(p=>p[rankMetric]!=null).sort((a,b)=>b[rankMetric]-a[rankMetric]);
+  renderRankChart('top', sorted.slice(0,5));
+  renderRankChart('bottom', sorted.slice(-5).reverse());
+}
+function renderRankChart(which, rows){
+  const id = which==='top' ? 'chartTop5' : 'chartBottom5';
+  const key = 'rank_'+which; destroy(key);
+  const labels = rows.map(r => r.name.length>36 ? r.name.slice(0,34)+'…' : r.name);
+  const vals = rows.map(r => +r[rankMetric]);
+  charts[key] = new Chart(document.getElementById(id), {
+    type:'bar',
+    data:{ labels, datasets:[{ data:vals, backgroundColor:BAR_EMPHASIS, borderRadius:0, maxBarThickness:22 }] },
+    plugins:[rankLabelPlugin],
+    options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false, layout:{ padding:{ right:56 } },
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:c=>`${RANK_LABELS[rankMetric]}: ${fmtMetric(c.parsed.x)}` } } },
+      scales:{ x:{ beginAtZero:true, grid:{display:false}, border:{display:false}, ticks:{display:false} },
+               y:{ grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10}, autoSkip:false } } } }
+  });
+}
+
+// ==== Shared: KPI cards + sortable tables ====
+function drawKpiCards(containerId, cards){
+  document.getElementById(containerId).innerHTML = cards.map(k=>`
+    <div class="kpi-card ${k.cls||''}">
+      <div class="kpi-label">${k.label}</div>
+      <div class="kpi-value">${k.value}</div>
+      <div class="kpi-sub">${k.delta!==undefined?k.delta:deltaHtml(k.c,k.p,k.invert)} <span>${k.sub}</span></div>
+    </div>`).join('');
+}
+function drawSortableTable(headId, bodyId, cols, rows, state, redraw){
+  const head=document.getElementById(headId);
+  head.innerHTML = cols.map(c=>`<th class="${c.num?'num':''}" data-k="${c.key}">${c.label}${
+    state.col===c.key?`<span class="arr">${state.dir==='asc'?'▲':'▼'}</span>`:''}</th>`).join('');
+  head.querySelectorAll('th').forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k;
+    if (state.col===k) state.dir = state.dir==='asc'?'desc':'asc';
+    else { state.col=k; state.dir = cols.find(c=>c.key===k).num?'desc':'asc'; }
+    redraw();
+  });
+  const sorted=[...rows].sort((a,b)=>{ let x=a[state.col], y=b[state.col];
+    if (x==null) x=-Infinity; if (y==null) y=-Infinity;
+    if (typeof x==='string' && typeof y==='string')
+      return state.dir==='asc' ? x.localeCompare(y) : y.localeCompare(x);
+    return state.dir==='asc' ? x-y : y-x;
+  });
+  document.getElementById(bodyId).innerHTML = sorted.map(r=>'<tr>'+cols.map(c=>
+    `<td class="${c.num?'num':''}${c.name?' name':''}"${c.name?` title="${r[c.key]}"`:''}>${c.fmt?c.fmt(r):r[c.key]}</td>`
+  ).join('')+'</tr>').join('');
+}
+
+// ==== Content Lifecycle tab ====
+let lifecycleCharts=null;
+
+async function renderLifecycle(w){
+  document.getElementById('lifecycleEmpty').style.display = hasPubDates ? 'none' : 'flex';
+  document.getElementById('lifecycleContent').style.display = hasPubDates ? 'block' : 'none';
+  if (!hasPubDates) return;
+  await computeLifecycle(w);
+  drawLifecycle();
+}
+
+// Pages with a publish date, in the current language scope.
+function pubsCte(){
+  return `pubs AS (SELECT page_id, any_value(page_name) nm, any_value(content_type) ct,
+    MIN(publishing_date) pd FROM pv WHERE publishing_date IS NOT NULL${langClause()} GROUP BY 1)`;
+}
+
+async function computeLifecycle(w){
+  const F=iso(w.from), T=iso(w.to);
+
+  const pub = (await query(`WITH ${pubsCte()}
+    SELECT COUNT(*) n FROM pubs WHERE pd >= TIMESTAMP '${F}' AND pd <= TIMESTAMP '${T}'`))[0];
+
+  // First-week reach — only pages whose first 7 days lie fully inside the window.
+  const f7 = (await query(`WITH ${pubsCte()}
+    SELECT median(v) med, COUNT(*) n FROM (
+      SELECT p.page_id, COUNT(DISTINCT v.session_id) v
+      FROM pubs p LEFT JOIN pv v ON v.page_id = p.page_id
+        AND v.timestamp >= p.pd AND v.timestamp < p.pd + to_days(7)${langClause()}
+      WHERE p.pd >= TIMESTAMP '${F}' AND p.pd + to_days(7) <= TIMESTAMP '${T}'
+      GROUP BY 1)`))[0];
+
+  const shares = (await query(`SELECT COUNT(*) known,
+      COALESCE(SUM(CASE WHEN age BETWEEN 0 AND 30 THEN 1 ELSE 0 END),0)::BIGINT fresh,
+      COALESCE(SUM(CASE WHEN age > 90 THEN 1 ELSE 0 END),0)::BIGINT ever
+    FROM (SELECT date_diff('day', publishing_date, timestamp) age
+          FROM pv WHERE ${win(w.from,w.to)} AND publishing_date IS NOT NULL)`))[0];
+
+  // Decay: views per age bucket, normalised by page-days observable at that age
+  // in the window (so late-published pages don't drag down old-age buckets).
+  const decay = await query(`WITH ${pubsCte()},
+    b AS (SELECT * FROM (VALUES ('0',0,0,0),('1',1,1,1),('2',2,2,2),('3',3,3,3),('4',4,4,4),
+      ('5',5,5,5),('6',6,6,6),('7',7,7,7),('8–14',8,14,8),('15–30',15,30,9),
+      ('31–60',31,60,10),('61–90',61,90,11),('90+',91,100000,12)) t(lbl,lo,hi,ord)),
+    expo AS (SELECT b.lbl, b.ord, SUM(GREATEST(0, date_diff('day',
+        GREATEST(p.pd + to_days(b.lo), TIMESTAMP '${F}'),
+        LEAST(p.pd + to_days(b.hi), TIMESTAMP '${T}')) + 1)) expo_days
+      FROM pubs p CROSS JOIN b GROUP BY 1,2),
+    vv AS (SELECT b.lbl, COUNT(*) n_views
+      FROM (SELECT date_diff('day', publishing_date, timestamp) age
+            FROM pv WHERE ${win(w.from,w.to)} AND publishing_date IS NOT NULL) a
+      JOIN b ON a.age BETWEEN b.lo AND b.hi GROUP BY 1)
+    SELECT e.lbl, e.ord, COALESCE(vv.n_views,0) n_views, e.expo_days
+    FROM expo e LEFT JOIN vv ON vv.lbl = e.lbl WHERE e.expo_days > 0 ORDER BY e.ord`);
+
+  const cadence = await query(`WITH ${pubsCte()},
+    mv AS (SELECT strftime(date_trunc('month', timestamp),'%Y-%m') m,
+        COALESCE(SUM(CASE WHEN publishing_date IS NOT NULL
+          AND date_diff('day', publishing_date, timestamp) BETWEEN 0 AND 30 THEN 1 ELSE 0 END),0)::BIGINT fresh,
+        COALESCE(SUM(CASE WHEN publishing_date IS NULL
+          OR date_diff('day', publishing_date, timestamp) NOT BETWEEN 0 AND 30 THEN 1 ELSE 0 END),0)::BIGINT older
+      FROM pv WHERE TRUE${langClause()} GROUP BY 1),
+    mp AS (SELECT strftime(date_trunc('month', pd),'%Y-%m') m, COUNT(*) published
+      FROM pubs WHERE pd >= TIMESTAMP '${iso(dataMin)}' GROUP BY 1)
+    SELECT COALESCE(mv.m, mp.m) m, COALESCE(fresh,0) fresh, COALESCE(older,0) older,
+      COALESCE(published,0) published
+    FROM mv FULL OUTER JOIN mp ON mv.m = mp.m ORDER BY 1`);
+
+  const articles = await query(`WITH ${pubsCte()}
+    SELECT p.page_id, any_value(p.nm) nm, any_value(p.ct) ct,
+      strftime(any_value(p.pd), '%Y-%m-%d') pd,
+      COUNT(DISTINCT CASE WHEN v.timestamp >= p.pd AND v.timestamp < p.pd + to_days(7)
+        THEN v.session_id END) f7,
+      COUNT(DISTINCT v.session_id) lifetime,
+      COUNT(DISTINCT CASE WHEN v.timestamp >= TIMESTAMP '${F}' AND v.timestamp <= TIMESTAMP '${T}'
+        THEN v.session_id END) winv
+    FROM pubs p LEFT JOIN pv v ON v.page_id = p.page_id${langClause()}
+    GROUP BY 1`);
+
+  lastArticles = articles.map(r=>({ nm:r.nm, ct:r.ct, pd:r.pd,
+    age: Math.max(0, Math.floor((w.to - new Date(r.pd+'T00:00:00Z'))/86400000)),
+    f7:r.f7, share7: r.lifetime ? r.f7/r.lifetime : null, winv:r.winv }));
+
+  const pct = (n,d)=> d ? (n/d*100).toFixed(1)+'%' : '–';
+  lastLifecycleKpis = [
+    { cls:'highlight', label:'Pages Published', value:fmt(pub.n), sub:'in selected window', delta:'' },
+    { cls:'', label:'Median 1st-Week Reach', value: f7.n ? fmt(Math.round(f7.med)) : '–',
+      sub: f7.n ? `visits in first 7 days · ${f7.n} pages` : 'no page fully observable', delta:'' },
+    { cls:'info', label:'Fresh Content Share', value:pct(shares.fresh, shares.known),
+      sub:'views on content ≤ 30 days old', delta:'' },
+    { cls:'', label:'Evergreen Share', value:pct(shares.ever, shares.known),
+      sub:'views on content > 90 days old', delta:'' },
+  ];
+  lifecycleCharts = { decay, cadence };
+}
+
+function drawLifecycle(){
+  drawKpiCards('lifecycleKpis', lastLifecycleKpis);
+  const { decay, cadence } = lifecycleCharts;
+
+  destroy('decay');
+  charts.decay = new Chart(document.getElementById('chartDecay'), {
+    type:'bar',
+    data:{ labels: decay.map(r=>r.lbl),
+      datasets:[{ data: decay.map(r=> r.expo_days ? r.n_views/r.expo_days : 0),
+        backgroundColor:BAR_EMPHASIS, borderRadius:0, maxBarThickness:44 }] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{
+        label:c=>{ const r=decay[c.dataIndex];
+          return [`${c.parsed.y.toFixed(2)} views / page / day`, `${fmt(r.n_views)} views in bucket`]; } } } },
+      scales:{ x:{ grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10} } },
+               y:{ beginAtZero:true, grid:{display:false}, border:{display:false}, ticks:{ font:{size:10} } } } }
+  });
+
+  destroy('cadence');
+  charts.cadence = new Chart(document.getElementById('chartCadence'), {
+    data:{ labels: cadence.map(r=>r.m), datasets:[
+      { type:'bar', label:'Views on fresh content (≤30d)', data:cadence.map(r=>r.fresh),
+        backgroundColor:'#404040', stack:'v', yAxisID:'y', maxBarThickness:34 },
+      { type:'bar', label:'Views on older content', data:cadence.map(r=>r.older),
+        backgroundColor:'#CCCABC', stack:'v', yAxisID:'y', maxBarThickness:34 },
+      { type:'line', label:'Pages published', data:cadence.map(r=>r.published),
+        borderColor:'#B98E2C', backgroundColor:'#B98E2C', yAxisID:'y2',
+        tension:0, pointRadius:2.5, borderWidth:1.5 } ] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ position:'bottom', labels:{ font:{size:10} } } },
+      scales:{ x:{ stacked:true, grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10}, maxRotation:0, autoSkip:true } },
+               y:{ stacked:true, beginAtZero:true, grid:{display:false}, border:{display:false}, ticks:{ font:{size:10} } },
+               y2:{ position:'right', beginAtZero:true, grid:{display:false}, border:{display:false},
+                    ticks:{ font:{size:10}, precision:0 } } } }
+  });
+
+  drawArticlesTable();
+}
+
+const ARTICLE_COLS = [
+  { key:'nm', label:'Page', name:true },
+  { key:'ct', label:'Type', fmt:r=>`<span class="ct-badge">${r.ct}</span>` },
+  { key:'pd', label:'Published' },
+  { key:'age', label:'Age (d)', num:true, fmt:r=>fmt(r.age) },
+  { key:'f7', label:'First 7d visits', num:true, fmt:r=>fmt(r.f7) },
+  { key:'share7', label:'7d share', num:true, fmt:r=> r.share7==null?'–':(r.share7*100).toFixed(0)+'%' },
+  { key:'winv', label:'Visits (window)', num:true, fmt:r=>fmt(r.winv) },
+];
+function drawArticlesTable(){
+  drawSortableTable('articlesHead','articlesBody', ARTICLE_COLS, lastArticles, articleSort, drawArticlesTable);
+  document.getElementById('articlesSub').textContent =
+    `${lastArticles.length} pages with a publish date · 7d share = first-week visits ÷ lifetime visits`;
+}
+
+// ==== Audience & Sessions tab ====
+let audienceCharts=null;
+
+async function renderAudience(w){
+  await computeAudience(w);
+  drawAudience();
+}
+
+async function audienceKpisFor(a,b){
+  const s = (await query(`SELECT COUNT(*) sess, COALESCE(SUM(CASE WHEN v=1 THEN 1 ELSE 0 END),0) bounced,
+      COALESCE(SUM(v),0) n_views
+    FROM (SELECT session_id, COUNT(*) v FROM pv WHERE ${win(a,b)} GROUP BY 1)`))[0];
+  const u = (await query(`WITH fs AS (SELECT user_id, MIN(timestamp) f FROM pv WHERE TRUE${langClause()} GROUP BY 1)
+    SELECT COUNT(DISTINCT p.user_id) vis,
+      COUNT(DISTINCT CASE WHEN fs.f >= TIMESTAMP '${iso(a)}' THEN p.user_id END) newu
+    FROM pv p JOIN fs USING (user_id) WHERE ${win(a,b)}`))[0];
+  const sess=s.sess||0, vis=u.vis||0;
+  return { newu:u.newu||0, retShare: vis ? (vis-u.newu)/vis : 0, bounce: sess ? s.bounced/sess : 0,
+    depth: sess ? s.n_views/sess : 0, perVisitor: vis ? sess/vis : 0 };
+}
+
+async function computeAudience(w){
+  const cur = await audienceKpisFor(w.from, w.to);
+  const prev = w.hasPrev ? await audienceKpisFor(w.prevFrom, w.prevTo) : null;
+
+  const monthly = await query(`WITH fs AS (SELECT user_id, date_trunc('month', MIN(timestamp)) fm
+      FROM pv WHERE TRUE${langClause()} GROUP BY 1)
+    SELECT strftime(date_trunc('month', p.timestamp),'%Y-%m') m,
+      COUNT(DISTINCT CASE WHEN date_trunc('month', p.timestamp) = fs.fm THEN p.user_id END) newu,
+      COUNT(DISTINCT CASE WHEN date_trunc('month', p.timestamp) > fs.fm THEN p.user_id END) ret
+    FROM pv p JOIN fs USING (user_id) WHERE TRUE${langClause()} GROUP BY 1 ORDER BY 1`);
+
+  const freq = await query(`SELECT b, o, COUNT(*) c FROM (
+      SELECT CASE WHEN s=1 THEN '1 visit' WHEN s=2 THEN '2 visits' WHEN s<=5 THEN '3–5'
+                  WHEN s<=10 THEN '6–10' ELSE '10+' END b,
+             CASE WHEN s=1 THEN 1 WHEN s=2 THEN 2 WHEN s<=5 THEN 3 WHEN s<=10 THEN 4 ELSE 5 END o
+      FROM (SELECT user_id, COUNT(DISTINCT session_id) s FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1))
+    GROUP BY 1,2 ORDER BY 2`);
+
+  const depth = await query(`SELECT b, o, COUNT(*) c FROM (
+      SELECT CASE WHEN v=1 THEN '1 page' WHEN v=2 THEN '2 pages' WHEN v<=5 THEN '3–5' ELSE '6+' END b,
+             CASE WHEN v=1 THEN 1 WHEN v=2 THEN 2 WHEN v<=5 THEN 3 ELSE 4 END o
+      FROM (SELECT session_id, COUNT(*) v FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1))
+    GROUP BY 1,2 ORDER BY 2`);
+
+  const entries = await query(`WITH s AS (SELECT session_id, arg_min(page_id, timestamp) pid,
+      COUNT(*) depth FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1),
+    d AS (SELECT page_id, any_value(page_name) nm, any_value(content_type) ct FROM pv GROUP BY 1)
+    SELECT s.pid, any_value(d.nm) nm, any_value(d.ct) ct, COUNT(*) entries,
+      SUM(CASE WHEN s.depth=1 THEN 1 ELSE 0 END) bounced, AVG(s.depth) avgd
+    FROM s JOIN d ON d.page_id = s.pid GROUP BY 1`);
+  const totalSess = entries.reduce((a,r)=>a+r.entries,0);
+  lastEntryPages = entries.map(r=>({ nm:r.nm, ct:r.ct, entries:r.entries,
+    share: totalSess ? r.entries/totalSess : 0,
+    bounce: r.entries ? r.bounced/r.entries : 0, avgd:r.avgd }));
+
+  lastAudienceKpis = [
+    { cls:'highlight', label:'New Visitors', value:fmt(cur.newu), c:cur.newu, p:prev?prev.newu:null,
+      sub:'first ever visit in window' },
+    { cls:'', label:'Returning Share', value:(cur.retShare*100).toFixed(1)+'%',
+      c:cur.retShare, p:prev?prev.retShare:null, sub:'seen before window' },
+    { cls:'info', label:'Bounce Rate', value:(cur.bounce*100).toFixed(1)+'%',
+      c:cur.bounce, p:prev?prev.bounce:null, invert:true, sub:'single-page sessions' },
+    { cls:'', label:'Pages / Session', value:cur.depth.toFixed(2),
+      c:cur.depth, p:prev?prev.depth:null, sub:'avg. session depth' },
+    { cls:'success', label:'Visits / Visitor', value:cur.perVisitor.toFixed(2),
+      c:cur.perVisitor, p:prev?prev.perVisitor:null, sub:'sessions per unique visitor' },
+  ];
+  audienceCharts = { monthly, freq, depth };
+}
+
+function drawAudience(){
+  drawKpiCards('audienceKpis', lastAudienceKpis);
+  const { monthly, freq, depth } = audienceCharts;
+
+  destroy('newRet');
+  charts.newRet = new Chart(document.getElementById('chartNewRet'), {
+    type:'bar',
+    data:{ labels: monthly.map(r=>r.m), datasets:[
+      { label:'Returning visitors', data:monthly.map(r=>r.ret), backgroundColor:'#404040',
+        stack:'u', maxBarThickness:34 },
+      { label:'New visitors', data:monthly.map(r=>r.newu), backgroundColor:'#CCCABC',
+        stack:'u', maxBarThickness:34 } ] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ position:'bottom', labels:{ font:{size:10} } } },
+      scales:{ x:{ stacked:true, grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10}, maxRotation:0, autoSkip:true } },
+               y:{ stacked:true, beginAtZero:true, grid:{display:false}, border:{display:false}, ticks:{ font:{size:10} } } } }
+  });
+
+  const distBar = (key, canvasId, rows, unitLabel) => {
+    destroy(key);
+    charts[key] = new Chart(document.getElementById(canvasId), {
+      type:'bar',
+      data:{ labels: rows.map(r=>r.b),
+        datasets:[{ data: rows.map(r=>r.c), backgroundColor:BAR_EMPHASIS, borderRadius:0, maxBarThickness:44 }] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{
+          label:c=>{ const total=rows.reduce((a,r)=>a+r.c,0);
+            return `${fmt(c.parsed.y)} ${unitLabel} (${total?(c.parsed.y/total*100).toFixed(1):0}%)`; } } } },
+        scales:{ x:{ grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10} } },
+                 y:{ beginAtZero:true, grid:{display:false}, border:{display:false}, ticks:{ font:{size:10} } } } }
+    });
+  };
+  distBar('freq','chartFreq', freq, 'visitors');
+  distBar('depth','chartDepth', depth, 'sessions');
+
+  drawEntryTable();
+}
+
+const ENTRY_COLS = [
+  { key:'nm', label:'Page', name:true },
+  { key:'ct', label:'Type', fmt:r=>`<span class="ct-badge">${r.ct}</span>` },
+  { key:'entries', label:'Entries', num:true, fmt:r=>fmt(r.entries) },
+  { key:'share', label:'Share', num:true, fmt:r=>(r.share*100).toFixed(1)+'%' },
+  { key:'bounce', label:'Bounce', num:true, fmt:r=>(r.bounce*100).toFixed(1)+'%' },
+  { key:'avgd', label:'Avg. pages', num:true, fmt:r=>r.avgd.toFixed(2) },
+];
+function drawEntryTable(){
+  drawSortableTable('entryHead','entryBody', ENTRY_COLS, lastEntryPages, entrySort, drawEntryTable);
+  document.getElementById('entrySub').textContent =
+    `${lastEntryPages.length} entry pages · click a column to sort · bounce = single-page sessions`;
+}
+
+// ==== Controls ====
+function setTimeframe(tf){ timeframe=tf; customFrom=customTo=null;
+  document.getElementById('dateFrom').value=''; document.getElementById('dateTo').value='';
+  document.querySelectorAll('#timeframeSeg button').forEach(b=>b.classList.toggle('active', b.dataset.tf===tf)); render(); }
+function applyCustomDates(){
+  const f=document.getElementById('dateFrom').value, t=document.getElementById('dateTo').value;
+  if (!f && !t) return;
+  customFrom = f ? new Date(f+'T00:00:00Z') : dataMin;
+  customTo   = t ? new Date(t+'T23:59:59Z') : dataMax;
+  if (customFrom > customTo){ const x=customFrom; customFrom=customTo; customTo=x; }
+  timeframe='custom';
+  document.querySelectorAll('#timeframeSeg button').forEach(b=>b.classList.remove('active'));
+  render();
+}
+function setLanguage(l){ language=l; render(); }
+function setRankMetric(m){ rankMetric=m; drawRanking(); }
+function setTrafficMetric(m){ trafficMetric=m;
+  document.getElementById('tmVisits').classList.toggle('active', m==='visits');
+  document.getElementById('tmUnique').classList.toggle('active', m==='unique');
+  renderTraffic(windows()); }
+function switchTab(id){
+  activeTab = id;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===id));
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.toggle('active', c.id==='tab-'+id));
+  renderActiveTab();
+}
+function setStatus(cls,txt){ const s=document.getElementById('status'); s.className='status '+cls;
+  document.getElementById('statusText').textContent=txt; }
+function setLoading(t){ document.getElementById('loadingText').textContent=t; }
+
+// ==== XLSX export (pages table + KPIs), house style ====
+async function exportXlsx(evt){
+  const btn=evt&&evt.target, orig=btn?btn.textContent:'';
+  try {
+    if (btn){ btn.textContent='Exporting…'; btn.disabled=true; }
+    // Refresh datasets whose tab hasn't rendered since the last filter change,
+    // so the workbook always reflects the current window/language.
+    const w = windows();
+    if (dirtyTabs.overview){ await renderKpis(w); await computePages(w); }
+    if (!lastAudienceKpis.length) await computeAudience(w);
+    if (hasPubDates && !lastLifecycleKpis.length) await computeLifecycle(w);
+    const wb=new ExcelJS.Workbook(); wb.creator='Site Owner Dashboard'; wb.created=new Date();
+    const BLACK={style:'thin',color:{argb:'FF000000'}};
+    const hFont={bold:true,color:{argb:'FF000000'},size:9,name:'Arial'};
+    const dFont={size:10,name:'Arial',color:{argb:'FF000000'}};
+    const alt={type:'pattern',pattern:'solid',fgColor:{argb:'FFF8F7F2'}};
+    function sheetTable(ws, startRow, headers, rows, rightAlign){
+      const hr=ws.getRow(startRow); headers.forEach((h,i)=>{ const c=hr.getCell(i+1); c.value=h; c.font=hFont;
+        c.alignment={horizontal:rightAlign[i]?'right':'left'}; c.border={top:BLACK,bottom:BLACK}; });
+      rows.forEach((row,ri)=>{ const er=ws.getRow(startRow+1+ri); const last=ri===rows.length-1;
+        row.forEach((v,ci)=>{ const c=er.getCell(ci+1); c.value=v; c.font=dFont;
+          c.alignment={horizontal:rightAlign[ci]?'right':'left'};
+          if (ri%2===1) c.fill=alt; if (last) c.border={bottom:BLACK}; }); });
+      ws.columns.forEach(col=>{ let mx=6; col.eachCell({includeEmpty:false},c=>{ const l=c.value?String(c.value).length:0; if(l>mx)mx=l; }); col.width=Math.min(mx+2,48); });
+    }
+    const wsK=wb.addWorksheet('KPIs');
+    sheetTable(wsK,1,['Metric','Value','MoM'], lastKpiRows,[false,true,true]);
+    const wsP=wb.addWorksheet('Pages');
+    const pRows=[...lastPages].sort((a,b)=>b.visits-a.visits).map(r=>[r.name,r.ct,r.views,r.visits,r.uniques,
+      +r.engagement.toFixed(2), r.avg_tos==null?'':Math.round(r.avg_tos), r.mom==null?'':(r.mom.toFixed(1)+'%')]);
+    sheetTable(wsP,1,['Page','Type','Views','Visits','Unique','Engmt','Avg time (s)','MoM'],pRows,[false,false,true,true,true,true,true,true]);
+    if (lastAudienceKpis.length){
+      const wsA=wb.addWorksheet('Audience');
+      const aKpi=lastAudienceKpis.map(k=>[k.label,k.value, k.p==null?'':(((k.c-k.p)/k.p)*100).toFixed(1)+'%']);
+      sheetTable(wsA,1,['Metric','Value','vs. prior period'],aKpi,[false,true,true]);
+      const eRows=[...lastEntryPages].sort((a,b)=>b.entries-a.entries).map(r=>[r.nm,r.ct,r.entries,
+        (r.share*100).toFixed(1)+'%',(r.bounce*100).toFixed(1)+'%',+r.avgd.toFixed(2)]);
+      sheetTable(wsA, aKpi.length+3, ['Entry Page','Type','Entries','Share','Bounce','Avg pages'],
+        eRows,[false,false,true,true,true,true]);
+    }
+    if (hasPubDates && lastLifecycleKpis.length){
+      const wsL=wb.addWorksheet('Content Lifecycle');
+      const lKpi=lastLifecycleKpis.map(k=>[k.label,k.value]);
+      sheetTable(wsL,1,['Metric','Value'],lKpi,[false,true]);
+      const aRows=[...lastArticles].sort((a,b)=>(b.pd||'').localeCompare(a.pd||'')).map(r=>[r.nm,r.ct,r.pd,
+        r.age,r.f7, r.share7==null?'':(r.share7*100).toFixed(0)+'%', r.winv]);
+      sheetTable(wsL, lKpi.length+3, ['Page','Type','Published','Age (d)','First 7d visits','7d share','Visits (window)'],
+        aRows,[false,false,false,true,true,true,true]);
+    }
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download=`site_analytics_${timeframe}.xlsx`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),8000);
+  } catch(e){ console.error(e); alert('Export failed: '+e.message); }
+  finally { if (btn){ btn.textContent=orig; btn.disabled=false; } }
+}
+
+init();
+</script>
+</body>
+</html>

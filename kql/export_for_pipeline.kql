@@ -10,9 +10,15 @@
 
 let StartTime = datetime(2026-03-01);
 let EndTime   = datetime(2026-04-01);
-
+// Substring matched against CustomProps.PageURL (case-insensitive).
+// Leave as "" to export every page. PageURL is double-nested:
+// customDimensions (JSON) -> CustomProps (JSON string) -> PageURL.
+let PageUrlFilter = "";
 pageViews
 | where timestamp between (StartTime .. EndTime)
+| where PageUrlFilter == ""
+    or tostring(parse_json(tostring(parse_json(customDimensions).CustomProps)).PageURL)
+       contains PageUrlFilter
 | project
     timestamp,
     id,

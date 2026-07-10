@@ -1,0 +1,59 @@
+// =============================================================================
+// SiteOwnerDashboard — pageViews export for ONE site
+// =============================================================================
+// Returns customDimensions as an UNMODIFIED JSON string so
+// scripts/process_site_pageviews.py applies its own flatten logic
+// (same contract as ../kql/export_for_pipeline.kql).
+//
+// Procedure:
+//   1. Set PageUrlFilter to a substring that identifies your site — matched
+//      case-insensitively against customDimensions.CustomProps.PageURL
+//      (e.g. "news-and-events" catches every page under that site's URL).
+//   2. Adjust the time window — export at least 13 months so the dashboard can
+//      show the 12-month trend AND a month-over-month delta against the prior
+//      period. Azure caps ~65k rows / export; page through by narrowing the
+//      window if your site is large.
+//   3. Azure Portal -> Logs -> run -> "Export -> CSV (all columns)".
+//   4. Drop the CSV into SiteOwnerDashboard/input/ and run:
+//        python scripts/process_site_pageviews.py input/<export>.csv
+//      (the KQL already scoped to one site, so --site is optional here.)
+// =============================================================================
+
+let StartTime = datetime(2025-06-01);
+let EndTime   = datetime(2026-07-01);
+// Site scope via PageURL — substring matched (case-insensitive) against
+// customDimensions.CustomProps.PageURL. PageURL is double-nested:
+// customDimensions (JSON) -> CustomProps (JSON string) -> PageURL.
+let PageUrlFilter = "news-and-events";
+pageViews
+| where timestamp between (StartTime .. EndTime)
+| where PageUrlFilter == ""
+    or tostring(parse_json(tostring(parse_json(customDimensions).CustomProps)).PageURL)
+       contains PageUrlFilter
+| project
+    timestamp,
+    id,
+    name,
+    url,
+    duration,
+    performanceBucket,
+    itemType,
+    customDimensions,         // <-- keep as raw JSON string for the pipeline
+    operation_Name,
+    operation_Id,
+    operation_ParentId,
+    session_Id,
+    user_Id,
+    client_Type,
+    client_Model,
+    client_OS,
+    client_IP,
+    client_City,
+    client_StateOrProvince,
+    client_CountryOrRegion,
+    client_Browser,
+    appId,
+    iKey,
+    sdkVersion,
+    itemCount
+| order by timestamp asc
