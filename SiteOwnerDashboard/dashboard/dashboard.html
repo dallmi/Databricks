@@ -69,6 +69,7 @@
   .btn { padding: 0.4rem 0.85rem; border: 1px solid var(--grey-1); border-radius: var(--radius); font-family: var(--font-sans);
     font-size: 0.8rem; cursor: pointer; background: var(--white); color: var(--grey-6); font-weight: 600; transition: all 0.15s; }
   .btn:hover { background: var(--surface); border-color: var(--grey-3); }
+  .btn-sm { padding: 0.25rem 0.6rem; font-size: 0.7rem; flex-shrink: 0; }
 
   .tabs { display: flex; gap: 0; background: var(--white); border-bottom: 1px solid var(--grey-1); padding: 0 1.5rem; }
   .tab { padding: 0.6rem 1.25rem; cursor: pointer; font-size: 0.85rem; font-weight: 500; color: var(--grey-5);
@@ -240,6 +241,7 @@
           <div class="table-header">
             <div><h3>Pages — performance &amp; trend</h3>
               <div class="st" id="pagesSub">click a column to sort · MoM = vs. prior equal period</div></div>
+            <button class="btn btn-sm" onclick="exportTableXlsx('pages', event)">Export XLSX</button>
           </div>
           <div class="table-scroll"><table id="pagesTable">
             <thead><tr id="pagesHead"></tr></thead>
@@ -276,6 +278,7 @@
             <div class="table-header">
               <div><h3>Published pages — launch reach &amp; longevity</h3>
                 <div class="st" id="articlesSub">click a column to sort</div></div>
+              <button class="btn btn-sm" onclick="exportTableXlsx('articles', event)">Export XLSX</button>
             </div>
             <div class="table-scroll"><table>
               <thead><tr id="articlesHead"></tr></thead>
@@ -307,6 +310,7 @@
           <div class="table-header">
             <div><h3>Entry pages — where sessions start</h3>
               <div class="st" id="entrySub">click a column to sort · bounce = single-page sessions</div></div>
+            <button class="btn btn-sm" onclick="exportTableXlsx('entry', event)">Export XLSX</button>
           </div>
           <div class="table-scroll"><table>
             <thead><tr id="entryHead"></tr></thead>
@@ -644,17 +648,20 @@ const PAGE_COLS = [
   { key:'trend', label:'Trend', num:false },
   { key:'mom', label:'MoM', num:true },
 ];
-function drawPagesTable(){
-  const head = document.getElementById('pagesHead');
-  head.innerHTML = PAGE_COLS.map(c=>`<th class="${c.num?'num':''}" onclick="sortPages('${c.key}')">${c.label}${
-    sortCol===c.key?`<span class="arr">${sortDir==='asc'?'▲':'▼'}</span>`:''}</th>`).join('');
-  const rows = [...lastPages].sort((a,b)=>{
+function sortedPages(){
+  return [...lastPages].sort((a,b)=>{
     let x=a[sortCol], y=b[sortCol];
     if (sortCol==='trend'){ x=a.trend.at(-1)||0; y=b.trend.at(-1)||0; }
     if (x==null) x=-Infinity; if (y==null) y=-Infinity;
     if (typeof x==='string') return sortDir==='asc'? x.localeCompare(y): y.localeCompare(x);
     return sortDir==='asc'? x-y : y-x;
   });
+}
+function drawPagesTable(){
+  const head = document.getElementById('pagesHead');
+  head.innerHTML = PAGE_COLS.map(c=>`<th class="${c.num?'num':''}" onclick="sortPages('${c.key}')">${c.label}${
+    sortCol===c.key?`<span class="arr">${sortDir==='asc'?'▲':'▼'}</span>`:''}</th>`).join('');
+  const rows = sortedPages();
   document.getElementById('pagesBody').innerHTML = rows.map(r=>`
     <tr>
       <td class="name" title="${r.name}">${r.name}</td>
@@ -716,6 +723,14 @@ function drawKpiCards(containerId, cards){
       <div class="kpi-sub">${k.delta!==undefined?k.delta:deltaHtml(k.c,k.p,k.invert)} <span>${k.sub}</span></div>
     </div>`).join('');
 }
+function sortByState(rows, state){
+  return [...rows].sort((a,b)=>{ let x=a[state.col], y=b[state.col];
+    if (x==null) x=-Infinity; if (y==null) y=-Infinity;
+    if (typeof x==='string' && typeof y==='string')
+      return state.dir==='asc' ? x.localeCompare(y) : y.localeCompare(x);
+    return state.dir==='asc' ? x-y : y-x;
+  });
+}
 function drawSortableTable(headId, bodyId, cols, rows, state, redraw){
   const head=document.getElementById(headId);
   head.innerHTML = cols.map(c=>`<th class="${c.num?'num':''}" data-k="${c.key}">${c.label}${
@@ -726,12 +741,7 @@ function drawSortableTable(headId, bodyId, cols, rows, state, redraw){
     else { state.col=k; state.dir = cols.find(c=>c.key===k).num?'desc':'asc'; }
     redraw();
   });
-  const sorted=[...rows].sort((a,b)=>{ let x=a[state.col], y=b[state.col];
-    if (x==null) x=-Infinity; if (y==null) y=-Infinity;
-    if (typeof x==='string' && typeof y==='string')
-      return state.dir==='asc' ? x.localeCompare(y) : y.localeCompare(x);
-    return state.dir==='asc' ? x-y : y-x;
-  });
+  const sorted = sortByState(rows, state);
   document.getElementById(bodyId).innerHTML = sorted.map(r=>'<tr>'+cols.map(c=>
     `<td class="${c.num?'num':''}${c.name?' name':''}"${c.name?` title="${r[c.key]}"`:''}>${c.fmt?c.fmt(r):r[c.key]}</td>`
   ).join('')+'</tr>').join('');
@@ -1040,7 +1050,26 @@ function setStatus(cls,txt){ const s=document.getElementById('status'); s.classN
   document.getElementById('statusText').textContent=txt; }
 function setLoading(t){ document.getElementById('loadingText').textContent=t; }
 
-// ==== XLSX export (pages table + KPIs), house style ====
+// ==== XLSX export, house style (shared helpers + global & per-table export) ====
+const XLSX_RULE={style:'thin',color:{argb:'FF000000'}};
+const XLSX_HFONT={bold:true,color:{argb:'FF000000'},size:9,name:'Arial'};
+const XLSX_DFONT={size:10,name:'Arial',color:{argb:'FF000000'}};
+const XLSX_ALT={type:'pattern',pattern:'solid',fgColor:{argb:'FFF8F7F2'}};
+function sheetTable(ws, startRow, headers, rows, rightAlign){
+  const hr=ws.getRow(startRow); headers.forEach((h,i)=>{ const c=hr.getCell(i+1); c.value=h; c.font=XLSX_HFONT;
+    c.alignment={horizontal:rightAlign[i]?'right':'left'}; c.border={top:XLSX_RULE,bottom:XLSX_RULE}; });
+  rows.forEach((row,ri)=>{ const er=ws.getRow(startRow+1+ri); const last=ri===rows.length-1;
+    row.forEach((v,ci)=>{ const c=er.getCell(ci+1); c.value=v; c.font=XLSX_DFONT;
+      c.alignment={horizontal:rightAlign[ci]?'right':'left'};
+      if (ri%2===1) c.fill=XLSX_ALT; if (last) c.border={bottom:XLSX_RULE}; }); });
+  ws.columns.forEach(col=>{ let mx=6; col.eachCell({includeEmpty:false},c=>{ const l=c.value?String(c.value).length:0; if(l>mx)mx=l; }); col.width=Math.min(mx+2,48); });
+}
+async function downloadWorkbook(wb, filename){
+  const buf=await wb.xlsx.writeBuffer();
+  const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url=URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download=filename; a.click(); setTimeout(()=>URL.revokeObjectURL(url),8000);
+}
 async function exportXlsx(evt){
   const btn=evt&&evt.target, orig=btn?btn.textContent:'';
   try {
@@ -1052,19 +1081,6 @@ async function exportXlsx(evt){
     if (!lastAudienceKpis.length) await computeAudience(w);
     if (hasPubDates && !lastLifecycleKpis.length) await computeLifecycle(w);
     const wb=new ExcelJS.Workbook(); wb.creator='Site Owner Dashboard'; wb.created=new Date();
-    const BLACK={style:'thin',color:{argb:'FF000000'}};
-    const hFont={bold:true,color:{argb:'FF000000'},size:9,name:'Arial'};
-    const dFont={size:10,name:'Arial',color:{argb:'FF000000'}};
-    const alt={type:'pattern',pattern:'solid',fgColor:{argb:'FFF8F7F2'}};
-    function sheetTable(ws, startRow, headers, rows, rightAlign){
-      const hr=ws.getRow(startRow); headers.forEach((h,i)=>{ const c=hr.getCell(i+1); c.value=h; c.font=hFont;
-        c.alignment={horizontal:rightAlign[i]?'right':'left'}; c.border={top:BLACK,bottom:BLACK}; });
-      rows.forEach((row,ri)=>{ const er=ws.getRow(startRow+1+ri); const last=ri===rows.length-1;
-        row.forEach((v,ci)=>{ const c=er.getCell(ci+1); c.value=v; c.font=dFont;
-          c.alignment={horizontal:rightAlign[ci]?'right':'left'};
-          if (ri%2===1) c.fill=alt; if (last) c.border={bottom:BLACK}; }); });
-      ws.columns.forEach(col=>{ let mx=6; col.eachCell({includeEmpty:false},c=>{ const l=c.value?String(c.value).length:0; if(l>mx)mx=l; }); col.width=Math.min(mx+2,48); });
-    }
     const wsK=wb.addWorksheet('KPIs');
     sheetTable(wsK,1,['Metric','Value','MoM'], lastKpiRows,[false,true,true]);
     const wsP=wb.addWorksheet('Pages');
@@ -1089,10 +1105,48 @@ async function exportXlsx(evt){
       sheetTable(wsL, lKpi.length+3, ['Page','Type','Published','Age (d)','First 7d visits','7d share','Visits (window)'],
         aRows,[false,false,false,true,true,true,true]);
     }
-    const buf=await wb.xlsx.writeBuffer();
-    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-    const url=URL.createObjectURL(blob); const a=document.createElement('a');
-    a.href=url; a.download=`site_analytics_${timeframe}.xlsx`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),8000);
+    await downloadWorkbook(wb, `site_analytics_${timeframe}.xlsx`);
+  } catch(e){ console.error(e); alert('Export failed: '+e.message); }
+  finally { if (btn){ btn.textContent=orig; btn.disabled=false; } }
+}
+
+// Per-table export — one sheet, current filters AND current column sort.
+const TABLE_EXPORTS = {
+  pages: {
+    sheet:'Pages', file:'pages',
+    async ensure(w){ if (dirtyTabs.overview){ await renderKpis(w); await computePages(w); } },
+    headers:['Page','Type','Views','Visits','Unique','Engmt','Avg time (s)','MoM'],
+    right:[false,false,true,true,true,true,true,true],
+    rows(){ return sortedPages().map(r=>[r.name,r.ct,r.views,r.visits,r.uniques,
+      +r.engagement.toFixed(2), r.avg_tos==null?'':Math.round(r.avg_tos),
+      r.mom==null?'':(r.mom.toFixed(1)+'%')]); },
+  },
+  articles: {
+    sheet:'Published pages', file:'published_pages',
+    async ensure(w){ if (hasPubDates && !lastArticles.length) await computeLifecycle(w); },
+    headers:['Page','Type','Published','Age (d)','First 7d visits','7d share','Visits (window)'],
+    right:[false,false,false,true,true,true,true],
+    rows(){ return sortByState(lastArticles, articleSort).map(r=>[r.nm,r.ct,r.pd,r.age,r.f7,
+      r.share7==null?'':(r.share7*100).toFixed(0)+'%', r.winv]); },
+  },
+  entry: {
+    sheet:'Entry pages', file:'entry_pages',
+    async ensure(w){ if (!lastEntryPages.length) await computeAudience(w); },
+    headers:['Entry Page','Type','Entries','Share','Bounce','Avg pages'],
+    right:[false,false,true,true,true,true],
+    rows(){ return sortByState(lastEntryPages, entrySort).map(r=>[r.nm,r.ct,r.entries,
+      (r.share*100).toFixed(1)+'%',(r.bounce*100).toFixed(1)+'%',+r.avgd.toFixed(2)]); },
+  },
+};
+async function exportTableXlsx(kind, evt){
+  const def=TABLE_EXPORTS[kind];
+  const btn=evt&&evt.target, orig=btn?btn.textContent:'';
+  try {
+    if (btn){ btn.textContent='Exporting…'; btn.disabled=true; }
+    await def.ensure(windows());
+    const wb=new ExcelJS.Workbook(); wb.creator='Site Owner Dashboard'; wb.created=new Date();
+    sheetTable(wb.addWorksheet(def.sheet), 1, def.headers, def.rows(), def.right);
+    await downloadWorkbook(wb, `${def.file}_${timeframe}.xlsx`);
   } catch(e){ console.error(e); alert('Export failed: '+e.message); }
   finally { if (btn){ btn.textContent=orig; btn.disabled=false; } }
 }
