@@ -510,9 +510,12 @@ async function loadData(){
   dataMax = new Date(meta.mx.replace(' ','T')+'Z');
   const ymd = d => d.toISOString().slice(0,10);
   ['dateFrom','dateTo'].forEach(id=>{ const el=document.getElementById(id); el.min=ymd(dataMin); el.max=ymd(dataMax); });
-  if (meta.site){ document.getElementById('siteTitle').textContent = meta.site;
+  // Display-name override — set to '' to fall back to site_name from the data.
+  const SITE_DISPLAY_NAME = 'Digital';
+  const siteLabel = SITE_DISPLAY_NAME || meta.site;
+  if (siteLabel){ document.getElementById('siteTitle').textContent = siteLabel;
     document.getElementById('siteSub').textContent = 'Page Analytics · Owner Dashboard'; }
-  document.title = (meta.site || 'Site') + ' — Owner Dashboard';
+  document.title = (siteLabel || 'Site') + ' — Owner Dashboard';
 }
 
 // ==== Render ====
