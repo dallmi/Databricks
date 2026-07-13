@@ -44,16 +44,22 @@ over HTTP (any static server works) — or use the standalone build below.
    ```
    No path needed: the script picks up the CSV/XLSX files in `input/` and
    auto-detects the HR parquet (`input/*.parquet`, then
-   `../../SearchAnalytics/output/hr_history.parquet`) for the
-   Audience-by-Division donut.
+   `../../SearchAnalytics/output/hr_history.parquet`) for the Division/Region
+   drilldowns (it carries the full GCRS hierarchy: division, unit, area, sector,
+   region, country).
 
    **Incremental** (same pattern as CampaignWe): a SHA-256 manifest
    (`output/site_pageviews.manifest.json`) tracks processed files — unchanged
    files are skipped, only new/changed ones are processed and **upserted** into
-   the existing parquet on `view_id`. Overlapping/chunked exports therefore
-   never double-count, and a re-exported (changed) file fully replaces the rows
-   it contributed before. Deleting a file from `input/` does **not** remove its
-   rows — use `--rebuild` for that. Overrides:
+   the existing parquet on a composite `event_key` (second-truncated timestamp
+   + user + session + page; the AppInsights `id` proved **not** event-unique in
+   real exports, so it is data-only). Overlapping/chunked exports therefore
+   never double-count — even when mixing CSV (sub-second timestamps) and Excel
+   (second-truncated) exports of the same rows. A re-exported (changed) file
+   fully replaces the rows it contributed before. Deleting a file from `input/`
+   does **not** remove its rows — use `--rebuild` for that. Known limitation
+   (as in CampaignWe): two distinct views of the same page by the same
+   user+session within the same second collapse into one. Overrides:
    ```bash
    python scripts/process_site_pageviews.py input/<export>.csv   # explicit file(s), skips hash check
    python scripts/process_site_pageviews.py --hr /path/to/hr_history.parquet
@@ -66,7 +72,10 @@ over HTTP (any static server works) — or use the standalone build below.
 
 `scripts/process_site_pageviews.py` reuses the exact flatten / UTC→CET /
 GPN-normalise / CammsTrackingID-split / temporal-HR-join logic from
-[`../scripts/flatten_appinsights.py`](../scripts/flatten_appinsights.py), then
+[`../scripts/flatten_appinsights.py`](../scripts/flatten_appinsights.py) —
+when running this folder **standalone** (outside the Databricks repo), copy
+that file into `scripts/` next to `process_site_pageviews.py`, otherwise the
+script exits with *"flatten_appinsights.py not found"*. It then
 denormalises fact + page dimension into one wide table and derives `language`
 from the PageURL (`/en/ /de/ /fr/ /it/` → EN/DE/FR/IT, else `Other`).
 
@@ -94,13 +103,20 @@ To refresh the vendored libraries after a version bump:
   equal-length period.
 - **Traffic over time** — 12+ months of monthly bars; the selected timeframe is
   emphasised (dark grey), the rest is context (light grey). Visits / Unique toggle.
-- **Audience by Division** — share of visits by HR division (from the HR join;
-  shows a hint instead when built without `--hr`).
+- **Audience by Division** — visits by HR division as a click-to-drill bar list
+  that descends the GCRS org hierarchy **Division → Unit → Area → Sector**
+  (breadcrumb to climb back). From the HR join; shows a hint instead when built
+  without `--hr`, and auto-skips any level absent from the export.
+- **Audience by Region** — visits by HR region, click-to-drill **Region →
+  Country** (work-location `hr_country`).
 - **Content Type** — share of page views by content type.
 - **Top & Bottom Pages** — the 5 best and 5 weakest pages, ranked by a metric
   you choose (Visits / Page Views / Unique / Engagement / Avg time on page).
 - **Pages — performance & trend** — every page on the site: views, visits,
   unique, engagement, avg time, a weekly trend sparkline and MoM delta. Sortable.
+  When grouped by page name, a page with several language variants is
+  **expandable** — click the chevron to reveal its per-URL / per-language rows
+  (each with its own metrics).
 
 ### Content Lifecycle (requires `PublishingDate` in the export)
 - **KPIs** — Pages Published in the window, Median 1st-Week Reach (visits in the
@@ -133,9 +149,14 @@ If the export has no `PublishingDate`, the tab shows an explanatory empty state
   Lifecycle (KPIs + published pages), corporate-styled, always reflecting the
   current timeframe/language filter.
 
-Filters: **Timeframe** (30d / 90d / YTD / 12mo / All), a **custom from–to date
-range** picker, and **Language** (All / EN / DE / FR / IT) — all live in the
-browser. Every KPI/chart/table reacts instantly; all deltas are vs. the prior
+Filters: **Timeframe** (30d / 90d / YTD / 12mo / All) and a **custom from–to date
+range** picker, plus a **global filter bar** — a primary row (Site Name, Page
+Name, Page URL, Division, Region, Language) and a collapsible **Advanced** row
+(Content Type, Content Owner, Channel, Topic, Theme). Every control is a
+searchable multi-select; selections combine (AND) and show as removable chips
+with **Clear all**. Dimensions that are absent or single-valued in the export
+auto-hide, so the bar stays clean. Everything lives in the browser; every
+KPI/chart/table/drilldown reacts instantly, all deltas vs. the prior
 equal-length period.
 
 ## Phase 2 — customEvents (clicks, downloads, video, search)
