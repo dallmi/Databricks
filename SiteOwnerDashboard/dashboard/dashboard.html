@@ -314,6 +314,16 @@
             <div class="chart-title">Content Type <span class="st">share of page views</span></div>
             <div class="chart-container"><canvas id="chartContentType"></canvas></div>
           </div>
+          <div class="chart-card">
+            <div class="chart-title">Language distribution
+              <span class="seg" id="langMetricSeg">
+                <button id="lmViews" class="active" onclick="setLanguageMetric('views')">Views</button>
+                <button id="lmVisits" onclick="setLanguageMetric('visits')">Visits</button>
+                <button id="lmUniques" onclick="setLanguageMetric('uniques')">UV</button>
+              </span>
+            </div>
+            <div class="chart-container"><canvas id="chartLanguage"></canvas></div>
+          </div>
         </div>
 
         <div class="chart-card full-width" style="margin-bottom:1.25rem;">
@@ -469,7 +479,7 @@ Chart.register({ id:'donutLegend', beforeInit(ch){
   if (ch.config.type !== 'doughnut') return;
   ch.options.plugins.legend.labels.generateLabels = function(c){
     const ds = c.data.datasets[0]; const total = ds.data.reduce((a,b)=>a+b,0);
-    return c.data.labels.map((l,i)=>({ text:`${l}  ${ds.data[i].toLocaleString()} (${total?(ds.data[i]/total*100).toFixed(1):0}%)`,
+    return c.data.labels.map((l,i)=>({ text:`${l}  ${fmt(ds.data[i])} (${total?(ds.data[i]/total*100).toFixed(1):0}%)`,
       fillStyle: ds.backgroundColor[i], strokeStyle: ds.backgroundColor[i], hidden:false, index:i }));
   };
 }});
@@ -489,14 +499,27 @@ Chart.register({ id:'donutSliceLabel', afterDatasetsDraw(chart){
   if (chart.options.plugins.donutSliceLabel === false) return;
   const {ctx}=chart, meta=chart.getDatasetMeta(0), ds=chart.data.datasets[0];
   const total = ds.data.reduce((a,b)=>a+(+b||0),0); if (!total) return;
-  ctx.save(); ctx.font=LABEL_FONT; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.save(); ctx.textAlign='center'; ctx.textBaseline='middle';
   meta.data.forEach((arc,i)=>{
     const v=+ds.data[i]||0, share=v/total; if (share < 0.05) return;
     const p=arc.getProps(['startAngle','endAngle','innerRadius','outerRadius','x','y'], true);
     if (p.endAngle - p.startAngle < 0.28) return;               // arc too narrow for a label
     const mid=(p.startAngle+p.endAngle)/2, r=(p.innerRadius+p.outerRadius)/2;
+    const bandThick = p.outerRadius - p.innerRadius;
+    const arcWidthPx = (p.endAngle - p.startAngle) * r;         // tangential room at mid-radius
+    const pctTxt = (share*100).toFixed(share<0.1?1:0)+'%';
+    const valTxt = fmt(v);
+    // Show the value on a 2nd line only when the slice is roomy enough to hold it.
+    const showVal = bandThick >= 26 && arcWidthPx >= Math.max(34, valTxt.length*6.5);
+    const cx = p.x+Math.cos(mid)*r, cy = p.y+Math.sin(mid)*r;
     ctx.fillStyle=_ink(ds.backgroundColor[i]);
-    ctx.fillText((share*100).toFixed(share<0.1?1:0)+'%', p.x+Math.cos(mid)*r, p.y+Math.sin(mid)*r);
+    if (showVal){
+      ctx.font=LABEL_FONT; ctx.fillText(pctTxt, cx, cy-6);
+      ctx.font="9px 'Frutiger 45 Light','Helvetica Neue',Helvetica,Arial,sans-serif";
+      ctx.fillText(valTxt, cx, cy+7);
+    } else {
+      ctx.font=LABEL_FONT; ctx.fillText(pctTxt, cx, cy);
+    }
   });
   ctx.restore();
 }});
@@ -562,7 +585,7 @@ Chart.register({ id:'barValueLabel',
 let db=null, conn=null, hasInteractions=false;
 let dataMin=null, dataMax=null;
 let pvCols=new Set(), hasPubDates=false;
-let timeframe='90d', trafficMetric='visits', rankMetric='visits';
+let timeframe='90d', trafficMetric='visits', rankMetric='visits', langMetric='views';
 let customFrom=null, customTo=null;
 let articleSort={col:'pd', dir:'desc'}, entrySort={col:'entries', dir:'desc'};
 let charts={};
@@ -760,7 +783,7 @@ async function renderActiveTab(){
   dirtyTabs[activeTab] = false;
   const w = windows();
   if (activeTab==='overview')
-    await Promise.all([ renderKpis(w), renderTraffic(w), renderDivDrill(w), renderRegionDrill(w), renderContentType(w), renderPages(w) ]);
+    await Promise.all([ renderKpis(w), renderTraffic(w), renderDivDrill(w), renderRegionDrill(w), renderContentType(w), renderLanguage(w), renderPages(w) ]);
   else if (activeTab==='lifecycle') await renderLifecycle(w);
   else if (activeTab==='audience') await renderAudience(w);
 }
@@ -919,6 +942,28 @@ async function renderContentType(w){
     data:{ labels, datasets:[{ data:vals, backgroundColor:colors, borderWidth:1, borderColor:'#fff' }] },
     options:{ responsive:true, maintainAspectRatio:false, cutout:'64%',
       plugins:{ legend:{ position:'right', labels:{ font:{size:10} } } } }
+  });
+}
+
+// Language distribution — share of the selected additive metric (Views / Visits /
+// Unique Visitors) across the whole (filtered) site. Ratios (engagement, avg
+// time) are deliberately excluded: a "share" donut of a ratio is meaningless.
+const LANG_METRIC_SQL = { views:'COUNT(*)', visits:'COUNT(DISTINCT session_id)', uniques:'COUNT(DISTINCT person_id)' };
+const LANG_METRIC_LABEL = { views:'page views', visits:'visits', uniques:'unique visitors' };
+async function renderLanguage(w){
+  if (!pvCols.has('language')){ chartEmpty('chartLanguage','No language column in this export.'); return; }
+  const expr = LANG_METRIC_SQL[langMetric] || LANG_METRIC_SQL.views;
+  const rows = await query(`SELECT COALESCE(language,'Other') l, ${expr} v
+    FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1 ORDER BY 2 DESC`);
+  const labels=rows.map(r=>r.l), vals=rows.map(r=>r.v);
+  const colors = labels.map((_,i)=>DONUT_PALETTE[i % DONUT_PALETTE.length]);
+  destroy('language');
+  charts.language = new Chart(document.getElementById('chartLanguage'), {
+    type:'doughnut',
+    data:{ labels, datasets:[{ data:vals, backgroundColor:colors, borderWidth:1, borderColor:'#fff' }] },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'64%',
+      plugins:{ legend:{ position:'right', labels:{ font:{size:10} } },
+        tooltip:{ callbacks:{ label:c=>`${c.label}: ${c.parsed.toLocaleString()} ${LANG_METRIC_LABEL[langMetric]}` } } } }
   });
 }
 
@@ -1769,6 +1814,11 @@ function setTrafficMetric(m){ trafficMetric=m;
   document.getElementById('tmVisits').classList.toggle('active', m==='visits');
   document.getElementById('tmUnique').classList.toggle('active', m==='unique');
   renderTraffic(windows()); }
+function setLanguageMetric(m){ langMetric=m;
+  document.getElementById('lmViews').classList.toggle('active', m==='views');
+  document.getElementById('lmVisits').classList.toggle('active', m==='visits');
+  document.getElementById('lmUniques').classList.toggle('active', m==='uniques');
+  renderLanguage(windows()); }
 function switchTab(id){
   activeTab = id;
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===id));
