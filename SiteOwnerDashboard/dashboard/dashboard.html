@@ -764,10 +764,20 @@ async function loadData(){
   ['dateFrom','dateTo'].forEach(id=>{ const el=document.getElementById(id); el.min=ymd(dataMin); el.max=ymd(dataMax); });
   // Display-name override — set to '' to fall back to site_name from the data.
   const SITE_DISPLAY_NAME = 'Site Owner Dashboard';
-  const siteLabel = SITE_DISPLAY_NAME || meta.site;
-  if (siteLabel){ document.getElementById('siteTitle').textContent = siteLabel;
-    document.getElementById('siteSub').textContent = 'Page Analytics'; }
-  document.title = siteLabel || 'Site Owner Dashboard';
+  DEFAULT_SITE_TITLE = SITE_DISPLAY_NAME || meta.site || 'Site Owner Dashboard';
+  updateSiteTitle();
+}
+
+// Title shows the filtered site name when exactly one site_name is selected,
+// otherwise falls back to the dashboard's default title.
+let DEFAULT_SITE_TITLE = 'Site Owner Dashboard';
+function updateSiteTitle(){
+  const sites = activeFilters.get('site_name');
+  const single = sites && sites.size === 1 ? [...sites][0] : null;
+  const title = single ? `${DEFAULT_SITE_TITLE} – ${single}` : DEFAULT_SITE_TITLE;
+  document.getElementById('siteTitle').textContent = title;
+  document.getElementById('siteSub').textContent = single ? 'Site Analytics' : 'Page Analytics';
+  document.title = title;
 }
 
 // ==== Render ====
@@ -1278,6 +1288,7 @@ function renderChips(){
   }
   if (parts.length) parts.push(`<span class="chip clear-all" id="chipClearAll">Clear all</span>`);
   host.innerHTML = parts.join('');
+  updateSiteTitle();
   host.querySelectorAll('.chip .x').forEach(x=>x.addEventListener('click', ()=>{
     const col=x.dataset.col; activeFilters.delete(col);
     const ctl=filterControls.get(col); if (ctl) ctl.setSelected(new Set());
