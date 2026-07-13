@@ -196,6 +196,24 @@
   .cp-search:focus { outline: none; border-color: var(--primary); }
   .cp-option.filtered-out { display: none; }
   .cp-trigger.has-sel { border-color: var(--primary); color: var(--black); }
+
+  /* Drilldown bar-lists (ported from the Clicks dashboard) */
+  .breadcrumb { display: flex; align-items: center; gap: 0.3rem; padding: 0.35rem 0; margin-bottom: 0.4rem;
+    font-size: 0.72rem; flex-wrap: wrap; border-bottom: 1px solid var(--grey-1); }
+  .breadcrumb-item { color: var(--info); cursor: pointer; }
+  .breadcrumb-item:hover { text-decoration: underline; }
+  .breadcrumb-sep { color: var(--grey-4); }
+  .breadcrumb-current { color: var(--grey-6); font-weight: 600; }
+  .bar-list { display: flex; flex-direction: column; gap: 0.3rem; max-height: 300px; overflow-y: auto; }
+  .bar-row { display: grid; grid-template-columns: 180px 1fr 70px; gap: 0.5rem; align-items: center;
+    font-size: 0.78rem; cursor: pointer; padding: 0.15rem 0.2rem; border-radius: var(--radius); transition: background 0.1s; }
+  .bar-row.no-drill { cursor: default; }
+  .bar-row:hover:not(.no-drill) { background: var(--surface); }
+  .bar-row-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--grey-6); }
+  .bar-row-track { background: var(--surface); height: 16px; border-radius: var(--radius); position: relative; overflow: hidden; }
+  .bar-row-fill { height: 100%; border-radius: var(--radius); transition: width 0.2s; }
+  .bar-row-count { font-variant-numeric: tabular-nums; text-align: right; color: var(--grey-6); font-weight: 500; }
+  @media (max-width: 900px){ .bar-row { grid-template-columns: 120px 1fr 60px; } }
 </style>
 </head>
 <body>
@@ -273,8 +291,14 @@
             <div class="chart-container tall"><canvas id="chartTraffic"></canvas></div>
           </div>
           <div class="chart-card">
-            <div class="chart-title">Audience by Division <span class="st">share of visits</span></div>
-            <div class="chart-container"><canvas id="chartDivision"></canvas></div>
+            <div class="chart-title">Audience by Division <span class="st" id="divDrillMeta">click a bar to drill Unit › Area › Sector</span></div>
+            <div class="breadcrumb" id="divDrillBreadcrumb"></div>
+            <div class="bar-list" id="divDrillBars"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Audience by Region <span class="st" id="regDrillMeta">click a region to drill into Country</span></div>
+            <div class="breadcrumb" id="regionDrillBreadcrumb"></div>
+            <div class="bar-list" id="regionDrillBars"></div>
           </div>
           <div class="chart-card">
             <div class="chart-title">Content Type <span class="st">share of page views</span></div>
@@ -413,6 +437,20 @@ function divisionColor(name){ if (DIVISION_COLOR_MAP[name]) return DIVISION_COLO
   const c = DIVISION_GRAYS_FALLBACK[divFallbackIdx % DIVISION_GRAYS_FALLBACK.length]; divFallbackIdx++; return c; }
 // Ordinary <=10-cat donuts: greys + bronze accent (never the 20-colour rainbow).
 const DONUT_PALETTE = ['#404040','#B98E2C','#8E8D83','#CCCABC','#5A5D5C','#946F29','#B8B3A2','#7A7870','#6C5312'];
+
+// ==== Drilldown config (Division→Unit→Area→Sector, Region→Country) ====
+const DIV_LEVELS = ['hr_division','hr_unit','hr_area','hr_sector'];
+const DIV_LABELS = ['Division','Unit','Area','Sector'];
+const REG_LEVELS = ['hr_region','hr_country'];
+const REG_LABELS = ['Region','Country'];
+const REGION_COLOR_MAP = { 'SWITZERLAND':'#404040','EMEA':'#8E8D83','AMERICAS':'#5A5D5C','APAC':'#B8B3A2' };
+let regFallbackIdx = 0;
+function regionColor(name){ if (REGION_COLOR_MAP[name]) return REGION_COLOR_MAP[name];
+  const c = DIVISION_GRAYS_FALLBACK[regFallbackIdx % DIVISION_GRAYS_FALLBACK.length]; regFallbackIdx++; return c; }
+const COUNTRY_PALETTE = ['#404040','#B98E2C','#8E8D83','#CCCABC','#5A5D5C','#946F29','#B8B3A2','#6C5312'];
+let divDrill = { level:0, filters:[] };   // filters: [{level, value}]
+let regDrill = { level:0, filter:null };
+function escSql(s){ return String(s).replace(/'/g,"''"); }
 const BAR_EMPHASIS = '#404040';   // selected window
 const BAR_CONTEXT  = '#CCCABC';   // rest, for context
 
@@ -712,7 +750,7 @@ async function renderActiveTab(){
   dirtyTabs[activeTab] = false;
   const w = windows();
   if (activeTab==='overview')
-    await Promise.all([ renderKpis(w), renderTraffic(w), renderDivision(w), renderContentType(w), renderPages(w) ]);
+    await Promise.all([ renderKpis(w), renderTraffic(w), renderDivDrill(w), renderRegionDrill(w), renderContentType(w), renderPages(w) ]);
   else if (activeTab==='lifecycle') await renderLifecycle(w);
   else if (activeTab==='audience') await renderAudience(w);
 }
@@ -767,21 +805,98 @@ async function renderTraffic(w){
   });
 }
 
-async function renderDivision(w){
-  if (!pvCols.has('hr_division')){
-    chartEmpty('chartDivision','No HR enrichment — rebuild with --hr to see divisions.'); return; }
-  const rows = await query(`SELECT COALESCE(hr_division,'Unknown') d, COUNT(DISTINCT session_id) v
-    FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1 ORDER BY 2 DESC`);
-  divFallbackIdx=0;
-  const labels=rows.map(r=>r.d), vals=rows.map(r=>r.v), colors=labels.map(divisionColor);
-  destroy('division');
-  charts.division = new Chart(document.getElementById('chartDivision'), {
-    type:'doughnut',
-    data:{ labels, datasets:[{ data:vals, backgroundColor:colors, borderWidth:1, borderColor:'#fff' }] },
-    options:{ responsive:true, maintainAspectRatio:false, cutout:'64%',
-      plugins:{ legend:{ position:'right', labels:{ font:{size:10} } } } }
-  });
+function drillMissing(elId, msg){ document.getElementById(elId).innerHTML =
+  `<div class="chart-empty" style="padding:1.5rem">${escapeHtml(msg)}</div>`; }
+
+function buildDrillBreadcrumb(elId, level, labels, filters, navigateFn){
+  const el = document.getElementById(elId);
+  const parts = [`<span class="breadcrumb-item" onclick="${navigateFn}(-1)">All ${labels[0]}s</span>`];
+  for (let i=0; i<filters.length; i++){
+    parts.push(`<span class="breadcrumb-sep">›</span>`);
+    if (i < filters.length-1)
+      parts.push(`<span class="breadcrumb-item" onclick="${navigateFn}(${i})">${escapeHtml(filters[i].value)}</span>`);
+    else
+      parts.push(`<span class="breadcrumb-current">${escapeHtml(filters[i].value)} — ${labels[level]}</span>`);
+  }
+  if (filters.length===0) parts[0] = `<span class="breadcrumb-current">All ${labels[0]}s</span>`;
+  el.innerHTML = parts.join(' ');
 }
+
+function renderBars(targetId, rows, getColor, drillable, drillFn){
+  const el = document.getElementById(targetId);
+  if (!rows.length){ el.innerHTML = '<div class="chart-empty" style="padding:1.5rem">No data.</div>'; return; }
+  const max = Math.max(...rows.map(r=>Number(r.v)||0)) || 1;
+  el.innerHTML = rows.map((r,i)=>{
+    const v = Number(r.v)||0, pct=(v/max)*100, color=getColor(r.name, i);
+    const cls = drillable ? 'bar-row' : 'bar-row no-drill';
+    const onclick = drillable ? `onclick="${drillFn}('${String(r.name).replace(/'/g,"\\'").replace(/"/g,'&quot;')}')"` : '';
+    return `<div class="${cls}" ${onclick} title="${escapeHtml(r.name)}">
+      <div class="bar-row-label">${escapeHtml(r.name)}</div>
+      <div class="bar-row-track"><div class="bar-row-fill" style="width:${pct.toFixed(1)}%;background:${color}"></div></div>
+      <div class="bar-row-count">${fmt(v)}</div></div>`;
+  }).join('');
+}
+
+async function renderDivDrill(w){
+  w = w || windows();
+  if (!pvCols.has('hr_division')){ drillMissing('divDrillBars','No HR enrichment — rebuild with --hr for divisions.');
+    document.getElementById('divDrillBreadcrumb').innerHTML=''; return; }
+  const level = divDrill.level, col = DIV_LEVELS[level];
+  if (!pvCols.has(col)){ drillMissing('divDrillBars',`No ${DIV_LABELS[level]} data (${col}) in this export.`); return; }
+  let drillWhere='';
+  for (const f of divDrill.filters){ drillWhere += ` AND ${DIV_LEVELS[f.level]} = '${escSql(f.value)}'`; }
+  const rows = await query(`SELECT COALESCE(${col},'(unknown)') AS name, COUNT(DISTINCT session_id) AS v
+    FROM pv WHERE ${win(w.from,w.to)} AND ${col} IS NOT NULL${drillWhere}
+    GROUP BY 1 ORDER BY v DESC LIMIT 25`);
+  buildDrillBreadcrumb('divDrillBreadcrumb', level, DIV_LABELS, divDrill.filters, 'divNavigateTo');
+  document.getElementById('divDrillMeta').textContent =
+    `${DIV_LABELS[level]} • ${rows.length}` + (level < DIV_LEVELS.length-1 ? ' • click to drill' : '');
+  divFallbackIdx=0;
+  const drillable = level < DIV_LEVELS.length-1;
+  const parentColor = DIVISION_COLOR_MAP[divDrill.filters[0]?.value] || '#8E8D83';
+  const colorFn = level===0 ? (n=>divisionColor(n)) : (()=>parentColor);
+  renderBars('divDrillBars', rows, colorFn, drillable, 'divDrillInto');
+}
+window.divDrillInto = function(name){
+  if (divDrill.level >= DIV_LEVELS.length-1) return;
+  if (name === '(unknown)') return;
+  divDrill.filters.push({ level: divDrill.level, value: name });
+  divDrill.level++; renderDivDrill();
+};
+window.divNavigateTo = function(idx){
+  if (idx < 0){ divDrill.level=0; divDrill.filters=[]; }
+  else { divDrill.filters = divDrill.filters.slice(0, idx+1); divDrill.level = idx+1; }
+  renderDivDrill();
+};
+
+async function renderRegionDrill(w){
+  w = w || windows();
+  if (!pvCols.has('hr_region')){ drillMissing('regionDrillBars','No HR enrichment — rebuild with --hr for regions.');
+    document.getElementById('regionDrillBreadcrumb').innerHTML=''; return; }
+  const level = regDrill.level, col = REG_LEVELS[level];
+  if (!pvCols.has(col)){ drillMissing('regionDrillBars',`No ${REG_LABELS[level]} data (${col}) in this export.`); return; }
+  let drillWhere='';
+  if (regDrill.filter) drillWhere = ` AND hr_region = '${escSql(regDrill.filter)}'`;
+  const rows = await query(`SELECT COALESCE(${col},'(unknown)') AS name, COUNT(DISTINCT session_id) AS v
+    FROM pv WHERE ${win(w.from,w.to)} AND ${col} IS NOT NULL${drillWhere}
+    GROUP BY 1 ORDER BY v DESC LIMIT 25`);
+  const bc = document.getElementById('regionDrillBreadcrumb');
+  if (level===0) bc.innerHTML = `<span class="breadcrumb-current">All Regions</span>`;
+  else bc.innerHTML = `<span class="breadcrumb-item" onclick="regionNavigateTo(-1)">All Regions</span>`
+    + `<span class="breadcrumb-sep">›</span><span class="breadcrumb-current">${escapeHtml(regDrill.filter)} — Country</span>`;
+  document.getElementById('regDrillMeta').textContent =
+    `${REG_LABELS[level]} • ${rows.length}` + (level===0 ? ' • click to drill' : '');
+  regFallbackIdx=0;
+  const drillable = level===0;
+  const colorFn = level===0 ? (n=>regionColor(n)) : ((n,i)=>COUNTRY_PALETTE[i % COUNTRY_PALETTE.length]);
+  renderBars('regionDrillBars', rows, colorFn, drillable, 'regionDrillInto');
+}
+window.regionDrillInto = function(name){
+  if (regDrill.level >= REG_LEVELS.length-1) return;
+  if (name === '(unknown)') return;
+  regDrill.filter = name; regDrill.level = 1; renderRegionDrill();
+};
+window.regionNavigateTo = function(_){ regDrill.level=0; regDrill.filter=null; renderRegionDrill(); };
 
 async function renderContentType(w){
   const rows = await query(`SELECT COALESCE(content_type,'Unknown') ct, COUNT(*) v
