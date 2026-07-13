@@ -226,26 +226,24 @@ def upsert_store(store: pd.DataFrame | None, new: pd.DataFrame,
 
 
 # --- Person / visit derivation (metrics only — source columns untouched) -----
-# On this AppInsights instance session_Id and user_Id are (near-)unique per page
-# view — the JS SDK issues a fresh id on every navigation (Enterprise browsers
-# block the persistent cookie). Counting DISTINCT on them collapses the KPIs to
-# Page Views == Page Visits == Unique Visitors. The real person lives in
-# CustomProps.GPN (the `gpn` column), which repeats healthily (~3 views/person).
+# The dashboard counts VISITS on the official AppInsights `session_id` (the
+# company standard, so our numbers reconcile with other company reports). We
+# keep our OWN 30-min reconstruction as `visit_id` alongside it for comparison
+# (see reconcile_visit_session.py) — the real session_id has a ~30-min
+# inactivity timeout but also renews within a sitting (~48% persistence below
+# 30 min), so visit_id is the cleaner grouping; both are available.
 #
-# The source columns user_id / session_id are kept AS-IS (their true AppInsights
-# meaning). AFTER the full store is assembled we ADD two derived columns the
-# dashboard counts on:
-#   person_id  = GPN where present, else 'anon:<user_id>' (the anonymous device
-#                id, kept distinct so anonymous traffic is not merged into one).
-#   visit_id   = a VISIT reconstructed by a SESSION_GAP_MIN inactivity gap
-#                within a person (the industry-standard sessionisation).
-# time_on_page_sec / is_last_in_session are recomputed over the reconstructed
-# visit (the per-file values from flatten_appinsights were computed over the
-# useless source session and are all "last in session" -> Avg. Session 0s).
+# The real person lives in CustomProps.GPN (the `gpn` column). Since user_Id is
+# an anonymous per-device id, Unique Visitors is counted on `person_id`.
 #
-# This runs on the WHOLE store every run (not per-file batch) so a visit that
-# straddles two export files is stitched into one. It is deterministic: the same
-# rows always yield the same visits, so it is safe under the incremental upsert.
+# Source columns user_id / session_id are kept AS-IS. AFTER the full store is
+# assembled we ADD:
+#   person_id  = GPN where present, else 'anon:<user_id>' (Unique Visitors).
+#   visit_id   = our 30-min-gap reconstruction per person (secondary/QA).
+# time_on_page_sec / is_last_in_session are computed over the OFFICIAL
+# session_id, so Avg. Session is consistent with the session_id-based visits.
+#
+# This runs on the WHOLE store every run (deterministic, safe under the upsert).
 SESSION_GAP_MIN = 30
 
 
@@ -268,7 +266,9 @@ def derive_person_visit(df: pd.DataFrame) -> pd.DataFrame:
         person = person.fillna("anon:unknown")
     df["person_id"] = person
 
-    # 2. visit_id: new visit when the person changes or after an inactivity gap
+    # 2. visit_id: OUR reconstruction — new visit when the person changes or
+    #    after an inactivity gap. Kept for comparison; not what the dashboard
+    #    counts (that is the official session_id).
     ts = pd.to_datetime(df["timestamp"], errors="coerce")
     order = df[["person_id"]].assign(_ts=ts).sort_values(
         ["person_id", "_ts"], kind="mergesort")
@@ -277,25 +277,28 @@ def derive_person_visit(df: pd.DataFrame) -> pd.DataFrame:
     visit_no = new_visit.cumsum()
     df["visit_id"] = (order["person_id"].astype(str) + "#" + visit_no.astype(str)).reindex(df.index)
 
-    # 3. recompute time-on-page over the reconstructed visit
-    order2 = df[["visit_id"]].assign(_ts=ts).sort_values(
-        ["visit_id", "_ts"], kind="mergesort")
-    nxt = order2.groupby("visit_id", sort=False)["_ts"].shift(-1)
-    tos = (nxt - order2["_ts"]).dt.total_seconds()
-    tos = tos.where(tos <= 30 * 60)  # cap runaway gaps (tab left open), keep NaN
-    df["time_on_page_sec"] = tos.reindex(df.index)
-    df["is_last_in_session"] = nxt.isna().reindex(df.index)
+    # 3. time-on-page over the OFFICIAL session_id (the dashboard's visit unit)
+    if "session_id" in df.columns:
+        order2 = df[["session_id"]].assign(_ts=ts).sort_values(
+            ["session_id", "_ts"], kind="mergesort")
+        nxt = order2.groupby("session_id", sort=False)["_ts"].shift(-1)
+        tos = (nxt - order2["_ts"]).dt.total_seconds()
+        tos = tos.where(tos <= 30 * 60)  # cap runaway gaps (tab left open), keep NaN
+        df["time_on_page_sec"] = tos.reindex(df.index)
+        df["is_last_in_session"] = nxt.isna().reindex(df.index)
 
     persons = df["person_id"].nunique()
-    visits = df["visit_id"].nunique()
+    off_visits = df["session_id"].nunique() if "session_id" in df.columns else -1
+    our_visits = df["visit_id"].nunique()
     anon = n - gpn_present
-    print(f"  Person/visit derived: {persons:,} persons ({gpn_present:,}/{n:,} rows "
-          f"have GPN, {anon:,} anonymous), {visits:,} visits "
-          f"(gap {SESSION_GAP_MIN}m), {n/max(visits,1):.1f} views/visit")
+    print(f"  Derived: {persons:,} persons ({gpn_present:,}/{n:,} rows have GPN, "
+          f"{anon:,} anonymous)")
+    print(f"  Visits — OFFICIAL session_id: {off_visits:,} ({n/max(off_visits,1):.1f} "
+          f"views/visit)  |  our visit_id (gap {SESSION_GAP_MIN}m): {our_visits:,} "
+          f"({n/max(our_visits,1):.1f} views/visit)")
     if anon / max(n, 1) > 0.3:
         print(f"  WARNING: {anon/n:.0%} of views have no GPN — each anonymous view "
-              "counts as its own visitor/visit, inflating Unique Visitors. "
-              "Check the CustomProps.GPN coverage at the source.")
+              "counts as its own visitor. Check CustomProps.GPN coverage at the source.")
     return df
 
 

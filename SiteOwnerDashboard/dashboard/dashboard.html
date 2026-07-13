@@ -537,10 +537,10 @@ async function renderActiveTab(){
 }
 
 async function metricsFor(a,b){
-  const base = (await query(`SELECT COUNT(*) AS n_views, COUNT(DISTINCT visit_id) visits,
+  const base = (await query(`SELECT COUNT(*) AS n_views, COUNT(DISTINCT session_id) visits,
     COUNT(DISTINCT person_id) uniques FROM pv WHERE ${win(a,b)}`))[0];
   const avg = (await query(`SELECT AVG(t) a FROM
-    (SELECT visit_id, SUM(time_on_page_sec) t FROM pv WHERE ${win(a,b)} GROUP BY visit_id)`))[0];
+    (SELECT session_id, SUM(time_on_page_sec) t FROM pv WHERE ${win(a,b)} GROUP BY session_id)`))[0];
   const views=base.n_views||0, visits=base.visits||0, uniques=base.uniques||0;
   return { views, visits, uniques, avgSession: avg.a, engagement: visits? uniques/visits : 0 };
 }
@@ -566,7 +566,7 @@ async function renderKpis(w){
 
 async function renderTraffic(w){
   const rows = await query(`SELECT strftime(date_trunc('month', timestamp), '%Y-%m') m,
-    COUNT(DISTINCT visit_id) visits, COUNT(DISTINCT person_id) unique_ct
+    COUNT(DISTINCT session_id) visits, COUNT(DISTINCT person_id) unique_ct
     FROM pv WHERE TRUE${langClause()} GROUP BY 1 ORDER BY 1`);
   const labels = rows.map(r=>r.m);
   const vals = rows.map(r=> trafficMetric==='visits' ? r.visits : r.unique_ct);
@@ -589,7 +589,7 @@ async function renderTraffic(w){
 async function renderDivision(w){
   if (!pvCols.has('hr_division')){
     chartEmpty('chartDivision','No HR enrichment — rebuild with --hr to see divisions.'); return; }
-  const rows = await query(`SELECT COALESCE(hr_division,'Unknown') d, COUNT(DISTINCT visit_id) v
+  const rows = await query(`SELECT COALESCE(hr_division,'Unknown') d, COUNT(DISTINCT session_id) v
     FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1 ORDER BY 2 DESC`);
   divFallbackIdx=0;
   const labels=rows.map(r=>r.d), vals=rows.map(r=>r.v), colors=labels.map(divisionColor);
@@ -623,12 +623,12 @@ async function renderPages(w){
 }
 async function computePages(w){
   const cur = await query(`SELECT page_id, any_value(page_name) AS pname, any_value(content_type) ct,
-    COUNT(*) AS n_views, COUNT(DISTINCT visit_id) visits, COUNT(DISTINCT person_id) uniques,
+    COUNT(*) AS n_views, COUNT(DISTINCT session_id) visits, COUNT(DISTINCT person_id) uniques,
     AVG(time_on_page_sec) avg_tos FROM pv WHERE ${win(w.from,w.to)} GROUP BY page_id`);
-  const prev = w.hasPrev ? await query(`SELECT page_id, COUNT(DISTINCT visit_id) visits_prev
+  const prev = w.hasPrev ? await query(`SELECT page_id, COUNT(DISTINCT session_id) visits_prev
     FROM pv WHERE ${win(w.prevFrom,w.prevTo)} GROUP BY page_id`) : [];
   const trend = await query(`SELECT page_id, strftime(date_trunc('week', timestamp),'%Y-%m-%d') wk,
-    COUNT(DISTINCT visit_id) v FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1,2 ORDER BY 1,2`);
+    COUNT(DISTINCT session_id) v FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1,2 ORDER BY 1,2`);
   const prevMap = Object.fromEntries(prev.map(r=>[r.page_id, r.visits_prev]));
   const trendMap = {}; for (const t of trend){ (trendMap[t.page_id] ||= []).push(t.v); }
 
@@ -776,7 +776,7 @@ async function computeLifecycle(w){
   // First-week reach — only pages whose first 7 days lie fully inside the window.
   const f7 = (await query(`WITH ${pubsCte()}
     SELECT median(v) med, COUNT(*) n FROM (
-      SELECT p.page_id, COUNT(DISTINCT v.visit_id) v
+      SELECT p.page_id, COUNT(DISTINCT v.session_id) v
       FROM pubs p LEFT JOIN pv v ON v.page_id = p.page_id
         AND v.timestamp >= p.pd AND v.timestamp < p.pd + to_days(7)${langClause()}
       WHERE p.pd >= TIMESTAMP '${F}' AND p.pd + to_days(7) <= TIMESTAMP '${T}'
@@ -822,10 +822,10 @@ async function computeLifecycle(w){
     SELECT p.page_id, any_value(p.nm) nm, any_value(p.ct) ct,
       strftime(any_value(p.pd), '%Y-%m-%d') pd,
       COUNT(DISTINCT CASE WHEN v.timestamp >= p.pd AND v.timestamp < p.pd + to_days(7)
-        THEN v.visit_id END) f7,
-      COUNT(DISTINCT v.visit_id) lifetime,
+        THEN v.session_id END) f7,
+      COUNT(DISTINCT v.session_id) lifetime,
       COUNT(DISTINCT CASE WHEN v.timestamp >= TIMESTAMP '${F}' AND v.timestamp <= TIMESTAMP '${T}'
-        THEN v.visit_id END) winv
+        THEN v.session_id END) winv
     FROM pubs p LEFT JOIN pv v ON v.page_id = p.page_id${langClause()}
     GROUP BY 1`);
 
@@ -911,7 +911,7 @@ async function renderAudience(w){
 async function audienceKpisFor(a,b){
   const s = (await query(`SELECT COUNT(*) sess, COALESCE(SUM(CASE WHEN v=1 THEN 1 ELSE 0 END),0) bounced,
       COALESCE(SUM(v),0) n_views
-    FROM (SELECT visit_id, COUNT(*) v FROM pv WHERE ${win(a,b)} GROUP BY 1)`))[0];
+    FROM (SELECT session_id, COUNT(*) v FROM pv WHERE ${win(a,b)} GROUP BY 1)`))[0];
   const u = (await query(`WITH fs AS (SELECT person_id, MIN(timestamp) f FROM pv WHERE TRUE${langClause()} GROUP BY 1)
     SELECT COUNT(DISTINCT p.person_id) vis,
       COUNT(DISTINCT CASE WHEN fs.f >= TIMESTAMP '${iso(a)}' THEN p.person_id END) newu
@@ -936,16 +936,16 @@ async function computeAudience(w){
       SELECT CASE WHEN s=1 THEN '1 visit' WHEN s=2 THEN '2 visits' WHEN s<=5 THEN '3–5'
                   WHEN s<=10 THEN '6–10' ELSE '10+' END b,
              CASE WHEN s=1 THEN 1 WHEN s=2 THEN 2 WHEN s<=5 THEN 3 WHEN s<=10 THEN 4 ELSE 5 END o
-      FROM (SELECT person_id, COUNT(DISTINCT visit_id) s FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1))
+      FROM (SELECT person_id, COUNT(DISTINCT session_id) s FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1))
     GROUP BY 1,2 ORDER BY 2`);
 
   const depth = await query(`SELECT b, o, COUNT(*) c FROM (
       SELECT CASE WHEN v=1 THEN '1 page' WHEN v=2 THEN '2 pages' WHEN v<=5 THEN '3–5' ELSE '6+' END b,
              CASE WHEN v=1 THEN 1 WHEN v=2 THEN 2 WHEN v<=5 THEN 3 ELSE 4 END o
-      FROM (SELECT visit_id, COUNT(*) v FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1))
+      FROM (SELECT session_id, COUNT(*) v FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1))
     GROUP BY 1,2 ORDER BY 2`);
 
-  const entries = await query(`WITH s AS (SELECT visit_id, arg_min(page_id, timestamp) pid,
+  const entries = await query(`WITH s AS (SELECT session_id, arg_min(page_id, timestamp) pid,
       COUNT(*) depth FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1),
     d AS (SELECT page_id, any_value(page_name) nm, any_value(content_type) ct FROM pv GROUP BY 1)
     SELECT s.pid, any_value(d.nm) nm, any_value(d.ct) ct, COUNT(*) entries,
