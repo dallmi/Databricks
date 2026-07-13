@@ -15,10 +15,13 @@ the standalone dashboard loads via DuckDB-WASM.
 Incremental processing (same pattern as CampaignWe/process_campaignwe.py):
   - Only NEW or CHANGED files are processed, tracked via SHA-256 hash in a
     manifest (output/site_pageviews.manifest.json).
-  - Overlapping exports are handled via UPSERT on `view_id` (the AppInsights
-    event id): incoming rows replace existing rows with the same view_id, and
-    a re-processed (changed) file first evicts all rows it contributed before
-    (matched on source_file). No double counting.
+  - Overlapping exports are handled via UPSERT on a composite `event_key`
+    (second-truncated timestamp + user_id + session_id + page_id — the
+    CampaignWe primary-key approach): incoming rows replace existing rows with
+    the same key, and a re-processed (changed) file first evicts all rows it
+    contributed before (matched on source_file). No double counting.
+    AppInsights `id` is deliberately NOT the key — real exports showed it is
+    not unique per event.
   - --rebuild wipes the manifest and reprocesses everything from scratch.
 
 Usage (from the SiteOwnerDashboard project root; raw exports go in input/):
@@ -58,13 +61,30 @@ from pathlib import Path
 
 import pandas as pd
 
-# Reuse the canonical pipeline from ../../scripts/flatten_appinsights.py
-# (this file lives in SiteOwnerDashboard/scripts/, the repo pipeline in
-# Databricks/scripts/).
-PROJECT_DIR = Path(__file__).resolve().parents[1]
-PIPELINE_DIR = PROJECT_DIR.parent / "scripts"
-if str(PIPELINE_DIR) not in sys.path:
-    sys.path.insert(0, str(PIPELINE_DIR))
+# Reuse the canonical pipeline from flatten_appinsights.py. In the repo it
+# lives in ../../scripts/ (Databricks/scripts/); when SiteOwnerDashboard is
+# copied standalone, a copy placed next to this script (or in the project
+# root) works too.
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parents[0]
+_PIPELINE_CANDIDATES = [
+    PROJECT_DIR.parent / "scripts",  # repo layout: Databricks/scripts/
+    SCRIPT_DIR,                      # standalone: next to this script
+    PROJECT_DIR,                     # standalone: project root
+]
+_pipeline_dir = next((d for d in _PIPELINE_CANDIDATES
+                      if (d / "flatten_appinsights.py").exists()), None)
+if _pipeline_dir is None:
+    sys.exit(
+        "flatten_appinsights.py not found — this script reuses the shared pipeline.\n"
+        "Looked in:\n"
+        + "\n".join(f"  - {d}" for d in _PIPELINE_CANDIDATES)
+        + "\nIn the repo, run from Databricks/SiteOwnerDashboard/ (the pipeline lives in "
+        "Databricks/scripts/).\nStandalone: copy Databricks/scripts/flatten_appinsights.py "
+        f"next to this script ({SCRIPT_DIR})."
+    )
+if str(_pipeline_dir) not in sys.path:
+    sys.path.insert(0, str(_pipeline_dir))
 
 from flatten_appinsights import (  # noqa: E402
     read_input,
@@ -146,20 +166,55 @@ def partition_files(files: list[Path], manifest: dict) -> tuple[list[tuple[Path,
     return to_process, skipped
 
 
+# --- Composite upsert key (CampaignWe primary-key approach) ------------------
+# All components are STORED AppInsights columns, so the same stored row yields
+# the same key in every export. The timestamp is truncated to whole seconds so
+# CSV (sub-second) and Excel (second-truncated) exports of the same rows still
+# match. AppInsights `id` (view_id) is deliberately NOT part of the key: real
+# exports contain duplicated ids for distinct events, so it is kept as data
+# only. Known accepted limitation (same as CampaignWe): two genuinely distinct
+# views of the same page by the same user+session within the same second
+# collapse into one.
+#
+# The key uses the RAW source identifiers (raw_user_id / raw_session_id). On
+# this AppInsights instance those are handed out fresh per page view, so they
+# are useless for counting people/visits — but they ARE stable per stored row,
+# which is exactly what the dedup key needs. The dashboard-facing user_id /
+# session_id columns are REPLACED downstream (see reconstruct_identity).
+KEY_COLS = ["raw_user_id", "raw_session_id", "page_id"]
+
+
+def add_event_key(df: pd.DataFrame) -> pd.DataFrame:
+    if "timestamp" in df.columns:
+        key = (pd.to_datetime(df["timestamp"], errors="coerce")
+               .dt.strftime("%Y-%m-%d %H:%M:%S").fillna(""))
+    else:
+        key = pd.Series("", index=df.index, dtype="string")
+    for c in KEY_COLS:
+        part = df[c].fillna("").astype(str) if c in df.columns else ""
+        key = key + "|" + part
+    df = df.copy()
+    df["event_key"] = key
+    return df
+
+
 # --- Upsert into the existing output parquet ---------------------------------
 def upsert_store(store: pd.DataFrame | None, new: pd.DataFrame,
                  replaced_files: list[str]) -> pd.DataFrame:
-    """Delete-then-insert (CampaignWe upsert pattern), key = view_id.
+    """Delete-then-insert (CampaignWe upsert pattern), key = event_key.
 
     1. Evict every store row contributed by a re-processed file (source_file)
        so changed files fully replace their previous rows.
-    2. Evict store rows whose view_id re-appears in the new batch (overlapping
-       time windows across different exports) — incoming wins.
+    2. Evict store rows whose event_key re-appears in the new batch
+       (overlapping time windows across different exports) — incoming wins.
     3. Append the new rows. Missing columns on either side become NA
        (schema evolution, e.g. HR columns present in only one batch).
     """
     if store is None or store.empty:
         return new
+
+    if "event_key" not in store.columns:  # store written before the key existed
+        store = add_event_key(store)
 
     before = len(store)
     if replaced_files and "source_file" in store.columns:
@@ -168,13 +223,85 @@ def upsert_store(store: pd.DataFrame | None, new: pd.DataFrame,
         if evicted:
             print(f"  Upsert: evicted {evicted:,} rows from changed file(s)")
 
-    if "view_id" in store.columns and "view_id" in new.columns:
-        overlap = store["view_id"].isin(new["view_id"].dropna())
-        if overlap.any():
-            print(f"  Upsert: replaced {int(overlap.sum()):,} overlapping rows (view_id)")
-            store = store[~overlap]
+    overlap = store["event_key"].isin(new["event_key"])
+    if overlap.any():
+        print(f"  Upsert: replaced {int(overlap.sum()):,} overlapping rows (event_key)")
+        store = store[~overlap]
 
     return pd.concat([store, new], ignore_index=True)
+
+
+# --- Identity reconstruction -------------------------------------------------
+# On this AppInsights instance session_Id and user_Id are (near-)unique per page
+# view — the JS SDK issues a fresh id on every navigation (Enterprise browsers
+# block the persistent cookie). Counting DISTINCT on them collapses the KPIs to
+# Page Views == Page Visits == Unique Visitors. The real person lives in
+# CustomProps.GPN (the `gpn` column), which repeats healthily (~3 views/person).
+#
+# So AFTER the full store is assembled we DERIVE the two identifiers the
+# dashboard actually reads:
+#   user_id    = the person: GPN where present, else the raw anonymous id
+#                (kept distinct so anonymous traffic is not merged into one).
+#   session_id = a VISIT reconstructed by a SESSION_GAP_MIN inactivity gap
+#                within a person (the industry-standard sessionisation).
+# time_on_page_sec / is_last_in_session are recomputed over the reconstructed
+# visit (the per-file values from flatten_appinsights were computed over the
+# useless raw session and are all "last in session" -> Avg. Session 0s).
+#
+# This runs on the WHOLE store every run (not per-file batch) so a visit that
+# straddles two export files is stitched into one. It is deterministic: the same
+# rows always yield the same visits, so it is safe under the incremental upsert.
+SESSION_GAP_MIN = 30
+
+
+def reconstruct_identity(df: pd.DataFrame) -> pd.DataFrame:
+    if "timestamp" not in df.columns:
+        print("  Identity: no timestamp column — skipping reconstruction")
+        return df
+    df = df.copy()
+    n = len(df)
+
+    # 1. person identity: GPN, else anonymous raw id (never collapse anon → 1)
+    if "gpn" in df.columns:
+        person = df["gpn"].astype("string")
+    else:
+        person = pd.Series(pd.NA, index=df.index, dtype="string")
+    gpn_present = int(person.notna().sum())
+    if "raw_user_id" in df.columns:
+        person = person.fillna("anon:" + df["raw_user_id"].astype("string").fillna(""))
+    else:
+        person = person.fillna("anon:unknown")
+    df["user_id"] = person
+
+    # 2. reconstruct visits: new visit when the person changes or after a gap
+    ts = pd.to_datetime(df["timestamp"], errors="coerce")
+    order = df[["user_id"]].assign(_ts=ts).sort_values(
+        ["user_id", "_ts"], kind="mergesort")
+    gap_min = order["_ts"].diff().dt.total_seconds().div(60)
+    new_visit = (order["user_id"] != order["user_id"].shift(1)) | (gap_min > SESSION_GAP_MIN) | gap_min.isna()
+    visit_no = new_visit.cumsum()
+    df["session_id"] = (order["user_id"].astype(str) + "#" + visit_no.astype(str)).reindex(df.index)
+
+    # 3. recompute time-on-page over the reconstructed visit
+    order2 = df[["session_id"]].assign(_ts=ts).sort_values(
+        ["session_id", "_ts"], kind="mergesort")
+    nxt = order2.groupby("session_id", sort=False)["_ts"].shift(-1)
+    tos = (nxt - order2["_ts"]).dt.total_seconds()
+    tos = tos.where(tos <= 30 * 60)  # cap runaway gaps (tab left open), keep NaN
+    df["time_on_page_sec"] = tos.reindex(df.index)
+    df["is_last_in_session"] = nxt.isna().reindex(df.index)
+
+    persons = df["user_id"].nunique()
+    visits = df["session_id"].nunique()
+    anon = n - gpn_present
+    print(f"  Identity reconstructed: {persons:,} persons ({gpn_present:,}/{n:,} rows "
+          f"have GPN, {anon:,} anonymous), {visits:,} visits "
+          f"(gap {SESSION_GAP_MIN}m), {n/max(visits,1):.1f} views/visit")
+    if anon / max(n, 1) > 0.3:
+        print(f"  WARNING: {anon/n:.0%} of views have no GPN — each anonymous view "
+              "counts as its own visitor/visit, inflating Unique Visitors. "
+              "Check the CustomProps.GPN coverage at the source.")
+    return df
 
 
 def resolve_hr_path(hr_arg: str | None, no_hr: bool) -> Path | None:
@@ -216,18 +343,6 @@ def build_one(input_path: Path, hr_path: Path | None) -> pd.DataFrame:
         for c in page_attr_cols:
             wide[c] = pd.NA
 
-    # Validate the upsert-key assumption: within ONE export, `id` (view_id)
-    # must be unique per pageview — a KQL export cannot return the same stored
-    # row twice, so duplicated ids here mean AppInsights `id` is NOT a reliable
-    # event key and the upsert would silently collapse distinct pageviews.
-    if "view_id" in wide.columns:
-        dup = int(wide["view_id"].dropna().duplicated().sum())
-        if dup:
-            print(f"    WARNING: {dup} duplicated view_id values WITHIN {input_path.name} — "
-                  "AppInsights `id` is not unique per event in your export. Do NOT "
-                  "trust the upsert; the key must be switched to a composite "
-                  "(timestamp+user+session+url).")
-
     return wide
 
 
@@ -236,18 +351,28 @@ def build(input_paths: list[Path], hr_path: Path | None, site_name: str | None,
     parts = [build_one(p, hr_path) for p in input_paths]
     wide = parts[0] if len(parts) == 1 else pd.concat(parts, ignore_index=True)
 
-    # Multiple exports may overlap in time. Dedup on view_id (the AppInsights
-    # event id) — session-derived fields like time_on_page_sec can differ per
-    # file for the same view, so a full-row comparison would miss those.
-    if len(parts) > 1:
-        before = len(wide)
-        if "view_id" in wide.columns and wide["view_id"].notna().all():
-            wide = wide.drop_duplicates(subset=["view_id"])
-        else:
-            dedup_cols = [c for c in wide.columns if c != "source_file"]
-            wide = wide.drop_duplicates(subset=dedup_cols)
-        if len(wide) < before:
-            print(f"  Dedup across files: dropped {before - len(wide):,} duplicate rows")
+    # Preserve the raw source ids under raw_* — they feed the dedup key
+    # (KEY_COLS) but are useless for counting people/visits. The dashboard-facing
+    # user_id / session_id are derived later in reconstruct_identity().
+    wide = wide.rename(columns={"user_id": "raw_user_id", "session_id": "raw_session_id"})
+
+    # Dedup on the composite event_key — exports may overlap in time, and
+    # session-derived fields (time_on_page_sec) can differ per file for the
+    # same view, so a full-row comparison would miss those. keep="last": files
+    # are processed in sorted name order, so the later export wins.
+    wide = add_event_key(wide)
+    before = len(wide)
+    wide = wide.drop_duplicates(subset=["event_key"], keep="last")
+    if len(wide) < before:
+        print(f"  Dedup within batch (event_key): dropped {before - len(wide):,} duplicate rows")
+
+    # Diagnostic: quantify how non-unique AppInsights `id` actually is
+    # (it is data-only, the upsert never relies on it).
+    if "view_id" in wide.columns:
+        shared = int(wide["view_id"].dropna().duplicated().sum())
+        if shared:
+            print(f"  Note: {shared:,} rows share an AppInsights id with a distinct "
+                  "event — expected, id is not event-unique; upsert uses event_key.")
 
     # Language from PageURL
     url_col = "page_url" if "page_url" in wide.columns else None
@@ -340,6 +465,8 @@ def main():
         store = pd.read_parquet(out_path)
         print(f"  Existing store: {len(store):,} rows")
     wide = upsert_store(store, new, [p.name for p, _, _ in to_process])
+    # Derive the person/visit identifiers on the FULL store (cross-file visits).
+    wide = reconstruct_identity(wide)
     wide.to_parquet(out_path, index=False)
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
