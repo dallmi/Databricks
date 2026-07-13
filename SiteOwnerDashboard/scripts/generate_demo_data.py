@@ -73,10 +73,78 @@ DIVISIONS = [
 REGIONS = [("SWITZERLAND", 0.44), ("EMEA", 0.30), ("AMERICAS", 0.16), ("APAC", 0.10)]
 OSES = ["Windows 10", "Windows 11", "Mac OS X", "iOS", "Android"]
 BROWSERS = ["Edge", "Chrome", "Safari", "Firefox"]
-COUNTRY_BY_REGION = {"SWITZERLAND": "Switzerland", "EMEA": "United Kingdom",
-                     "AMERICAS": "United States", "APAC": "Singapore"}
+
+# --- GCRS org hierarchy: Division -> Unit -> Area -> Sector -----------------
+# Mirrors the shared pipeline's hr_unit/hr_area/hr_sector columns so the
+# dashboard's Division drilldown (Division -> Unit -> Area -> Sector) has data.
+ORG = {
+    "Investment Bank": {
+        "Global Banking": {"M&A Advisory": ["EMEA Deals", "Americas Deals"],
+                           "Capital Markets": ["Equity CM", "Debt CM"]},
+        "Global Markets": {"Equities": ["Cash Equities", "Derivatives"],
+                           "FX & Rates": ["FX Spot", "Rates Trading"]},
+    },
+    "Global Wealth Management": {
+        "Client Advisory": {"UHNW": ["UHNW EMEA", "UHNW APAC"],
+                            "HNW": ["HNW Europe", "HNW Americas"]},
+        "Investment Products": {"Discretionary": ["Mandates", "Funds"],
+                                "Advisory": ["Research", "Structured Products"]},
+    },
+    "Personal & Corporate Banking": {
+        "Retail": {"Branch Network": ["Region North", "Region South"],
+                   "Digital Banking": ["Mobile", "Online"]},
+        "Corporate": {"SME Banking": ["DACH", "France"],
+                      "Trade Finance": ["Import", "Export"]},
+    },
+    "Asset Management": {
+        "Equities": {"Active": ["Global Equities", "Regional Equities"],
+                     "Passive": ["Index Funds", "ETFs"]},
+        "Fixed Income": {"Credit": ["Investment Grade", "High Yield"],
+                         "Rates": ["Government", "Inflation"]},
+    },
+    "Group Functions": {
+        "Technology": {"Engineering": ["Platform", "Data"],
+                       "Cyber": ["SecOps", "Governance & Risk"]},
+        "Finance & Risk": {"Controlling": ["FP&A", "Reporting"],
+                           "Risk": ["Market Risk", "Credit Risk"]},
+    },
+}
+
+# --- Region -> Country distribution (work location; several per region) -----
+REGION_COUNTRIES = {
+    "SWITZERLAND": [("Switzerland", 0.85), ("Liechtenstein", 0.15)],
+    "EMEA": [("United Kingdom", 0.40), ("Germany", 0.25), ("France", 0.20), ("UAE", 0.15)],
+    "AMERICAS": [("United States", 0.70), ("Brazil", 0.16), ("Canada", 0.14)],
+    "APAC": [("Singapore", 0.40), ("Hong Kong", 0.35), ("Japan", 0.25)],
+}
+
+# --- Theme -> Topic pool (per page; mirrors cp_Theme/cp_Topic) --------------
+THEMES = {
+    "Corporate Strategy": ["Results", "Operating Model", "Leadership"],
+    "Culture & People": ["Benefits", "Diversity", "Volunteering"],
+    "Technology & Security": ["Cyber Security", "Innovation"],
+    "Sustainability": ["ESG Report", "Climate"],
+}
 
 LANG_SEG = {"EN": "en", "DE": "de", "FR": "fr", "IT": "it"}
+
+
+def walk_org(division: str):
+    """Pick a deterministic-ish (RNG-seeded) Unit -> Area -> Sector path."""
+    units = list(ORG[division])
+    unit = units[RNG.integers(0, len(units))]
+    areas = list(ORG[division][unit])
+    area = areas[RNG.integers(0, len(areas))]
+    sectors = ORG[division][unit][area]
+    sector = sectors[RNG.integers(0, len(sectors))]
+    return unit, area, sector
+
+
+def pick_country(region: str) -> str:
+    pairs = REGION_COUNTRIES[region]
+    labels = [c for c, _ in pairs]
+    w = np.array([p for _, p in pairs], dtype=float)
+    return labels[RNG.choice(len(labels), p=w / w.sum())]
 
 
 def slug(name: str) -> str:
@@ -100,6 +168,14 @@ def weighted_choice(pairs):
 def main():
     page_ids = [str(uuid.UUID(bytes=bytes(RNG.integers(0, 256, size=16, dtype=np.uint8)))) for _ in PAGES]
     pop = np.array([p[3] for p in PAGES], dtype=float)
+
+    # Per-page theme/topic (stable per page): pick a theme, then a topic in it.
+    _theme_names = list(THEMES)
+    page_theme, page_topic = {}, {}
+    for i in range(len(PAGES)):
+        th = _theme_names[RNG.integers(0, len(_theme_names))]
+        tp = THEMES[th][RNG.integers(0, len(THEMES[th]))]
+        page_theme[i], page_topic[i] = th, tp
     pub_dt = {i: START + timedelta(days=p[4], hours=9) for i, p in enumerate(PAGES)}
 
     # Per-day page weights: popularity x age_factor(day - publish_day).
@@ -119,6 +195,12 @@ def main():
     user_gpn = {u: str(RNG.integers(1_000_000, 9_999_999)).zfill(8) for u in users}
     user_div = {u: div_labels[RNG.choice(len(div_labels), p=div_p)] for u in users}
     user_reg = {u: reg_labels[RNG.choice(len(reg_labels), p=reg_p)] for u in users}
+    # GCRS org path + work-location country per user (deterministic per user).
+    _org = {u: walk_org(user_div[u]) for u in users}
+    user_unit = {u: _org[u][0] for u in users}
+    user_area = {u: _org[u][1] for u in users}
+    user_sector = {u: _org[u][2] for u in users}
+    user_country = {u: pick_country(user_reg[u]) for u in users}
 
     n_sessions = 15000
     days_span = (REF_TODAY - START).days
@@ -156,14 +238,20 @@ def main():
                 "site_name": SITE_NAME,
                 "content_type": ct,
                 "content_owner": "Group Internal Communications",
+                "theme": page_theme[int(pidx)],
+                "topic": page_topic[int(pidx)],
                 "publishing_date": pub_dt[int(pidx)],
                 "language": lang,
                 "gpn": user_gpn[u],
                 "hr_division": user_div[u],
+                "hr_unit": user_unit[u],
+                "hr_area": user_area[u],
+                "hr_sector": user_sector[u],
                 "hr_region": user_reg[u],
+                "hr_country": user_country[u],
                 "client_os": OSES[RNG.integers(0, len(OSES))],
                 "client_browser": BROWSERS[RNG.integers(0, len(BROWSERS))],
-                "client_country": COUNTRY_BY_REGION[user_reg[u]],
+                "client_country": user_country[u],
                 "page_load_ms": int(RNG.integers(180, 2600)),
                 "tracking_id": f"QRREP-{1000+pidx:07d}-260215-{2000+pidx:07d}-EMI" if has_tid else None,
                 "tracking_pack_id": f"QRREP-{1000+pidx:07d}" if has_tid else None,
