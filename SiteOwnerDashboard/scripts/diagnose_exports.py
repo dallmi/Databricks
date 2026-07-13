@@ -57,6 +57,13 @@ UNIQUE_RATIO_THRESHOLD = 0.90
 
 GUID_RE = re.compile(r"^[0-9a-fA-F]{32}$|^[0-9a-fA-F-]{36}$")
 
+# Pull GPN straight out of the double-nested customDimensions JSON without a
+# full parse — the real person identifier lives in CustomProps.GPN (user_Id is
+# only an anonymous per-device/per-session cookie). The inner JSON is escaped
+# (\"GPN\":\"12345678\"), so match GPN followed by any run of quote/backslash/
+# colon/space, then the digits — works for escaped, unescaped, and numeric.
+GPN_RE = re.compile(r'GPN[\\":\s]{1,8}(\d{5,10})')
+
 issues: list[str] = []   # collected [FAIL]/[WARN] lines for the verdict
 
 
@@ -199,13 +206,43 @@ def check_input_file(path: Path) -> dict | None:
             flag("FAIL", f"{col} is per-row-unique (ratio {ratio:.1%}) — expected: {expect}. "
                          "This file itself produces Views == Visits == Uniques.")
 
-    # --- simulated dashboard KPIs for THIS file ---
+    # --- GPN: the REAL person identifier, hidden in customDimensions ---
+    # If session_Id/user_Id are per-row-unique, the fix is to count distinct
+    # people via CustomProps.GPN. This block quantifies whether GPN is usable.
+    gpn = None
+    if "customDimensions" in df.columns:
+        gpn = df["customDimensions"].astype(str).str.extract(GPN_RE, expand=False)
+        gpn = gpn.where(~gpn.isin(["", "0", "00000000", "nan", "None"]))
+        have = gpn.notna().sum()
+        distinct_gpn = gpn.nunique()
+        if have == 0:
+            flag("WARN", "no GPN found in customDimensions — cannot rebuild Unique "
+                         "Visitors from the person id; check the CustomProps.GPN field")
+        else:
+            gpn_ratio = distinct_gpn / have
+            print(f"  GPN (CustomProps, the real person): {distinct_gpn:,} distinct / "
+                  f"{have:,} present ({have/len(df):.0%} of rows)  ratio={gpn_ratio:.1%}")
+            if gpn_ratio < 0.9:
+                ok(f"GPN has healthy cardinality (ratio {gpn_ratio:.1%}) — usable as "
+                   "Unique Visitors; user_Id is NOT")
+            else:
+                flag("WARN", f"GPN is also near-unique (ratio {gpn_ratio:.1%}) — even the "
+                             "person id barely repeats in this window")
+
+    # --- simulated dashboard KPIs for THIS file, current vs GPN-based ---
     if "session_Id" in df.columns and "user_Id" in df.columns:
         views = len(df)
         visits, _ = uniq_ratio(df["session_Id"])
         uniques, _ = uniq_ratio(df["user_Id"])
         verdictish = "BROKEN (1:1:1)" if visits > views * 0.9 and uniques > views * 0.9 else "plausible"
-        print(f"  simulated KPIs: views={views:,}  visits={visits:,}  uniques={uniques:,}  -> {verdictish}")
+        print(f"  simulated KPIs (current logic): views={views:,}  "
+              f"visits[session_Id]={visits:,}  uniques[user_Id]={uniques:,}  -> {verdictish}")
+        if gpn is not None and gpn.notna().any():
+            uniques_gpn = gpn.nunique()
+            # views-per-person is the sanity number: >1 means people DO repeat
+            vpp = views / uniques_gpn if uniques_gpn else 0
+            print(f"  simulated KPIs (GPN-based):     views={views:,}  "
+                  f"unique_visitors[GPN]={uniques_gpn:,}  views/person={vpp:.1f}")
         result.update(views=views, visits=visits, uniques=uniques)
     return result
 
