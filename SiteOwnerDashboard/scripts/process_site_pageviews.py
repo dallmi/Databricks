@@ -175,13 +175,7 @@ def partition_files(files: list[Path], manifest: dict) -> tuple[list[tuple[Path,
 # only. Known accepted limitation (same as CampaignWe): two genuinely distinct
 # views of the same page by the same user+session within the same second
 # collapse into one.
-#
-# The key uses the RAW source identifiers (raw_user_id / raw_session_id). On
-# this AppInsights instance those are handed out fresh per page view, so they
-# are useless for counting people/visits — but they ARE stable per stored row,
-# which is exactly what the dedup key needs. The dashboard-facing user_id /
-# session_id columns are REPLACED downstream (see reconstruct_identity).
-KEY_COLS = ["raw_user_id", "raw_session_id", "page_id"]
+KEY_COLS = ["user_id", "session_id", "page_id"]
 
 
 def add_event_key(df: pd.DataFrame) -> pd.DataFrame:
@@ -231,22 +225,23 @@ def upsert_store(store: pd.DataFrame | None, new: pd.DataFrame,
     return pd.concat([store, new], ignore_index=True)
 
 
-# --- Identity reconstruction -------------------------------------------------
+# --- Person / visit derivation (metrics only — source columns untouched) -----
 # On this AppInsights instance session_Id and user_Id are (near-)unique per page
 # view — the JS SDK issues a fresh id on every navigation (Enterprise browsers
 # block the persistent cookie). Counting DISTINCT on them collapses the KPIs to
 # Page Views == Page Visits == Unique Visitors. The real person lives in
 # CustomProps.GPN (the `gpn` column), which repeats healthily (~3 views/person).
 #
-# So AFTER the full store is assembled we DERIVE the two identifiers the
-# dashboard actually reads:
-#   user_id    = the person: GPN where present, else the raw anonymous id
-#                (kept distinct so anonymous traffic is not merged into one).
-#   session_id = a VISIT reconstructed by a SESSION_GAP_MIN inactivity gap
+# The source columns user_id / session_id are kept AS-IS (their true AppInsights
+# meaning). AFTER the full store is assembled we ADD two derived columns the
+# dashboard counts on:
+#   person_id  = GPN where present, else 'anon:<user_id>' (the anonymous device
+#                id, kept distinct so anonymous traffic is not merged into one).
+#   visit_id   = a VISIT reconstructed by a SESSION_GAP_MIN inactivity gap
 #                within a person (the industry-standard sessionisation).
 # time_on_page_sec / is_last_in_session are recomputed over the reconstructed
 # visit (the per-file values from flatten_appinsights were computed over the
-# useless raw session and are all "last in session" -> Avg. Session 0s).
+# useless source session and are all "last in session" -> Avg. Session 0s).
 #
 # This runs on the WHOLE store every run (not per-file batch) so a visit that
 # straddles two export files is stitched into one. It is deterministic: the same
@@ -254,47 +249,47 @@ def upsert_store(store: pd.DataFrame | None, new: pd.DataFrame,
 SESSION_GAP_MIN = 30
 
 
-def reconstruct_identity(df: pd.DataFrame) -> pd.DataFrame:
+def derive_person_visit(df: pd.DataFrame) -> pd.DataFrame:
     if "timestamp" not in df.columns:
-        print("  Identity: no timestamp column — skipping reconstruction")
+        print("  Person/visit: no timestamp column — skipping derivation")
         return df
     df = df.copy()
     n = len(df)
 
-    # 1. person identity: GPN, else anonymous raw id (never collapse anon → 1)
+    # 1. person_id: GPN, else anonymous device id (never collapse anon → 1)
     if "gpn" in df.columns:
         person = df["gpn"].astype("string")
     else:
         person = pd.Series(pd.NA, index=df.index, dtype="string")
     gpn_present = int(person.notna().sum())
-    if "raw_user_id" in df.columns:
-        person = person.fillna("anon:" + df["raw_user_id"].astype("string").fillna(""))
+    if "user_id" in df.columns:
+        person = person.fillna("anon:" + df["user_id"].astype("string").fillna(""))
     else:
         person = person.fillna("anon:unknown")
-    df["user_id"] = person
+    df["person_id"] = person
 
-    # 2. reconstruct visits: new visit when the person changes or after a gap
+    # 2. visit_id: new visit when the person changes or after an inactivity gap
     ts = pd.to_datetime(df["timestamp"], errors="coerce")
-    order = df[["user_id"]].assign(_ts=ts).sort_values(
-        ["user_id", "_ts"], kind="mergesort")
+    order = df[["person_id"]].assign(_ts=ts).sort_values(
+        ["person_id", "_ts"], kind="mergesort")
     gap_min = order["_ts"].diff().dt.total_seconds().div(60)
-    new_visit = (order["user_id"] != order["user_id"].shift(1)) | (gap_min > SESSION_GAP_MIN) | gap_min.isna()
+    new_visit = (order["person_id"] != order["person_id"].shift(1)) | (gap_min > SESSION_GAP_MIN) | gap_min.isna()
     visit_no = new_visit.cumsum()
-    df["session_id"] = (order["user_id"].astype(str) + "#" + visit_no.astype(str)).reindex(df.index)
+    df["visit_id"] = (order["person_id"].astype(str) + "#" + visit_no.astype(str)).reindex(df.index)
 
     # 3. recompute time-on-page over the reconstructed visit
-    order2 = df[["session_id"]].assign(_ts=ts).sort_values(
-        ["session_id", "_ts"], kind="mergesort")
-    nxt = order2.groupby("session_id", sort=False)["_ts"].shift(-1)
+    order2 = df[["visit_id"]].assign(_ts=ts).sort_values(
+        ["visit_id", "_ts"], kind="mergesort")
+    nxt = order2.groupby("visit_id", sort=False)["_ts"].shift(-1)
     tos = (nxt - order2["_ts"]).dt.total_seconds()
     tos = tos.where(tos <= 30 * 60)  # cap runaway gaps (tab left open), keep NaN
     df["time_on_page_sec"] = tos.reindex(df.index)
     df["is_last_in_session"] = nxt.isna().reindex(df.index)
 
-    persons = df["user_id"].nunique()
-    visits = df["session_id"].nunique()
+    persons = df["person_id"].nunique()
+    visits = df["visit_id"].nunique()
     anon = n - gpn_present
-    print(f"  Identity reconstructed: {persons:,} persons ({gpn_present:,}/{n:,} rows "
+    print(f"  Person/visit derived: {persons:,} persons ({gpn_present:,}/{n:,} rows "
           f"have GPN, {anon:,} anonymous), {visits:,} visits "
           f"(gap {SESSION_GAP_MIN}m), {n/max(visits,1):.1f} views/visit")
     if anon / max(n, 1) > 0.3:
@@ -350,11 +345,6 @@ def build(input_paths: list[Path], hr_path: Path | None, site_name: str | None,
           site_id: str | None, url_contains: str | None) -> pd.DataFrame:
     parts = [build_one(p, hr_path) for p in input_paths]
     wide = parts[0] if len(parts) == 1 else pd.concat(parts, ignore_index=True)
-
-    # Preserve the raw source ids under raw_* — they feed the dedup key
-    # (KEY_COLS) but are useless for counting people/visits. The dashboard-facing
-    # user_id / session_id are derived later in reconstruct_identity().
-    wide = wide.rename(columns={"user_id": "raw_user_id", "session_id": "raw_session_id"})
 
     # Dedup on the composite event_key — exports may overlap in time, and
     # session-derived fields (time_on_page_sec) can differ per file for the
@@ -465,8 +455,9 @@ def main():
         store = pd.read_parquet(out_path)
         print(f"  Existing store: {len(store):,} rows")
     wide = upsert_store(store, new, [p.name for p, _, _ in to_process])
-    # Derive the person/visit identifiers on the FULL store (cross-file visits).
-    wide = reconstruct_identity(wide)
+    # Derive person_id / visit_id on the FULL store (cross-file visits) — source
+    # user_id / session_id are left untouched.
+    wide = derive_person_visit(wide)
     wide.to_parquet(out_path, index=False)
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")

@@ -184,13 +184,21 @@ def main():
     df["time_on_page_sec"] = tos
     df = df.drop(columns=["_seq"])
 
+    # Metric columns the dashboard counts on (mirrors process_site_pageviews.
+    # derive_person_visit): person_id = the real person (GPN, else anonymous
+    # device id), visit_id = a reconstructed visit. In the demo the synthetic
+    # session_id is already a proper visit and gpn is present for everyone, so
+    # these are direct maps — source columns stay untouched, as in the pipeline.
+    df["person_id"] = df["gpn"].where(df["gpn"].notna(), "anon:" + df["user_id"])
+    df["visit_id"] = df["session_id"]
+
     out = Path(__file__).resolve().parents[1] / "output" / "site_pageviews.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out, index=False)
 
     print(f"Wrote {len(df):,} page views -> {out}")
-    print(f"  sessions:  {df['session_id'].nunique():,}")
-    print(f"  users:     {df['user_id'].nunique():,}")
+    print(f"  visits:    {df['visit_id'].nunique():,}")
+    print(f"  persons:   {df['person_id'].nunique():,}")
     print(f"  pages:     {df['page_id'].nunique()}")
     print(f"  range:     {df['timestamp'].min()}  ->  {df['timestamp'].max()}")
     print(f"  languages: {dict(df['language'].value_counts())}")
