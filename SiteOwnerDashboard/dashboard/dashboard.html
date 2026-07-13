@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
-<title>Site Analytics — Owner Dashboard</title>
+<title>Site Owner Dashboard</title>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -230,8 +230,8 @@
   <div class="topbar">
     <div class="header">
       <div>
-        <h1><b id="siteTitle">Site Analytics</b></h1>
-        <div class="sub" id="siteSub">Page Analytics · Owner Dashboard</div>
+        <h1><b id="siteTitle">Site Owner Dashboard</b></h1>
+        <div class="sub" id="siteSub">Page Analytics</div>
       </div>
       <div class="header-controls">
         <div class="seg" id="timeframeSeg">
@@ -740,11 +740,11 @@ async function loadData(){
   const ymd = d => d.toISOString().slice(0,10);
   ['dateFrom','dateTo'].forEach(id=>{ const el=document.getElementById(id); el.min=ymd(dataMin); el.max=ymd(dataMax); });
   // Display-name override — set to '' to fall back to site_name from the data.
-  const SITE_DISPLAY_NAME = 'Digital';
+  const SITE_DISPLAY_NAME = 'Site Owner Dashboard';
   const siteLabel = SITE_DISPLAY_NAME || meta.site;
   if (siteLabel){ document.getElementById('siteTitle').textContent = siteLabel;
-    document.getElementById('siteSub').textContent = 'Page Analytics · Owner Dashboard'; }
-  document.title = (siteLabel || 'Site') + ' — Owner Dashboard';
+    document.getElementById('siteSub').textContent = 'Page Analytics'; }
+  document.title = siteLabel || 'Site Owner Dashboard';
 }
 
 // ==== Render ====
@@ -971,7 +971,10 @@ class ColumnPicker {
       document.addEventListener('click', e=>{ ColumnPicker.instances.forEach(cp=>{
         if (cp.open && !cp.root.contains(e.target) && !cp.popoverEl.contains(e.target)) cp.toggleOpen(false); }); });
       document.addEventListener('keydown', e=>{ if (e.key==='Escape') ColumnPicker.instances.forEach(cp=>cp.toggleOpen(false)); });
-      window.addEventListener('scroll', ()=>{ ColumnPicker.instances.forEach(cp=>{ if (cp.open) cp.toggleOpen(false); }); }, true);
+      // Close on PAGE scroll (fixed popover would detach from its trigger), but
+      // NOT when scrolling INSIDE the popover's own list.
+      window.addEventListener('scroll', (e)=>{ ColumnPicker.instances.forEach(cp=>{
+        if (cp.open && !(cp.popoverEl && cp.popoverEl.contains(e.target))) cp.toggleOpen(false); }); }, true);
       window.addEventListener('resize', ()=>{ ColumnPicker.instances.forEach(cp=>{ if (cp.open) cp.toggleOpen(false); }); });
       ColumnPicker._docBound = true;
     }
@@ -1796,6 +1799,48 @@ async function downloadWorkbook(wb, filename){
   const url=URL.createObjectURL(blob); const a=document.createElement('a');
   a.href=url; a.download=filename; a.click(); setTimeout(()=>URL.revokeObjectURL(url),8000);
 }
+// Per-page language/URL variants for the current window+filters, keyed by
+// page_name. Only pages with >1 variant are returned (the collapsible groups).
+async function pagesVariantExportMap(w){
+  const rows = await query(`SELECT COALESCE(page_name,'(unknown)') AS page_name, COALESCE(language,'Other') AS language, page_url,
+    COUNT(*) AS views, COUNT(DISTINCT session_id) AS visits, COUNT(DISTINCT person_id) AS uniques,
+    CASE WHEN COUNT(DISTINCT session_id)>0 THEN COUNT(DISTINCT person_id)::DOUBLE/COUNT(DISTINCT session_id) ELSE 0 END AS engagement,
+    AVG(time_on_page_sec) AS avg_tos
+    FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1,2,3 ORDER BY page_name, visits DESC`);
+  const m = new Map();
+  for (const r of rows){ if (!m.has(r.page_name)) m.set(r.page_name, []); m.get(r.page_name).push(r); }
+  for (const [k,v] of [...m]){ if (v.length < 2) m.delete(k); }
+  return m;
+}
+
+// Pages sheet with each multilingual page's language variants as an Excel
+// outline group (collapsed by default; the +/- expander reveals per-language rows).
+function sheetGroupedPages(ws, defs, parentRows, variantMap, rightAlign){
+  ws.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+  const hr = ws.getRow(1);
+  defs.forEach((d,i)=>{ const c=hr.getCell(i+1); c.value=d.label; c.font=XLSX_HFONT;
+    c.alignment={horizontal:rightAlign[i]?'right':'left'}; c.border={top:XLSX_RULE,bottom:XLSX_RULE}; });
+  let rowIdx=2, stripe=0;
+  const CHILD_FILL={type:'pattern',pattern:'solid',fgColor:{argb:'FFF8F7F2'}};
+  for (const pr of parentRows){
+    const er=ws.getRow(rowIdx++);
+    defs.forEach((d,ci)=>{ const c=er.getCell(ci+1); c.value=pageExportCell(d,pr); c.font=XLSX_DFONT;
+      c.alignment={horizontal:rightAlign[ci]?'right':'left'}; if (stripe%2===1) c.fill=XLSX_ALT; });
+    stripe++;
+    for (const vr of (variantMap.get(pr.page_name)||[])){
+      const cr=ws.getRow(rowIdx++); cr.outlineLevel=1; cr.hidden=true;
+      defs.forEach((d,ci)=>{ const c=cr.getCell(ci+1);
+        if (ci===0){ const tail=String(vr.page_url||'').split('/').slice(-2).join('/'); c.value=`    ↳ ${vr.language} · ${tail}`; }
+        else if (d.kind==='post') c.value='';
+        else c.value=pageExportCell(d,vr);
+        c.font=XLSX_DFONT; c.alignment={horizontal:rightAlign[ci]?'right':'left'}; c.fill=CHILD_FILL; });
+    }
+  }
+  const lastRow=ws.getRow(rowIdx-1);
+  defs.forEach((d,ci)=>{ lastRow.getCell(ci+1).border={bottom:XLSX_RULE}; });
+  ws.columns.forEach(col=>{ let mx=6; col.eachCell({includeEmpty:false},c=>{ const l=c.value?String(c.value).length:0; if(l>mx)mx=l; }); col.width=Math.min(mx+2,52); });
+}
+
 async function exportXlsx(evt){
   const btn=evt&&evt.target, orig=btn?btn.textContent:'';
   try {
@@ -1872,8 +1917,18 @@ async function exportTableXlsx(kind, evt){
     if (btn){ btn.textContent='Exporting…'; btn.disabled=true; }
     await def.ensure(windows());
     const wb=new ExcelJS.Workbook(); wb.creator='Site Owner Dashboard'; wb.created=new Date();
-    const headers = typeof def.headers==='function' ? def.headers() : def.headers;
     const right   = typeof def.right==='function'   ? def.right()   : def.right;
+    // Pages grouped by page_name: add each multilingual page's language variants
+    // as a collapsible Excel outline group so it can be expanded for insights.
+    if (kind==='pages' && pagesExpandable){
+      const vmap = await pagesVariantExportMap(windows());
+      if (vmap.size){
+        sheetGroupedPages(wb.addWorksheet(def.sheet), pagesTableVisibleDefs(),
+          (lastPagesTable?.rows||[]), vmap, right);
+        await downloadWorkbook(wb, `${def.file}_${timeframe}.xlsx`); return;
+      }
+    }
+    const headers = typeof def.headers==='function' ? def.headers() : def.headers;
     sheetTable(wb.addWorksheet(def.sheet), 1, headers, def.rows(), right);
     await downloadWorkbook(wb, `${def.file}_${timeframe}.xlsx`);
   } catch(e){ console.error(e); alert('Export failed: '+e.message); }
