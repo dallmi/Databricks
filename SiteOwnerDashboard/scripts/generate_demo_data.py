@@ -192,6 +192,13 @@ def main():
     df["person_id"] = df["gpn"].where(df["gpn"].notna(), "anon:" + df["user_id"])
     df["visit_id"] = df["session_id"]
 
+    # page_key: language-agnostic page (strip the /xx segment) so the Pages
+    # table groups language variants of one page into a single row — same rule
+    # as process_site_pageviews.canonical_page_key.
+    df["page_key"] = (df["page_url"].str.lower()
+                      .str.replace(r"/(en|de|fr|it)(?=/|$|\?|#)", "", regex=True)
+                      .str.replace(r"/$", "", regex=True))
+
     out = Path(__file__).resolve().parents[1] / "output" / "site_pageviews.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out, index=False)

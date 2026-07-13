@@ -98,18 +98,36 @@ from flatten_appinsights import (  # noqa: E402
 
 
 # --- Language derived from PageURL ------------------------------------------
-# Intranet URLs carry the content language as a path segment, e.g.
-#   https://intranet/sites/news/en/2026/q1-results  -> EN
-# Matched case-insensitively as a standalone /xx/ segment. Anything else -> "Other".
+# Intranet URLs carry non-English content as a path segment, e.g.
+#   https://intranet/sites/news/de/cawb.aspx  -> DE
+# English has NO language segment (…/cawb.aspx), so a valid URL with no /de|/fr|
+# /it segment is English. Matched case-insensitively as a standalone segment.
 LANG_SEGMENTS = {"en": "EN", "de": "DE", "fr": "FR", "it": "IT"}
 _LANG_RE = re.compile(r"/(en|de|fr|it)(?=/|$|\?|#)", re.IGNORECASE)
 
 
 def derive_language(url) -> str:
-    if not isinstance(url, str) or not url:
+    if not isinstance(url, str) or not url.strip():
         return "Other"
     m = _LANG_RE.search(url)
-    return LANG_SEGMENTS[m.group(1).lower()] if m else "Other"
+    # No language segment on a real URL means English (the default language).
+    return LANG_SEGMENTS[m.group(1).lower()] if m else "EN"
+
+
+# --- Language-agnostic page key ---------------------------------------------
+# The SAME logical page exists once per language (…/de/cawb.aspx, …/cawb.aspx,
+# …/fr/cawb.aspx, …/it/cawb.aspx), each with its own PageId — so grouping the
+# Pages table by page_id shows one page several times. page_key strips the
+# language segment (and lowercases / trims a trailing slash) so all language
+# variants collapse to ONE key; the dashboard groups pages by page_key and the
+# language filter still splits them. Falls back to the raw URL, then page_id.
+def canonical_page_key(url) -> str | None:
+    if not isinstance(url, str) or not url.strip():
+        return None
+    u = _LANG_RE.sub("", url.strip().lower())  # drop the /xx language segment
+    if len(u) > 1 and u.endswith("/"):
+        u = u[:-1]
+    return u
 
 
 INPUT_DIR = PROJECT_DIR / "input"
@@ -370,6 +388,16 @@ def build(input_paths: list[Path], hr_path: Path | None, site_name: str | None,
     # Language from PageURL
     url_col = "page_url" if "page_url" in wide.columns else None
     wide["language"] = wide[url_col].map(derive_language) if url_col else "Other"
+
+    # Language-agnostic page key: collapses de/en/fr/it variants of one logical
+    # page into a single row in the dashboard's Pages table / ranking / lifecycle
+    # (the language filter still splits them). Falls back to page_id.
+    if url_col:
+        wide["page_key"] = wide[url_col].map(canonical_page_key)
+        if "page_id" in wide.columns:
+            wide["page_key"] = wide["page_key"].fillna(wide["page_id"].astype("string"))
+    elif "page_id" in wide.columns:
+        wide["page_key"] = wide["page_id"].astype("string")
 
     # Site filter — usually the KQL already scoped by PageURL, so these are
     # optional. --url-contains mirrors the KQL PageUrlFilter for local re-filtering.

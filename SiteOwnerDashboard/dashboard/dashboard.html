@@ -358,6 +358,90 @@ Chart.register({ id:'donutLegend', beforeInit(ch){
   };
 }});
 
+// ==== In-chart value labels ====
+// Contrast ink: white on dark fills, dark grey on light fills.
+function _lum(hex){ const c=(hex||'').replace('#',''); if (c.length<6) return 1;
+  const r=parseInt(c.slice(0,2),16), g=parseInt(c.slice(2,4),16), b=parseInt(c.slice(4,6),16);
+  return (0.299*r+0.587*g+0.114*b)/255; }
+function _ink(bg){ return _lum(bg) < 0.62 ? '#FFFFFF' : '#404040'; }
+const LABEL_FONT = "10px 'Frutiger 45 Light','Helvetica Neue',Helvetica,Arial,sans-serif";
+
+// % on doughnut slices (absolute value stays in the legend). Skips slices too
+// thin to hold the text; contrast-aware ink.
+Chart.register({ id:'donutSliceLabel', afterDatasetsDraw(chart){
+  if (chart.config.type !== 'doughnut') return;
+  if (chart.options.plugins.donutSliceLabel === false) return;
+  const {ctx}=chart, meta=chart.getDatasetMeta(0), ds=chart.data.datasets[0];
+  const total = ds.data.reduce((a,b)=>a+(+b||0),0); if (!total) return;
+  ctx.save(); ctx.font=LABEL_FONT; ctx.textAlign='center'; ctx.textBaseline='middle';
+  meta.data.forEach((arc,i)=>{
+    const v=+ds.data[i]||0, share=v/total; if (share < 0.05) return;
+    const p=arc.getProps(['startAngle','endAngle','innerRadius','outerRadius','x','y'], true);
+    if (p.endAngle - p.startAngle < 0.28) return;               // arc too narrow for a label
+    const mid=(p.startAngle+p.endAngle)/2, r=(p.innerRadius+p.outerRadius)/2;
+    ctx.fillStyle=_ink(ds.backgroundColor[i]);
+    ctx.fillText((share*100).toFixed(share<0.1?1:0)+'%', p.x+Math.cos(mid)*r, p.y+Math.sin(mid)*r);
+  });
+  ctx.restore();
+}});
+
+// Values on vertical bar charts. Enable per chart via options.plugins.barValueLabel
+// = { decimals?, pct? }. One bar dataset -> value above each bar (auto-hidden when
+// the bars get too dense to fit). Several bar datasets (stacked) -> value centred in
+// each segment tall enough to hold it. Horizontal bars are handled elsewhere.
+// Formatting stays declarative (numbers/booleans) — a function-valued option would
+// be swallowed by Chart.js's scriptable-options resolver.
+Chart.register({ id:'barValueLabel',
+  // Reserve headroom on the value axis so the tallest bar never touches the top —
+  // otherwise its top label gets clamped against the bar while shorter bars keep a
+  // clean gap. Only for single-series (top-label) vertical charts; stacked charts
+  // label inside the segments and need no headroom.
+  afterDataLimits(chart, args){
+    const opt = chart.options.plugins.barValueLabel; if (!opt) return;
+    if (chart.options.indexAxis === 'y') return;
+    if (args.scale.axis !== 'y') return;
+    const barCount = chart.data.datasets.filter(d => (d.type || chart.config.type) === 'bar').length;
+    if (barCount !== 1) return;
+    const sc = args.scale;
+    if (isFinite(sc.max) && isFinite(sc.min) && sc.max > sc.min) sc.max += (sc.max - sc.min) * 0.12;
+  },
+  afterDatasetsDraw(chart){
+  const opt = chart.options.plugins.barValueLabel; if (!opt) return;
+  if (chart.options.indexAxis === 'y') return;
+  const {ctx, chartArea}=chart;
+  const barSets = chart.data.datasets.map((ds,i)=>({ds, meta:chart.getDatasetMeta(i)}))
+    .filter(o=>o.meta.type==='bar' && !o.meta.hidden);
+  if (!barSets.length) return;
+  const fmtFn = (typeof opt.decimals==='number') ? (v=>(+v).toFixed(opt.decimals)) : (v=>fmt(v));
+  ctx.save(); ctx.font=LABEL_FONT; ctx.textAlign='center';
+
+  if (barSets.length === 1){                                    // value above each bar
+    const {meta, ds}=barSets[0];
+    const total = opt.pct ? ds.data.reduce((a,b)=>a+(+b||0),0) : 0;
+    const slot = chartArea.width / Math.max(meta.data.length, 1);
+    const labels = meta.data.map((_,i)=>{ const v=+ds.data[i]; if (v==null || isNaN(v)) return null;
+      let t=fmtFn(v); if (opt.pct && total) t += `  ${(v/total*100).toFixed(0)}%`; return t; });
+    if (labels.some(t=>t!=null && ctx.measureText(t).width > slot-2)){ ctx.restore(); return; }
+    ctx.textBaseline='bottom';
+    meta.data.forEach((bar,i)=>{ if (labels[i]==null) return;
+      ctx.fillStyle = bar.y-14 < chartArea.top ? '#404040' : '#5A5D5C';
+      ctx.fillText(labels[i], bar.x, Math.max(bar.y-4, chartArea.top+9));
+    });
+  } else {                                                      // value centred in each segment
+    ctx.textBaseline='middle';
+    barSets.forEach(({meta, ds})=>{
+      const bg = typeof ds.backgroundColor==='string' ? ds.backgroundColor : '#404040';
+      meta.data.forEach((bar,i)=>{ const v=+ds.data[i]; if (!v) return;
+        const p=bar.getProps(['y','base','width'], true);
+        if (Math.abs(p.base-p.y) < 14) return;                  // segment too short
+        const t=fmtFn(v); if (ctx.measureText(t).width > p.width-2) return;
+        ctx.fillStyle=_ink(bg); ctx.fillText(t, bar.x, (p.y+p.base)/2);
+      });
+    });
+  }
+  ctx.restore();
+}});
+
 // ==== State ====
 let db=null, conn=null, hasInteractions=false;
 let dataMin=null, dataMax=null;
@@ -580,7 +664,7 @@ async function renderTraffic(w){
     type:'bar',
     data:{ labels, datasets:[{ data:vals, backgroundColor:colors, borderRadius:0, maxBarThickness:34 }] },
     options:{ responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:c=>`${trafficMetric==='visits'?'Visits':'Unique'}: ${c.parsed.y.toLocaleString()}` } } },
+      plugins:{ legend:{display:false}, barValueLabel:{}, tooltip:{ callbacks:{ label:c=>`${trafficMetric==='visits'?'Visits':'Unique'}: ${c.parsed.y.toLocaleString()}` } } },
       scales:{ x:{ grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10}, maxRotation:0, autoSkip:true } },
                y:{ beginAtZero:true, grid:{display:false}, border:{display:false}, ticks:{ font:{size:10} } } } }
   });
@@ -622,21 +706,21 @@ async function renderPages(w){
   drawRanking();
 }
 async function computePages(w){
-  const cur = await query(`SELECT page_id, any_value(page_name) AS pname, any_value(content_type) ct,
+  const cur = await query(`SELECT page_key, any_value(page_name) AS pname, any_value(content_type) ct,
     COUNT(*) AS n_views, COUNT(DISTINCT session_id) visits, COUNT(DISTINCT person_id) uniques,
-    AVG(time_on_page_sec) avg_tos FROM pv WHERE ${win(w.from,w.to)} GROUP BY page_id`);
-  const prev = w.hasPrev ? await query(`SELECT page_id, COUNT(DISTINCT session_id) visits_prev
-    FROM pv WHERE ${win(w.prevFrom,w.prevTo)} GROUP BY page_id`) : [];
-  const trend = await query(`SELECT page_id, strftime(date_trunc('week', timestamp),'%Y-%m-%d') wk,
+    AVG(time_on_page_sec) avg_tos FROM pv WHERE ${win(w.from,w.to)} GROUP BY page_key`);
+  const prev = w.hasPrev ? await query(`SELECT page_key, COUNT(DISTINCT session_id) visits_prev
+    FROM pv WHERE ${win(w.prevFrom,w.prevTo)} GROUP BY page_key`) : [];
+  const trend = await query(`SELECT page_key, strftime(date_trunc('week', timestamp),'%Y-%m-%d') wk,
     COUNT(DISTINCT session_id) v FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1,2 ORDER BY 1,2`);
-  const prevMap = Object.fromEntries(prev.map(r=>[r.page_id, r.visits_prev]));
-  const trendMap = {}; for (const t of trend){ (trendMap[t.page_id] ||= []).push(t.v); }
+  const prevMap = Object.fromEntries(prev.map(r=>[r.page_key, r.visits_prev]));
+  const trendMap = {}; for (const t of trend){ (trendMap[t.page_key] ||= []).push(t.v); }
 
   lastPages = cur.map(r=>{
-    const vp = prevMap[r.page_id];
+    const vp = prevMap[r.page_key];
     return { name:r.pname, ct:r.ct, views:r.n_views, visits:r.visits, uniques:r.uniques,
       avg_tos:r.avg_tos, engagement: r.visits? r.uniques/r.visits : 0,
-      mom: (vp!=null && vp>0) ? (r.visits-vp)/vp*100 : null, trend: trendMap[r.page_id]||[] };
+      mom: (vp!=null && vp>0) ? (r.visits-vp)/vp*100 : null, trend: trendMap[r.page_key]||[] };
   });
 }
 
@@ -763,7 +847,7 @@ async function renderLifecycle(w){
 
 // Pages with a publish date, in the current language scope.
 function pubsCte(){
-  return `pubs AS (SELECT page_id, any_value(page_name) nm, any_value(content_type) ct,
+  return `pubs AS (SELECT page_key, any_value(page_name) nm, any_value(content_type) ct,
     MIN(publishing_date) pd FROM pv WHERE publishing_date IS NOT NULL${langClause()} GROUP BY 1)`;
 }
 
@@ -776,8 +860,8 @@ async function computeLifecycle(w){
   // First-week reach — only pages whose first 7 days lie fully inside the window.
   const f7 = (await query(`WITH ${pubsCte()}
     SELECT median(v) med, COUNT(*) n FROM (
-      SELECT p.page_id, COUNT(DISTINCT v.session_id) v
-      FROM pubs p LEFT JOIN pv v ON v.page_id = p.page_id
+      SELECT p.page_key, COUNT(DISTINCT v.session_id) v
+      FROM pubs p LEFT JOIN pv v ON v.page_key = p.page_key
         AND v.timestamp >= p.pd AND v.timestamp < p.pd + to_days(7)${langClause()}
       WHERE p.pd >= TIMESTAMP '${F}' AND p.pd + to_days(7) <= TIMESTAMP '${T}'
       GROUP BY 1)`))[0];
@@ -819,14 +903,14 @@ async function computeLifecycle(w){
     FROM mv FULL OUTER JOIN mp ON mv.m = mp.m ORDER BY 1`);
 
   const articles = await query(`WITH ${pubsCte()}
-    SELECT p.page_id, any_value(p.nm) nm, any_value(p.ct) ct,
+    SELECT p.page_key, any_value(p.nm) nm, any_value(p.ct) ct,
       strftime(any_value(p.pd), '%Y-%m-%d') pd,
       COUNT(DISTINCT CASE WHEN v.timestamp >= p.pd AND v.timestamp < p.pd + to_days(7)
         THEN v.session_id END) f7,
       COUNT(DISTINCT v.session_id) lifetime,
       COUNT(DISTINCT CASE WHEN v.timestamp >= TIMESTAMP '${F}' AND v.timestamp <= TIMESTAMP '${T}'
         THEN v.session_id END) winv
-    FROM pubs p LEFT JOIN pv v ON v.page_id = p.page_id${langClause()}
+    FROM pubs p LEFT JOIN pv v ON v.page_key = p.page_key${langClause()}
     GROUP BY 1`);
 
   lastArticles = articles.map(r=>({ nm:r.nm, ct:r.ct, pd:r.pd,
@@ -857,7 +941,7 @@ function drawLifecycle(){
       datasets:[{ data: decay.map(r=> r.expo_days ? r.n_views/r.expo_days : 0),
         backgroundColor:BAR_EMPHASIS, borderRadius:0, maxBarThickness:44 }] },
     options:{ responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{display:false}, tooltip:{ callbacks:{
+      plugins:{ legend:{display:false}, barValueLabel:{ decimals:2 }, tooltip:{ callbacks:{
         label:c=>{ const r=decay[c.dataIndex];
           return [`${c.parsed.y.toFixed(2)} views / page / day`, `${fmt(r.n_views)} views in bucket`]; } } } },
       scales:{ x:{ grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10} } },
@@ -875,7 +959,7 @@ function drawLifecycle(){
         borderColor:'#B98E2C', backgroundColor:'#B98E2C', yAxisID:'y2',
         tension:0, pointRadius:2.5, borderWidth:1.5 } ] },
     options:{ responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{ position:'bottom', labels:{ font:{size:10} } } },
+      plugins:{ legend:{ position:'bottom', labels:{ font:{size:10} } }, barValueLabel:{} },
       scales:{ x:{ stacked:true, grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10}, maxRotation:0, autoSkip:true } },
                y:{ stacked:true, beginAtZero:true, grid:{display:false}, border:{display:false}, ticks:{ font:{size:10} } },
                y2:{ position:'right', beginAtZero:true, grid:{display:false}, border:{display:false},
@@ -945,12 +1029,12 @@ async function computeAudience(w){
       FROM (SELECT session_id, COUNT(*) v FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1))
     GROUP BY 1,2 ORDER BY 2`);
 
-  const entries = await query(`WITH s AS (SELECT session_id, arg_min(page_id, timestamp) pid,
+  const entries = await query(`WITH s AS (SELECT session_id, arg_min(page_key, timestamp) pid,
       COUNT(*) depth FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1),
-    d AS (SELECT page_id, any_value(page_name) nm, any_value(content_type) ct FROM pv GROUP BY 1)
+    d AS (SELECT page_key, any_value(page_name) nm, any_value(content_type) ct FROM pv GROUP BY 1)
     SELECT s.pid, any_value(d.nm) nm, any_value(d.ct) ct, COUNT(*) entries,
       SUM(CASE WHEN s.depth=1 THEN 1 ELSE 0 END) bounced, AVG(s.depth) avgd
-    FROM s JOIN d ON d.page_id = s.pid GROUP BY 1`);
+    FROM s JOIN d ON d.page_key = s.pid GROUP BY 1`);
   const totalSess = entries.reduce((a,r)=>a+r.entries,0);
   lastEntryPages = entries.map(r=>({ nm:r.nm, ct:r.ct, entries:r.entries,
     share: totalSess ? r.entries/totalSess : 0,
@@ -984,7 +1068,7 @@ function drawAudience(){
       { label:'New visitors', data:monthly.map(r=>r.newu), backgroundColor:'#CCCABC',
         stack:'u', maxBarThickness:34 } ] },
     options:{ responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{ position:'bottom', labels:{ font:{size:10} } } },
+      plugins:{ legend:{ position:'bottom', labels:{ font:{size:10} } }, barValueLabel:{} },
       scales:{ x:{ stacked:true, grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10}, maxRotation:0, autoSkip:true } },
                y:{ stacked:true, beginAtZero:true, grid:{display:false}, border:{display:false}, ticks:{ font:{size:10} } } } }
   });
@@ -996,7 +1080,7 @@ function drawAudience(){
       data:{ labels: rows.map(r=>r.b),
         datasets:[{ data: rows.map(r=>r.c), backgroundColor:BAR_EMPHASIS, borderRadius:0, maxBarThickness:44 }] },
       options:{ responsive:true, maintainAspectRatio:false,
-        plugins:{ legend:{display:false}, tooltip:{ callbacks:{
+        plugins:{ legend:{display:false}, barValueLabel:{ pct:true }, tooltip:{ callbacks:{
           label:c=>{ const total=rows.reduce((a,r)=>a+r.c,0);
             return `${fmt(c.parsed.y)} ${unitLabel} (${total?(c.parsed.y/total*100).toFixed(1):0}%)`; } } } },
         scales:{ x:{ grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10} } },
