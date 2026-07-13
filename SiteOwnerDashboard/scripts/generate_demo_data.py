@@ -52,6 +52,16 @@ PAGES = [
     ("Year in Review 2025",              "Video",    "EN", 0.47, 197),
     ("Volunteering Day Highlights",      "Article",  "EN", 0.29,   9),
     ("Nouveau modèle opérationnel",      "Article",  "FR", 0.19,  30),
+    # Genuinely multilingual pages: SAME name/slug across languages, so they
+    # share one page_key and collapse to a single Pages-table row whose
+    # Page → URL/Language drill reveals the per-language variants.
+    ("Global Strategy Update",           "Article",  "EN", 0.64, 200),
+    ("Global Strategy Update",           "Article",  "DE", 0.30, 200),
+    ("Global Strategy Update",           "Article",  "FR", 0.22, 200),
+    ("Global Strategy Update",           "Article",  "IT", 0.12, 200),
+    ("Code of Conduct 2026 (PDF)",       "Download", "EN", 0.40, 140),
+    ("Code of Conduct 2026 (PDF)",       "Download", "DE", 0.24, 140),
+    ("Code of Conduct 2026 (PDF)",       "Download", "FR", 0.16, 140),
 ]
 
 

@@ -170,6 +170,32 @@
   .cp-option .cp-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cp-table-actions { display: flex; align-items: center; gap: 0.5rem; }
   #pagesTable tfoot td { font-weight: 600; border-top: 2px solid var(--grey-1); background: var(--bg); }
+
+  /* Global filter bar (primary row + Advanced + chips) */
+  .filter-bar { background: var(--white); border-bottom: 1px solid var(--grey-1); padding: 0.5rem 1.5rem;
+    display: flex; align-items: center; gap: 0.4rem 0.55rem; flex-wrap: wrap; }
+  .fb-label { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--grey-4); font-weight: 600; }
+  .adv-toggle { padding: 0.4rem 0.65rem; border: 1px solid var(--grey-1); background: var(--white); color: var(--grey-5);
+    border-radius: var(--radius); cursor: pointer; font-family: inherit; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 0.3rem; }
+  .adv-toggle:hover { background: var(--surface); color: var(--grey-6); }
+  .adv-toggle .cp-caret { color: var(--grey-3); font-size: 0.7rem; }
+  .filter-adv { display: flex; align-items: center; gap: 0.4rem 0.55rem; flex-wrap: wrap; width: 100%;
+    margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px dashed var(--grey-1); }
+  .filter-adv.hidden { display: none; }
+  .filter-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; width: 100%; }
+  .filter-chips:empty { display: none; }
+  .chip { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.5rem; font-size: 0.72rem;
+    background: var(--surface); border: 1px solid var(--grey-1); border-radius: var(--radius); color: var(--grey-6); }
+  .chip b { color: var(--grey-4); font-weight: 600; }
+  .chip .x { cursor: pointer; color: var(--grey-4); font-weight: 700; line-height: 1; }
+  .chip .x:hover { color: var(--primary); }
+  .chip.clear-all { cursor: pointer; background: var(--white); color: var(--grey-4); }
+  .chip.clear-all:hover { border-color: var(--primary); color: var(--primary); }
+  .cp-search { margin: 0.3rem 0.5rem; padding: 0.3rem 0.45rem; border: 1px solid var(--grey-1); border-radius: var(--radius);
+    font-family: inherit; font-size: 0.75rem; color: var(--grey-6); }
+  .cp-search:focus { outline: none; border-color: var(--primary); }
+  .cp-option.filtered-out { display: none; }
+  .cp-trigger.has-sel { border-color: var(--primary); color: var(--black); }
 </style>
 </head>
 <body>
@@ -190,17 +216,29 @@
         <div class="field"><input type="date" id="dateFrom" onchange="applyCustomDates()">
           <span style="color:var(--grey-4)">–</span>
           <input type="date" id="dateTo" onchange="applyCustomDates()"></div>
-        <div class="field">Language
-          <select id="langSelect" onchange="setLanguage(this.value)">
-            <option value="all">All</option>
-            <option value="EN">EN</option><option value="DE">DE</option>
-            <option value="FR">FR</option><option value="IT">IT</option>
-          </select>
-        </div>
         <a class="btn" id="guideLink" href="guide.html" style="text-decoration:none;display:inline-block;">Guide</a>
         <button class="btn" onclick="exportXlsx(event)">Export XLSX</button>
         <div class="status loading" id="status"><span class="dot"></span><span id="statusText">Loading…</span></div>
       </div>
+    </div>
+    <div class="filter-bar" id="filterBar" style="display:none;">
+      <span class="fb-label">Filter</span>
+      <span class="cp" id="flt_site_name"></span>
+      <span class="cp" id="flt_page_name"></span>
+      <span class="cp" id="flt_page_url"></span>
+      <span class="cp" id="flt_hr_division"></span>
+      <span class="cp" id="flt_hr_region"></span>
+      <span class="cp" id="flt_language"></span>
+      <button type="button" class="adv-toggle" id="advancedToggle">Advanced <span class="cp-caret">▾</span></button>
+      <div class="filter-adv hidden" id="filterAdv">
+        <span class="fb-label">Advanced</span>
+        <span class="cp" id="flt_content_type"></span>
+        <span class="cp" id="flt_content_owner"></span>
+        <span class="cp" id="flt_tracking_channel_abbr"></span>
+        <span class="cp" id="flt_topic"></span>
+        <span class="cp" id="flt_theme"></span>
+      </div>
+      <div class="filter-chips" id="filterChips"></div>
     </div>
     <div class="tabs" id="tabs">
       <button class="tab active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
@@ -476,7 +514,7 @@ Chart.register({ id:'barValueLabel',
 let db=null, conn=null, hasInteractions=false;
 let dataMin=null, dataMax=null;
 let pvCols=new Set(), hasPubDates=false;
-let timeframe='90d', language='all', trafficMetric='visits', rankMetric='visits';
+let timeframe='90d', trafficMetric='visits', rankMetric='visits';
 let customFrom=null, customTo=null;
 let articleSort={col:'pd', dir:'desc'}, entrySort={col:'entries', dir:'desc'};
 let charts={};
@@ -512,8 +550,36 @@ function windows(){
   const prevTo = from, prevFrom = new Date(from.getTime()-len);
   return { from, to, prevFrom, prevTo, hasPrev: timeframe!=='all' };
 }
-function langClause(){ return language==='all' ? '' : ` AND language = '${language}'`; }
-function win(a,b){ return `timestamp >= TIMESTAMP '${iso(a)}' AND timestamp <= TIMESTAMP '${iso(b)}'${langClause()}`; }
+// ==== Global multi-dimension filter ====
+// activeFilters: column -> Set(selected values). filterClause() ANDs every
+// active dimension as `col IN (…)`. Replaces the old single-language filter.
+const FILTER_DIMS = [
+  { col:'site_name',             label:'Site Name',    adv:false },
+  { col:'page_name',             label:'Page Name',    adv:false },
+  { col:'page_url',              label:'Page URL',     adv:false },
+  { col:'hr_division',           label:'Division',     adv:false },
+  { col:'hr_region',             label:'Region',       adv:false },
+  { col:'language',              label:'Language',     adv:false },
+  { col:'content_type',          label:'Content Type', adv:true  },
+  { col:'content_owner',         label:'Content Owner',adv:true  },
+  { col:'tracking_channel_abbr', label:'Channel',      adv:true  },
+  { col:'topic',                 label:'Topic',        adv:true  },
+  { col:'theme',                 label:'Theme',        adv:true  },
+];
+const activeFilters = new Map();   // col -> Set<string>
+const filterControls = new Map();  // col -> FilterControl
+
+function filterClause(){
+  let s='';
+  for (const [col,set] of activeFilters){
+    if (set && set.size){
+      const vals=[...set].map(v=>`'${String(v).replace(/'/g,"''")}'`).join(',');
+      s += ` AND ${col} IN (${vals})`;
+    }
+  }
+  return s;
+}
+function win(a,b){ return `timestamp >= TIMESTAMP '${iso(a)}' AND timestamp <= TIMESTAMP '${iso(b)}'${filterClause()}`; }
 
 function sparkline(vals, w=104, h=22){
   if (!vals || vals.length===0) return '';
@@ -558,6 +624,7 @@ async function init(){
     setLoading('Loading data…');
     await loadData();
     setupColumnPickers();
+    await initFilters();
 
     document.getElementById('loading').style.display='none';
     document.getElementById('dashboard').style.display='block';
@@ -681,7 +748,7 @@ async function renderKpis(w){
 async function renderTraffic(w){
   const rows = await query(`SELECT strftime(date_trunc('month', timestamp), '%Y-%m') m,
     COUNT(DISTINCT session_id) visits, COUNT(DISTINCT person_id) unique_ct
-    FROM pv WHERE TRUE${langClause()} GROUP BY 1 ORDER BY 1`);
+    FROM pv WHERE TRUE${filterClause()} GROUP BY 1 ORDER BY 1`);
   const labels = rows.map(r=>r.m);
   const vals = rows.map(r=> trafficMetric==='visits' ? r.visits : r.unique_ct);
   const fromM = `${w.from.getUTCFullYear()}-${String(w.from.getUTCMonth()+1).padStart(2,'0')}`;
@@ -842,6 +909,77 @@ class ColumnPicker {
   updateCount(){ if (this.countEl) this.countEl.textContent = `(${this.visible.size}/${this.columns.length})`; }
 }
 
+// Multi-select filter over ONE column's distinct values. Left-anchored popover
+// with a search box. Registers into ColumnPicker.instances so the shared
+// outside-click / Escape / scroll close handling applies to it too.
+class FilterControl {
+  constructor(mountId, opts={}){
+    this.root = document.getElementById(mountId);
+    this.col = opts.col || mountId;
+    this.label = opts.label || mountId;
+    this.values = opts.values || [];
+    this.onChange = opts.onChange || (()=>{});
+    this.selected = new Set();
+    this.open = false;
+    this.render();
+    ColumnPicker.instances.push(this);
+  }
+  getSelected(){ return new Set(this.selected); }
+  setSelected(set){ this.selected = new Set(set||[]); this.refresh(); }
+  positionPopover(){
+    const r = this.triggerEl.getBoundingClientRect(), margin=8;
+    const spaceBelow = window.innerHeight - r.bottom - margin, spaceAbove = r.top - margin;
+    const flipUp = spaceBelow < 240 && spaceAbove > spaceBelow;
+    this.popoverEl.style.maxHeight = `${Math.min(420, Math.max(160, flipUp?spaceAbove:spaceBelow))}px`;
+    if (flipUp){ this.popoverEl.style.top='auto'; this.popoverEl.style.bottom=`${Math.max(margin, window.innerHeight - r.top + 2)}px`; }
+    else { this.popoverEl.style.bottom='auto'; this.popoverEl.style.top=`${r.bottom + 2}px`; }
+    this.popoverEl.style.left = `${Math.max(margin, Math.min(r.left, window.innerWidth - 260))}px`;
+    this.popoverEl.style.right = 'auto';
+  }
+  toggleOpen(force){
+    const next = typeof force==='boolean' ? force : !this.open;
+    if (next===this.open) return;
+    this.open = next;
+    if (this.open) this.positionPopover();
+    this.popoverEl.classList.toggle('hidden', !this.open);
+    this.triggerEl.classList.toggle('open', this.open);
+  }
+  render(){
+    const optHtml = this.values.map(v=>{ const safe=escapeHtml(v);
+      return `<label class="cp-option"><input type="checkbox" data-val="${safe}" ${this.selected.has(v)?'checked':''}><span class="cp-text" title="${safe}">${safe}</span></label>`; }).join('');
+    this.root.innerHTML = `
+      <button type="button" class="cp-trigger"><span>${escapeHtml(this.label)}</span><span class="cp-count"></span><span class="cp-caret">▾</span></button>
+      <div class="cp-popover hidden">
+        <input type="text" class="cp-search" placeholder="Search…">
+        <div class="cp-actions">
+          <button type="button" class="cp-action" data-action="all">Select all</button>
+          <button type="button" class="cp-action" data-action="none">Clear</button>
+        </div>
+        <div class="cp-list">${optHtml}</div>
+      </div>`;
+    this.triggerEl = this.root.querySelector('.cp-trigger');
+    this.popoverEl = this.root.querySelector('.cp-popover');
+    this.countEl = this.root.querySelector('.cp-count');
+    this.listEl = this.root.querySelector('.cp-list');
+    this.searchEl = this.root.querySelector('.cp-search');
+    this.triggerEl.addEventListener('click', e=>{ e.stopPropagation();
+      ColumnPicker.instances.forEach(cp=>{ if (cp!==this) cp.toggleOpen(false); }); this.toggleOpen(); });
+    this.popoverEl.addEventListener('click', e=>e.stopPropagation());
+    this.searchEl.addEventListener('input', ()=>{ const q=this.searchEl.value.toLowerCase();
+      this.listEl.querySelectorAll('.cp-option').forEach(o=>{ const t=o.querySelector('.cp-text').textContent.toLowerCase();
+        o.classList.toggle('filtered-out', !!q && !t.includes(q)); }); });
+    this.root.querySelector('[data-action="all"]').addEventListener('click', ()=>{ this.values.forEach(v=>this.selected.add(v)); this.refresh(); this.onChange(); });
+    this.root.querySelector('[data-action="none"]').addEventListener('click', ()=>{ this.selected.clear(); this.refresh(); this.onChange(); });
+    this.listEl.querySelectorAll('input[type="checkbox"]').forEach(cb=>{ cb.addEventListener('change', ()=>{
+      if (cb.checked) this.selected.add(cb.dataset.val); else this.selected.delete(cb.dataset.val);
+      this.updateCount(); this.onChange(); }); });
+    this.updateCount();
+  }
+  refresh(){ this.listEl.querySelectorAll('input[type="checkbox"]').forEach(cb=>{ cb.checked = this.selected.has(cb.dataset.val); }); this.updateCount(); }
+  updateCount(){ if (this.countEl) this.countEl.textContent = this.selected.size ? `(${this.selected.size})` : '';
+    this.triggerEl.classList.toggle('has-sel', this.selected.size>0); }
+}
+
 // Build the SELECT + GROUP BY from the visible columns. Dropping a dim
 // re-aggregates coarser. Returns dimParts/dimKeys so the MoM/Trend
 // secondary queries can group on the SAME dimensions.
@@ -906,6 +1044,70 @@ function setupColumnPickers(){
     columns: PAGES_COLDEFS.filter(c=>!c.hidden).map(c=>({key:c.key,label:c.label,kind:c.kind})),
     visible: PAGES_DEFAULT_VISIBLE,
     onChange: ()=>renderPagesTable(windows()),
+  });
+}
+
+// Build a FilterControl per dimension that (a) exists in the data and (b) has
+// ≥2 distinct values. Absent / single-value dimensions are hidden so the bar
+// stays clean on minimal exports.
+async function initFilters(){
+  let anyAdv = false, anyControl = false;
+  for (const dim of FILTER_DIMS){
+    const mount = document.getElementById(`flt_${dim.col}`);
+    if (!mount) continue;
+    if (!pvCols.has(dim.col)){ mount.style.display='none'; continue; }
+    const rows = await query(
+      `SELECT DISTINCT ${dim.col} v FROM pv WHERE ${dim.col} IS NOT NULL ORDER BY 1`);
+    const values = rows.map(r=>r.v).filter(v=>v!=null && String(v)!=='');
+    if (values.length < 2){ mount.style.display='none'; continue; }
+    const ctl = new FilterControl(`flt_${dim.col}`, {
+      col: dim.col, label: dim.label, values,
+      onChange: ()=>{ const sel=ctl.getSelected();
+        if (sel.size) activeFilters.set(dim.col, sel); else activeFilters.delete(dim.col);
+        renderChips(); render(); },
+    });
+    filterControls.set(dim.col, ctl);
+    anyControl = true;
+    if (dim.adv) anyAdv = true;
+  }
+  // Hide Advanced toggle + block when nothing advanced surfaced.
+  if (!anyAdv){
+    const t=document.getElementById('advancedToggle'), a=document.getElementById('filterAdv');
+    if (t) t.style.display='none';
+    if (a) a.style.display='none';
+  } else {
+    document.getElementById('advancedToggle').addEventListener('click', ()=>{
+      const a=document.getElementById('filterAdv'); const hidden=a.classList.toggle('hidden');
+      document.querySelector('#advancedToggle .cp-caret').textContent = hidden ? '▾' : '▴';
+    });
+  }
+  if (anyControl) document.getElementById('filterBar').style.display='';
+  renderChips();
+}
+
+function renderChips(){
+  const host = document.getElementById('filterChips');
+  const dimByCol = Object.fromEntries(FILTER_DIMS.map(d=>[d.col,d.label]));
+  const parts = [];
+  for (const [col,set] of activeFilters){
+    if (!set || !set.size) continue;
+    const label = dimByCol[col] || col;
+    const text = set.size>2 ? `${set.size} selected` : [...set].join(', ');
+    parts.push(`<span class="chip"><b>${escapeHtml(label)}:</b> ${escapeHtml(text)}
+      <span class="x" data-col="${escapeHtml(col)}" title="Remove">✕</span></span>`);
+  }
+  if (parts.length) parts.push(`<span class="chip clear-all" id="chipClearAll">Clear all</span>`);
+  host.innerHTML = parts.join('');
+  host.querySelectorAll('.chip .x').forEach(x=>x.addEventListener('click', ()=>{
+    const col=x.dataset.col; activeFilters.delete(col);
+    const ctl=filterControls.get(col); if (ctl) ctl.setSelected(new Set());
+    renderChips(); render();
+  }));
+  const clr=document.getElementById('chipClearAll');
+  if (clr) clr.addEventListener('click', ()=>{
+    activeFilters.clear();
+    filterControls.forEach(ctl=>ctl.setSelected(new Set()));
+    renderChips(); render();
   });
 }
 
@@ -1102,7 +1304,7 @@ async function renderLifecycle(w){
 // Pages with a publish date, in the current language scope.
 function pubsCte(){
   return `pubs AS (SELECT page_key, any_value(page_name) nm, any_value(content_type) ct,
-    MIN(publishing_date) pd FROM pv WHERE publishing_date IS NOT NULL${langClause()} GROUP BY 1)`;
+    MIN(publishing_date) pd FROM pv WHERE publishing_date IS NOT NULL${filterClause()} GROUP BY 1)`;
 }
 
 async function computeLifecycle(w){
@@ -1116,7 +1318,7 @@ async function computeLifecycle(w){
     SELECT median(v) med, COUNT(*) n FROM (
       SELECT p.page_key, COUNT(DISTINCT v.session_id) v
       FROM pubs p LEFT JOIN pv v ON v.page_key = p.page_key
-        AND v.timestamp >= p.pd AND v.timestamp < p.pd + to_days(7)${langClause()}
+        AND v.timestamp >= p.pd AND v.timestamp < p.pd + to_days(7)${filterClause()}
       WHERE p.pd >= TIMESTAMP '${F}' AND p.pd + to_days(7) <= TIMESTAMP '${T}'
       GROUP BY 1)`))[0];
 
@@ -1149,7 +1351,7 @@ async function computeLifecycle(w){
           AND date_diff('day', publishing_date, timestamp) BETWEEN 0 AND 30 THEN 1 ELSE 0 END),0)::BIGINT fresh,
         COALESCE(SUM(CASE WHEN publishing_date IS NULL
           OR date_diff('day', publishing_date, timestamp) NOT BETWEEN 0 AND 30 THEN 1 ELSE 0 END),0)::BIGINT older
-      FROM pv WHERE TRUE${langClause()} GROUP BY 1),
+      FROM pv WHERE TRUE${filterClause()} GROUP BY 1),
     mp AS (SELECT strftime(date_trunc('month', pd),'%Y-%m') m, COUNT(*) published
       FROM pubs WHERE pd >= TIMESTAMP '${iso(dataMin)}' GROUP BY 1)
     SELECT COALESCE(mv.m, mp.m) m, COALESCE(fresh,0) fresh, COALESCE(older,0) older,
@@ -1164,7 +1366,7 @@ async function computeLifecycle(w){
       COUNT(DISTINCT v.session_id) lifetime,
       COUNT(DISTINCT CASE WHEN v.timestamp >= TIMESTAMP '${F}' AND v.timestamp <= TIMESTAMP '${T}'
         THEN v.session_id END) winv
-    FROM pubs p LEFT JOIN pv v ON v.page_key = p.page_key${langClause()}
+    FROM pubs p LEFT JOIN pv v ON v.page_key = p.page_key${filterClause()}
     GROUP BY 1`);
 
   lastArticles = articles.map(r=>({ nm:r.nm, ct:r.ct, pd:r.pd,
@@ -1250,7 +1452,7 @@ async function audienceKpisFor(a,b){
   const s = (await query(`SELECT COUNT(*) sess, COALESCE(SUM(CASE WHEN v=1 THEN 1 ELSE 0 END),0) bounced,
       COALESCE(SUM(v),0) n_views
     FROM (SELECT session_id, COUNT(*) v FROM pv WHERE ${win(a,b)} GROUP BY 1)`))[0];
-  const u = (await query(`WITH fs AS (SELECT person_id, MIN(timestamp) f FROM pv WHERE TRUE${langClause()} GROUP BY 1)
+  const u = (await query(`WITH fs AS (SELECT person_id, MIN(timestamp) f FROM pv WHERE TRUE${filterClause()} GROUP BY 1)
     SELECT COUNT(DISTINCT p.person_id) vis,
       COUNT(DISTINCT CASE WHEN fs.f >= TIMESTAMP '${iso(a)}' THEN p.person_id END) newu
     FROM pv p JOIN fs USING (person_id) WHERE ${win(a,b)}`))[0];
@@ -1264,11 +1466,11 @@ async function computeAudience(w){
   const prev = w.hasPrev ? await audienceKpisFor(w.prevFrom, w.prevTo) : null;
 
   const monthly = await query(`WITH fs AS (SELECT person_id, date_trunc('month', MIN(timestamp)) fm
-      FROM pv WHERE TRUE${langClause()} GROUP BY 1)
+      FROM pv WHERE TRUE${filterClause()} GROUP BY 1)
     SELECT strftime(date_trunc('month', p.timestamp),'%Y-%m') m,
       COUNT(DISTINCT CASE WHEN date_trunc('month', p.timestamp) = fs.fm THEN p.person_id END) newu,
       COUNT(DISTINCT CASE WHEN date_trunc('month', p.timestamp) > fs.fm THEN p.person_id END) ret
-    FROM pv p JOIN fs USING (person_id) WHERE TRUE${langClause()} GROUP BY 1 ORDER BY 1`);
+    FROM pv p JOIN fs USING (person_id) WHERE TRUE${filterClause()} GROUP BY 1 ORDER BY 1`);
 
   const freq = await query(`SELECT b, o, COUNT(*) c FROM (
       SELECT CASE WHEN s=1 THEN '1 visit' WHEN s=2 THEN '2 visits' WHEN s<=5 THEN '3–5'
@@ -1375,7 +1577,6 @@ function applyCustomDates(){
   document.querySelectorAll('#timeframeSeg button').forEach(b=>b.classList.remove('active'));
   render();
 }
-function setLanguage(l){ language=l; render(); }
 function setRankMetric(m){ rankMetric=m; drawRanking(); }
 function setTrafficMetric(m){ trafficMetric=m;
   document.getElementById('tmVisits').classList.toggle('active', m==='visits');
