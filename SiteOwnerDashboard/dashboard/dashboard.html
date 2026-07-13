@@ -214,6 +214,16 @@
   .bar-row-fill { height: 100%; border-radius: var(--radius); transition: width 0.2s; }
   .bar-row-count { font-variant-numeric: tabular-nums; text-align: right; color: var(--grey-6); font-weight: 500; }
   @media (max-width: 900px){ .bar-row { grid-template-columns: 120px 1fr 60px; } }
+
+  /* Page -> URL/Language expandable rows */
+  .pg-exp { cursor: pointer; color: var(--grey-4); font-size: 0.7rem; display: inline-block;
+    width: 1em; text-align: center; margin-right: 0.25rem; user-select: none; }
+  .pg-exp:hover { color: var(--primary); }
+  .pg-exp-spacer { display: inline-block; width: 1em; margin-right: 0.25rem; }
+  tbody tr.pg-child td { background: var(--row-alt); font-size: 0.76rem; color: var(--grey-5); }
+  tbody tr.pg-child:hover td { background: var(--surface); }
+  tbody tr.pg-child .pg-child-label { padding-left: 2.1rem; color: var(--grey-5); }
+  tbody tr.pg-child .pg-child-label b { color: var(--grey-6); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -1121,7 +1131,9 @@ function buildSelectGroupBy(colDefs, visible){
 const PAGES_COLDEFS = [
   // ---- Dimensions (Group By) ----
   { key:'page_name', label:'Page Name', kind:'dim', num:false, selectSql:`COALESCE(page_name, '(unknown)')`,
-    cell:r=>`<td class="name" title="${escapeHtml(r._url_tip||r.page_url||r.page_name)}">${escapeHtml(r.page_name)}</td>` },
+    cell:r=>{ const exp = pagesExpandable && pagesVariantSet.has(r.page_name);
+      const chev = exp ? `<span class="pg-exp" data-pn="${escapeHtml(r.page_name)}">${pagesExpandState.has(r.page_name)?'▾':'▸'}</span>` : (pagesExpandable?'<span class="pg-exp-spacer"></span>':'');
+      return `<td class="name" title="${escapeHtml(r._url_tip||r.page_url||r.page_name)}">${chev}${escapeHtml(r.page_name)}</td>`; } },
   { key:'_url_tip', kind:'attr', hidden:true, always:true, selectSql:`MAX(page_url)` },
   { key:'page_key', label:'Page (canonical)', kind:'dim', num:false, selectSql:`COALESCE(page_key, '')`,
     cell:r=>`<td class="url" title="${escapeHtml(r.page_key)}">${escapeHtml(r.page_key)}</td>` },
@@ -1153,6 +1165,11 @@ const SEP = '';
 let pagesSort = { col:'visits', dir:'desc' };
 let lastPagesTable = null;
 let pagesPicker = null;
+// Page -> URL/Language drill (only when the table is grouped by page_name).
+let pagesExpandable = false;          // page-level grouping active?
+let pagesVariantSet = new Set();      // page_names that have >1 URL/language variant
+let pagesVariantData = new Map();     // page_name -> cached variant rows
+let pagesExpandState = new Set();     // currently-expanded page_names
 
 function setupColumnPickers(){
   pagesPicker = new ColumnPicker('cp_pages', {
@@ -1273,7 +1290,20 @@ async function renderPagesTable(w){
     totals = (await query(`SELECT ${metricDefs.map(c=>`${c.selectSql} AS ${c.key}`).join(', ')} FROM pv WHERE ${win(w.from,w.to)}`))[0];
   }
 
-  lastPagesTable = { rows, totals, visible };
+  // Page -> URL/Language drill is available only when the table is grouped by
+  // page_name alone (chevron would be ambiguous under any other grouping).
+  pagesExpandable = dimKeys.length===1 && dimKeys[0]==='page_name';
+  pagesExpandState = new Set();   // collapse on every refilter/regroup
+  pagesVariantData = new Map();   // drop cache — window/filters changed
+  if (pagesExpandable){
+    const mv = await query(`SELECT COALESCE(page_name,'(unknown)') AS page_name FROM pv WHERE ${win(w.from,w.to)}
+      GROUP BY 1 HAVING COUNT(DISTINCT page_url || '|' || COALESCE(language,'Other')) > 1`);
+    pagesVariantSet = new Set(mv.map(r=>r.page_name));
+  } else {
+    pagesVariantSet = new Set();
+  }
+
+  lastPagesTable = { rows, totals, visible, w };
   // If the current sort column got hidden, fall back to a visible one.
   if (!visible.has(pagesSort.col)){
     const m = PAGES_COLDEFS.find(c=>(c.kind==='metric'||c.kind==='post') && visible.has(c.key));
@@ -1299,7 +1329,17 @@ function drawPagesTableUI(){
 
   document.getElementById('pagesHead').innerHTML = visibleDefs.map(c=>`<th class="${c.num?'num':''}" onclick="sortPagesTable('${c.key}')">${escapeHtml(c.label)}${
     pagesSort.col===c.key?`<span class="arr">${pagesSort.dir==='asc'?'▲':'▼'}</span>`:''}</th>`).join('');
-  document.getElementById('pagesBody').innerHTML = sorted.map(r=>`<tr>${visibleDefs.map(c=>c.cell(r)).join('')}</tr>`).join('');
+  const bodyRows = [];
+  for (const r of sorted){
+    bodyRows.push(`<tr>${visibleDefs.map(c=>c.cell(r)).join('')}</tr>`);
+    if (pagesExpandable && pagesExpandState.has(r.page_name)){
+      for (const vr of (pagesVariantData.get(r.page_name) || []))
+        bodyRows.push(`<tr class="pg-child">${visibleDefs.map(c=>pageChildCell(c,vr)).join('')}</tr>`);
+    }
+  }
+  document.getElementById('pagesBody').innerHTML = bodyRows.join('');
+  document.querySelectorAll('#pagesBody .pg-exp').forEach(s=>s.addEventListener('click', e=>{
+    e.stopPropagation(); togglePageExpand(s.dataset.pn); }));
 
   // Totals row — only when a leading dimension/label column is present.
   const firstMetricIdx = visibleDefs.findIndex(c=>c.kind==='metric'||c.kind==='post');
@@ -1317,6 +1357,35 @@ function drawPagesTableUI(){
 
   document.getElementById('pagesSub').textContent =
     `${sorted.length} rows · toggle Columns to group by dimensions · MoM = vs. prior equal period`;
+}
+
+// Child-row cell for a single URL/language variant of an expanded page.
+function pageChildCell(c, vr){
+  if (c.key==='page_name'){
+    const tail = String(vr.page_url||'').split('/').slice(-2).join('/');
+    return `<td class="name pg-child-label" title="${escapeHtml(vr.page_url)}">↳ <b>${escapeHtml(vr.language)}</b> · <span class="url">${escapeHtml(tail)}</span></td>`; }
+  if (c.kind==='post') return '<td></td>';
+  if (c.key==='engagement') return `<td class="num">${(+vr.engagement||0).toFixed(2)}</td>`;
+  if (c.key==='avg_tos') return `<td class="num">${fmtDur(vr.avg_tos)}</td>`;
+  if (c.kind==='metric') return `<td class="num">${fmt(vr[c.key])}</td>`;
+  return '<td></td>';
+}
+
+// Toggle the URL/language variants under a page_name (lazy-loads + caches).
+async function togglePageExpand(pn){
+  if (pagesExpandState.has(pn)){ pagesExpandState.delete(pn); drawPagesTableUI(); return; }
+  pagesExpandState.add(pn);
+  if (!pagesVariantData.has(pn)){
+    const w = lastPagesTable.w;
+    const rows = await query(`SELECT page_url, COALESCE(language,'Other') AS language,
+      COUNT(*) AS views, COUNT(DISTINCT session_id) AS visits, COUNT(DISTINCT person_id) AS uniques,
+      CASE WHEN COUNT(DISTINCT session_id)>0 THEN COUNT(DISTINCT person_id)::DOUBLE/COUNT(DISTINCT session_id) ELSE 0 END AS engagement,
+      AVG(time_on_page_sec) AS avg_tos
+      FROM pv WHERE ${win(w.from,w.to)} AND page_name = '${escSql(pn)}'
+      GROUP BY 1,2 ORDER BY visits DESC`);
+    pagesVariantData.set(pn, rows);
+  }
+  drawPagesTableUI();
 }
 
 function sortPagesTable(col){
