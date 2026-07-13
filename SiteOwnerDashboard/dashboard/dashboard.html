@@ -144,6 +144,32 @@
     .header { padding: 0.5rem 1rem; }
     .container { padding: 1rem; }
   }
+  /* Column picker (dimensions × measures) — ported from the Clicks dashboard */
+  .cp { position: relative; display: inline-block; }
+  .cp-trigger { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.4rem 0.7rem;
+    border: 1px solid var(--grey-1); background: var(--white); color: var(--grey-6);
+    border-radius: var(--radius); cursor: pointer; font-size: 0.8rem; font-family: inherit; transition: all 0.15s; }
+  .cp-trigger:hover { background: var(--surface); border-color: var(--grey-3); }
+  .cp-trigger.open { border-color: var(--primary); }
+  .cp-trigger .cp-count { color: var(--grey-3); font-size: 0.72rem; }
+  .cp-caret { color: var(--grey-3); font-size: 0.7rem; }
+  .cp-popover { position: fixed; min-width: 240px; max-height: 420px; background: var(--white);
+    border: 1px solid var(--grey-1); border-radius: var(--radius); box-shadow: var(--shadow-hover);
+    z-index: 200; display: flex; flex-direction: column; }
+  .cp-popover.hidden { display: none; }
+  .cp-actions { display: flex; gap: 0.4rem; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--grey-1); background: var(--bg); }
+  .cp-action { font-size: 0.7rem; padding: 0.2rem 0.5rem; border: 1px solid var(--grey-1); background: var(--white);
+    color: var(--grey-3); border-radius: var(--radius); cursor: pointer; font-family: inherit; }
+  .cp-action:hover { color: var(--grey-6); border-color: var(--grey-3); }
+  .cp-list { flex: 1; overflow-y: auto; padding: 0.3rem 0; }
+  .cp-group-label { padding: 0.35rem 0.6rem 0.15rem; font-size: 0.65rem; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--grey-3); font-weight: 600; }
+  .cp-option { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.6rem; font-size: 0.8rem; cursor: pointer; user-select: none; }
+  .cp-option:hover { background: var(--surface); }
+  .cp-option input[type="checkbox"] { cursor: pointer; margin: 0; flex-shrink: 0; accent-color: var(--primary); }
+  .cp-option .cp-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cp-table-actions { display: flex; align-items: center; gap: 0.5rem; }
+  #pagesTable tfoot td { font-weight: 600; border-top: 2px solid var(--grey-1); background: var(--bg); }
 </style>
 </head>
 <body>
@@ -241,11 +267,15 @@
           <div class="table-header">
             <div><h3>Pages — performance &amp; trend</h3>
               <div class="st" id="pagesSub">click a column to sort · MoM = vs. prior equal period</div></div>
-            <button class="btn btn-sm" onclick="exportTableXlsx('pages', event)">Export XLSX</button>
+            <div class="cp-table-actions">
+              <div id="cp_pages" class="cp"></div>
+              <button class="btn btn-sm" onclick="exportTableXlsx('pages', event)">Export XLSX</button>
+            </div>
           </div>
           <div class="table-scroll"><table id="pagesTable">
             <thead><tr id="pagesHead"></tr></thead>
             <tbody id="pagesBody"></tbody>
+            <tfoot id="pagesFoot"></tfoot>
           </table></div>
         </div>
       </div>
@@ -448,7 +478,6 @@ let dataMin=null, dataMax=null;
 let pvCols=new Set(), hasPubDates=false;
 let timeframe='90d', language='all', trafficMetric='visits', rankMetric='visits';
 let customFrom=null, customTo=null;
-let sortCol='visits', sortDir='desc';
 let articleSort={col:'pd', dir:'desc'}, entrySort={col:'entries', dir:'desc'};
 let charts={};
 let activeTab='overview', dirtyTabs={};
@@ -528,6 +557,7 @@ async function init(){
 
     setLoading('Loading data…');
     await loadData();
+    setupColumnPickers();
 
     document.getElementById('loading').style.display='none';
     document.getElementById('dashboard').style.display='block';
@@ -701,8 +731,8 @@ async function renderContentType(w){
 }
 
 async function renderPages(w){
-  await computePages(w);
-  drawPagesTable();
+  await computePages(w);        // canonical page rows -> ranking + workbook export
+  await renderPagesTable(w);    // configurable dimensions × measures table
   drawRanking();
 }
 async function computePages(w){
@@ -724,48 +754,272 @@ async function computePages(w){
   });
 }
 
-const PAGE_COLS = [
-  { key:'name', label:'Page', num:false },
-  { key:'ct', label:'Type', num:false },
-  { key:'views', label:'Views', num:true },
-  { key:'visits', label:'Visits', num:true },
-  { key:'uniques', label:'Unique', num:true },
-  { key:'engagement', label:'Engmt', num:true },
-  { key:'avg_tos', label:'Avg time', num:true },
-  { key:'trend', label:'Trend', num:false },
-  { key:'mom', label:'MoM', num:true },
+// ===================================================================
+// Configurable Pages table: toggle dimensions (Group By) and measures;
+// the query re-aggregates on the current selection (ported from the
+// Clicks dashboard). Dims: Page Name / canonical page / URL / content
+// type / language. Metrics computed in SQL; MoM + Trend via secondary
+// queries keyed by the visible dimensions.
+// ===================================================================
+function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g,
+  c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+class ColumnPicker {
+  static instances = [];
+  static _docBound = false;
+  constructor(rootId, opts={}){
+    this.root = document.getElementById(rootId);
+    this.columns = opts.columns || [];          // [{key,label,kind}]
+    this.visible = new Set(opts.visible ?? this.columns.map(c=>c.key));
+    this.onChange = opts.onChange || (()=>{});
+    this.open = false;
+    this.render();
+    ColumnPicker.instances.push(this);
+    if (!ColumnPicker._docBound){
+      document.addEventListener('click', e=>{ ColumnPicker.instances.forEach(cp=>{
+        if (cp.open && !cp.root.contains(e.target) && !cp.popoverEl.contains(e.target)) cp.toggleOpen(false); }); });
+      document.addEventListener('keydown', e=>{ if (e.key==='Escape') ColumnPicker.instances.forEach(cp=>cp.toggleOpen(false)); });
+      window.addEventListener('scroll', ()=>{ ColumnPicker.instances.forEach(cp=>{ if (cp.open) cp.toggleOpen(false); }); }, true);
+      window.addEventListener('resize', ()=>{ ColumnPicker.instances.forEach(cp=>{ if (cp.open) cp.toggleOpen(false); }); });
+      ColumnPicker._docBound = true;
+    }
+  }
+  getVisibleSet(){ return new Set(this.visible); }
+  positionPopover(){
+    const r = this.triggerEl.getBoundingClientRect(), margin=8;
+    const spaceBelow = window.innerHeight - r.bottom - margin, spaceAbove = r.top - margin;
+    const flipUp = spaceBelow < 240 && spaceAbove > spaceBelow;
+    this.popoverEl.style.maxHeight = `${Math.min(420, Math.max(160, flipUp?spaceAbove:spaceBelow))}px`;
+    if (flipUp){ this.popoverEl.style.top='auto'; this.popoverEl.style.bottom=`${Math.max(margin, window.innerHeight - r.top + 2)}px`; }
+    else { this.popoverEl.style.bottom='auto'; this.popoverEl.style.top=`${r.bottom + 2}px`; }
+    this.popoverEl.style.right = `${Math.max(margin, window.innerWidth - r.right)}px`;
+    this.popoverEl.style.left = 'auto';
+  }
+  toggleOpen(force){
+    const next = typeof force==='boolean' ? force : !this.open;
+    if (next===this.open) return;
+    this.open = next;
+    if (this.open) this.positionPopover();
+    this.popoverEl.classList.toggle('hidden', !this.open);
+    this.triggerEl.classList.toggle('open', this.open);
+  }
+  render(){
+    const groups = [{id:'dim',label:'Dimensions (Group By)'},{id:'metric',label:'Metrics'}];
+    const grouped = { dim:[], metric:[] };
+    for (const c of this.columns){ grouped[c.kind==='post'?'metric':c.kind==='dim'?'dim':'metric'].push(c); }
+    const listHtml = groups.filter(g=>grouped[g.id].length).map(g=>`
+      <div class="cp-group-label">${g.label}</div>
+      ${grouped[g.id].map(c=>{ const checked=this.visible.has(c.key)?'checked':''; const safe=escapeHtml(c.label);
+        return `<label class="cp-option"><input type="checkbox" ${checked} data-key="${c.key}"><span class="cp-text" title="${safe}">${safe}</span></label>`; }).join('')}
+    `).join('');
+    this.root.innerHTML = `
+      <button type="button" class="cp-trigger"><span>Columns</span><span class="cp-count"></span><span class="cp-caret">▾</span></button>
+      <div class="cp-popover hidden">
+        <div class="cp-actions">
+          <button type="button" class="cp-action" data-action="all">Show all</button>
+          <button type="button" class="cp-action" data-action="none">Hide all</button>
+          <button type="button" class="cp-action" data-action="reset">Reset</button>
+        </div>
+        <div class="cp-list">${listHtml}</div>
+      </div>`;
+    this.triggerEl = this.root.querySelector('.cp-trigger');
+    this.popoverEl = this.root.querySelector('.cp-popover');
+    this.countEl = this.root.querySelector('.cp-count');
+    this.listEl = this.root.querySelector('.cp-list');
+    this.defaultVisible = new Set(this.visible);
+    this.triggerEl.addEventListener('click', e=>{ e.stopPropagation();
+      ColumnPicker.instances.forEach(cp=>{ if (cp!==this) cp.toggleOpen(false); }); this.toggleOpen(); });
+    this.popoverEl.addEventListener('click', e=>e.stopPropagation());
+    this.root.querySelector('[data-action="all"]').addEventListener('click', ()=>{ this.columns.forEach(c=>this.visible.add(c.key)); this.refresh(); this.onChange(); });
+    this.root.querySelector('[data-action="none"]').addEventListener('click', ()=>{ this.visible.clear(); this.refresh(); this.onChange(); });
+    this.root.querySelector('[data-action="reset"]').addEventListener('click', ()=>{ this.visible = new Set(this.defaultVisible); this.refresh(); this.onChange(); });
+    this.listEl.querySelectorAll('input[type="checkbox"]').forEach(cb=>{ cb.addEventListener('change', ()=>{
+      if (cb.checked) this.visible.add(cb.dataset.key); else this.visible.delete(cb.dataset.key);
+      this.updateCount(); this.onChange(); }); });
+    this.updateCount();
+  }
+  refresh(){ this.listEl.querySelectorAll('input[type="checkbox"]').forEach(cb=>{ cb.checked = this.visible.has(cb.dataset.key); }); this.updateCount(); }
+  updateCount(){ if (this.countEl) this.countEl.textContent = `(${this.visible.size}/${this.columns.length})`; }
+}
+
+// Build the SELECT + GROUP BY from the visible columns. Dropping a dim
+// re-aggregates coarser. Returns dimParts/dimKeys so the MoM/Trend
+// secondary queries can group on the SAME dimensions.
+function buildSelectGroupBy(colDefs, visible){
+  const selectParts=[], groupIdx=[], includedKeys=new Set(), dimParts=[], dimKeys=[];
+  let i=1;
+  for (const c of colDefs){
+    if (c.kind==='dim'){
+      if (!visible.has(c.key)) continue;
+      selectParts.push(`${c.selectSql} AS ${c.key}`); groupIdx.push(String(i)); includedKeys.add(c.key);
+      dimParts.push(`${c.selectSql} AS ${c.key}`); dimKeys.push(c.key); i++;
+    } else if (c.kind==='attr'){
+      if (!c.always && !visible.has(c.key)) continue;
+      selectParts.push(`${c.selectSql} AS ${c.key}`); includedKeys.add(c.key); i++;
+    } else if (c.kind==='metric'){
+      if (!visible.has(c.key)) continue;
+      selectParts.push(`${c.selectSql} AS ${c.key}`); includedKeys.add(c.key); i++;
+    }
+    // kind 'post' (mom/trend): filled by secondary queries, not in the base SELECT
+  }
+  return { selectParts, groupIdx, includedKeys, dimParts, dimKeys };
+}
+
+const PAGES_COLDEFS = [
+  // ---- Dimensions (Group By) ----
+  { key:'page_name', label:'Page Name', kind:'dim', num:false, selectSql:`COALESCE(page_name, '(unknown)')`,
+    cell:r=>`<td class="name" title="${escapeHtml(r._url_tip||r.page_url||r.page_name)}">${escapeHtml(r.page_name)}</td>` },
+  { key:'_url_tip', kind:'attr', hidden:true, always:true, selectSql:`MAX(page_url)` },
+  { key:'page_key', label:'Page (canonical)', kind:'dim', num:false, selectSql:`COALESCE(page_key, '')`,
+    cell:r=>`<td class="url" title="${escapeHtml(r.page_key)}">${escapeHtml(r.page_key)}</td>` },
+  { key:'page_url', label:'Page URL', kind:'dim', num:false, selectSql:`COALESCE(page_url, '')`,
+    cell:r=>`<td class="url" title="${escapeHtml(r.page_url)}">${escapeHtml(r.page_url)}</td>` },
+  { key:'content_type', label:'Content Type', kind:'dim', num:false, selectSql:`COALESCE(content_type, '(none)')`,
+    cell:r=>`<td><span class="ct-badge">${escapeHtml(r.content_type)}</span></td>` },
+  { key:'language', label:'Language', kind:'dim', num:false, selectSql:`COALESCE(language, 'Other')`,
+    cell:r=>`<td>${escapeHtml(r.language)}</td>` },
+  // ---- Metrics (aggregate in SQL) ----
+  { key:'views', label:'Views', kind:'metric', num:true, selectSql:`COUNT(*)`,
+    cell:r=>`<td class="num">${fmt(r.views)}</td>` },
+  { key:'visits', label:'Visits', kind:'metric', num:true, selectSql:`COUNT(DISTINCT session_id)`,
+    cell:r=>`<td class="num">${fmt(r.visits)}</td>` },
+  { key:'uniques', label:'Unique', kind:'metric', num:true, selectSql:`COUNT(DISTINCT person_id)`,
+    cell:r=>`<td class="num">${fmt(r.uniques)}</td>` },
+  { key:'engagement', label:'Engmt', kind:'metric', num:true,
+    selectSql:`CASE WHEN COUNT(DISTINCT session_id)>0 THEN COUNT(DISTINCT person_id)::DOUBLE/COUNT(DISTINCT session_id) ELSE 0 END`,
+    cell:r=>`<td class="num">${(+r.engagement||0).toFixed(2)}</td>` },
+  { key:'avg_tos', label:'Avg time', kind:'metric', num:true, selectSql:`AVG(time_on_page_sec)`,
+    cell:r=>`<td class="num">${fmtDur(r.avg_tos)}</td>` },
+  // ---- Post metrics (secondary queries keyed by the visible dimensions) ----
+  { key:'trend', label:'Trend', kind:'post', num:false, cell:r=>`<td>${sparkline(r.trend||[])}</td>` },
+  { key:'mom', label:'MoM', kind:'post', num:true,
+    cell:r=>`<td class="num">${r.mom==null?'<span class="delta flat">–</span>':deltaHtml(1+r.mom/100,1)}</td>` },
 ];
-function sortedPages(){
-  return [...lastPages].sort((a,b)=>{
-    let x=a[sortCol], y=b[sortCol];
-    if (sortCol==='trend'){ x=a.trend.at(-1)||0; y=b.trend.at(-1)||0; }
-    if (x==null) x=-Infinity; if (y==null) y=-Infinity;
-    if (typeof x==='string') return sortDir==='asc'? x.localeCompare(y): y.localeCompare(x);
-    return sortDir==='asc'? x-y : y-x;
+const PAGES_DEFAULT_VISIBLE = ['page_name','views','visits','uniques','engagement','avg_tos','trend','mom'];
+const SEP = '';
+let pagesSort = { col:'visits', dir:'desc' };
+let lastPagesTable = null;
+let pagesPicker = null;
+
+function setupColumnPickers(){
+  pagesPicker = new ColumnPicker('cp_pages', {
+    columns: PAGES_COLDEFS.filter(c=>!c.hidden).map(c=>({key:c.key,label:c.label,kind:c.kind})),
+    visible: PAGES_DEFAULT_VISIBLE,
+    onChange: ()=>renderPagesTable(windows()),
   });
 }
-function drawPagesTable(){
-  const head = document.getElementById('pagesHead');
-  head.innerHTML = PAGE_COLS.map(c=>`<th class="${c.num?'num':''}" onclick="sortPages('${c.key}')">${c.label}${
-    sortCol===c.key?`<span class="arr">${sortDir==='asc'?'▲':'▼'}</span>`:''}</th>`).join('');
-  const rows = sortedPages();
-  document.getElementById('pagesBody').innerHTML = rows.map(r=>`
-    <tr>
-      <td class="name" title="${r.name}">${r.name}</td>
-      <td><span class="ct-badge">${r.ct}</span></td>
-      <td class="num">${fmt(r.views)}</td>
-      <td class="num">${fmt(r.visits)}</td>
-      <td class="num">${fmt(r.uniques)}</td>
-      <td class="num">${r.engagement.toFixed(2)}</td>
-      <td class="num">${fmtDur(r.avg_tos)}</td>
-      <td>${sparkline(r.trend)}</td>
-      <td class="num">${r.mom==null?'<span class="delta flat">–</span>':deltaHtml(1+r.mom/100,1)}</td>
-    </tr>`).join('');
-  document.getElementById('pagesSub').textContent =
-    `${rows.length} pages · click a column to sort · MoM = vs. prior equal period`;
+
+async function renderPagesTable(w){
+  const visible = pagesPicker ? pagesPicker.getVisibleSet() : new Set(PAGES_DEFAULT_VISIBLE);
+  const { selectParts, groupIdx, includedKeys, dimParts, dimKeys } = buildSelectGroupBy(PAGES_COLDEFS, visible);
+
+  // MoM / Trend need the current-period visits even when the Visits column is off.
+  const needVisits = (visible.has('mom')||visible.has('trend')) && !includedKeys.has('visits');
+  const mainSelect = needVisits ? [...selectParts, `COUNT(DISTINCT session_id) AS visits`] : selectParts.slice();
+  if (needVisits) includedKeys.add('visits');
+  if (!mainSelect.length) mainSelect.push('COUNT(*) AS views');   // guard: nothing selected
+
+  // SQL ORDER BY on a real (non-post) column for a sensible top-N; final order in JS.
+  const sqlSortable = includedKeys.has(pagesSort.col) && !['mom','trend'].includes(pagesSort.col);
+  const sqlSort = sqlSortable ? pagesSort.col
+    : (includedKeys.has('visits') ? 'visits'
+      : (PAGES_COLDEFS.find(c=>c.kind==='metric'&&includedKeys.has(c.key))||{}).key || dimKeys[0] || null);
+  const groupBy = groupIdx.length ? `GROUP BY ${groupIdx.join(', ')}` : '';
+  const orderBy = sqlSort ? `ORDER BY ${sqlSort} ${(sqlSortable?pagesSort.dir:'desc').toUpperCase()}` : '';
+  const rows = await query(`SELECT ${mainSelect.join(', ')} FROM pv WHERE ${win(w.from,w.to)} ${groupBy} ${orderBy} LIMIT 500`);
+
+  const rowKey = r => dimKeys.map(k=>r[k]).join(SEP);
+  const secGroupBy = n => n ? `GROUP BY ${Array.from({length:n},(_,i)=>i+1).join(', ')}` : '';
+  const dimSel = dimParts.length ? dimParts.join(', ')+', ' : '';
+
+  if (visible.has('mom')){
+    const prev = w.hasPrev ? await query(
+      `SELECT ${dimSel}COUNT(DISTINCT session_id) AS vp FROM pv WHERE ${win(w.prevFrom,w.prevTo)} ${secGroupBy(dimKeys.length)}`) : [];
+    const pmap = new Map(prev.map(r=>[rowKey(r), Number(r.vp)]));
+    for (const r of rows){ const vp=pmap.get(rowKey(r)); r.mom = (vp!=null && vp>0) ? (Number(r.visits)-vp)/vp*100 : null; }
+  }
+  if (visible.has('trend')){
+    const n = dimKeys.length;
+    const tr = await query(
+      `SELECT ${dimSel}strftime(date_trunc('week', timestamp),'%Y-%m-%d') AS wk, COUNT(DISTINCT session_id) AS v
+       FROM pv WHERE ${win(w.from,w.to)} GROUP BY ${Array.from({length:n+1},(_,i)=>i+1).join(', ')}
+       ORDER BY ${Array.from({length:n+1},(_,i)=>i+1).join(', ')}`);
+    const tmap = new Map();
+    for (const t of tr){ const k=rowKey(t); if (!tmap.has(k)) tmap.set(k,[]); tmap.get(k).push(Number(t.v)); }
+    for (const r of rows){ r.trend = tmap.get(rowKey(r)) || []; }
+  }
+
+  // Totals: visible metrics across all rows in the window (no GROUP BY).
+  const metricDefs = PAGES_COLDEFS.filter(c=>c.kind==='metric' && includedKeys.has(c.key) && visible.has(c.key));
+  let totals = null;
+  if (metricDefs.length){
+    totals = (await query(`SELECT ${metricDefs.map(c=>`${c.selectSql} AS ${c.key}`).join(', ')} FROM pv WHERE ${win(w.from,w.to)}`))[0];
+  }
+
+  lastPagesTable = { rows, totals, visible };
+  // If the current sort column got hidden, fall back to a visible one.
+  if (!visible.has(pagesSort.col)){
+    const m = PAGES_COLDEFS.find(c=>(c.kind==='metric'||c.kind==='post') && visible.has(c.key));
+    const d = PAGES_COLDEFS.find(c=>c.kind==='dim' && visible.has(c.key));
+    if (m){ pagesSort={col:m.key,dir:'desc'}; } else if (d){ pagesSort={col:d.key,dir:'asc'}; }
+  }
+  drawPagesTableUI();
 }
-function sortPages(col){ if (sortCol===col) sortDir = sortDir==='asc'?'desc':'asc';
-  else { sortCol=col; sortDir = (col==='name'||col==='ct')?'asc':'desc'; } drawPagesTable(); }
+
+function drawPagesTableUI(){
+  if (!lastPagesTable) return;
+  const { rows, totals, visible } = lastPagesTable;
+  const visibleDefs = PAGES_COLDEFS.filter(c=>c.kind!=='attr' && visible.has(c.key));
+
+  const sc = pagesSort.col, sd = pagesSort.dir;
+  const sorted = [...rows].sort((a,b)=>{
+    let x=a[sc], y=b[sc];
+    if (sc==='trend'){ x=(a.trend||[]).at(-1)||0; y=(b.trend||[]).at(-1)||0; }
+    if (x==null) x=-Infinity; if (y==null) y=-Infinity;
+    if (typeof x==='string' && typeof y==='string') return sd==='asc'? x.localeCompare(y) : y.localeCompare(x);
+    return sd==='asc'? x-y : y-x;
+  });
+
+  document.getElementById('pagesHead').innerHTML = visibleDefs.map(c=>`<th class="${c.num?'num':''}" onclick="sortPagesTable('${c.key}')">${escapeHtml(c.label)}${
+    pagesSort.col===c.key?`<span class="arr">${pagesSort.dir==='asc'?'▲':'▼'}</span>`:''}</th>`).join('');
+  document.getElementById('pagesBody').innerHTML = sorted.map(r=>`<tr>${visibleDefs.map(c=>c.cell(r)).join('')}</tr>`).join('');
+
+  // Totals row — only when a leading dimension/label column is present.
+  const firstMetricIdx = visibleDefs.findIndex(c=>c.kind==='metric'||c.kind==='post');
+  let footHtml='';
+  if (totals && firstMetricIdx>0){
+    const cells = visibleDefs.slice(firstMetricIdx).map(c=>{
+      if (c.kind==='post') return `<td></td>`;
+      const v = totals[c.key];
+      const disp = c.key==='engagement' ? (+v||0).toFixed(2) : c.key==='avg_tos' ? fmtDur(v) : fmt(v);
+      return `<td class="num">${disp}</td>`;
+    }).join('');
+    footHtml = `<tr><td colspan="${firstMetricIdx}">Overall (filtered)</td>${cells}</tr>`;
+  }
+  document.getElementById('pagesFoot').innerHTML = footHtml;
+
+  document.getElementById('pagesSub').textContent =
+    `${sorted.length} rows · toggle Columns to group by dimensions · MoM = vs. prior equal period`;
+}
+
+function sortPagesTable(col){
+  if (pagesSort.col===col) pagesSort.dir = pagesSort.dir==='asc'?'desc':'asc';
+  else { const d=PAGES_COLDEFS.find(c=>c.key===col); pagesSort = { col, dir: (d&&d.num)?'desc':'asc' }; }
+  drawPagesTableUI();
+}
+// Export helpers for the configurable Pages table (visible dims × measures).
+function pagesTableVisibleDefs(){
+  const vis = lastPagesTable ? lastPagesTable.visible : new Set(PAGES_DEFAULT_VISIBLE);
+  return PAGES_COLDEFS.filter(c=>c.kind!=='attr' && vis.has(c.key));
+}
+function pageExportCell(c,r){
+  if (c.key==='mom') return r.mom==null?'':(r.mom.toFixed(1)+'%');
+  if (c.key==='trend') return (r.trend||[]).at(-1)??'';
+  if (c.key==='engagement') return +(+r.engagement||0).toFixed(2);
+  if (c.key==='avg_tos') return r.avg_tos==null?'':Math.round(r.avg_tos);
+  if (c.num) return Number(r[c.key])||0;
+  return r[c.key]??'';
+}
 
 // ==== Top / Bottom 5 (selectable KPI) ====
 const RANK_LABELS = { visits:'Visits', views:'Page Views', uniques:'Unique Visitors',
@@ -1201,12 +1455,13 @@ async function exportXlsx(evt){
 const TABLE_EXPORTS = {
   pages: {
     sheet:'Pages', file:'pages',
-    async ensure(w){ if (dirtyTabs.overview){ await renderKpis(w); await computePages(w); } },
-    headers:['Page','Type','Views','Visits','Unique','Engmt','Avg time (s)','MoM'],
-    right:[false,false,true,true,true,true,true,true],
-    rows(){ return sortedPages().map(r=>[r.name,r.ct,r.views,r.visits,r.uniques,
-      +r.engagement.toFixed(2), r.avg_tos==null?'':Math.round(r.avg_tos),
-      r.mom==null?'':(r.mom.toFixed(1)+'%')]); },
+    async ensure(w){ if (dirtyTabs.overview){ await renderKpis(w); await computePages(w); }
+      if (!lastPagesTable) await renderPagesTable(w); },
+    // Dynamic: exports exactly the currently visible dimensions × measures.
+    headers(){ return pagesTableVisibleDefs().map(c=>c.label); },
+    right(){ return pagesTableVisibleDefs().map(c=>!!c.num); },
+    rows(){ const defs=pagesTableVisibleDefs();
+      return (lastPagesTable?.rows||[]).map(r=>defs.map(c=>pageExportCell(c,r))); },
   },
   articles: {
     sheet:'Published pages', file:'published_pages',
@@ -1232,7 +1487,9 @@ async function exportTableXlsx(kind, evt){
     if (btn){ btn.textContent='Exporting…'; btn.disabled=true; }
     await def.ensure(windows());
     const wb=new ExcelJS.Workbook(); wb.creator='Site Owner Dashboard'; wb.created=new Date();
-    sheetTable(wb.addWorksheet(def.sheet), 1, def.headers, def.rows(), def.right);
+    const headers = typeof def.headers==='function' ? def.headers() : def.headers;
+    const right   = typeof def.right==='function'   ? def.right()   : def.right;
+    sheetTable(wb.addWorksheet(def.sheet), 1, headers, def.rows(), right);
     await downloadWorkbook(wb, `${def.file}_${timeframe}.xlsx`);
   } catch(e){ console.error(e); alert('Export failed: '+e.message); }
   finally { if (btn){ btn.textContent=orig; btn.disabled=false; } }
