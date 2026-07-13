@@ -38,13 +38,29 @@ over HTTP (any static server works) — or use the standalone build below.
    month-over-month deltas both have data). Run it in Azure Portal → Logs →
    **Export → CSV (all columns)**. Azure caps ~65k rows per export — narrow the
    window and export in chunks for large sites.
-2. **Build.** Drop the CSV into `input/` and run:
+2. **Build.** Drop the export(s) into `input/` and run:
    ```bash
-   python scripts/process_site_pageviews.py input/<export>.csv
-   # optional HR enrichment (enables the Audience-by-Division donut):
-   python scripts/process_site_pageviews.py input/<export>.csv --hr ../SearchAnalytics/output/hr_history.parquet
+   python scripts/process_site_pageviews.py
+   ```
+   No path needed: the script picks up the CSV/XLSX files in `input/` and
+   auto-detects the HR parquet (`input/*.parquet`, then
+   `../../SearchAnalytics/output/hr_history.parquet`) for the
+   Audience-by-Division donut.
+
+   **Incremental** (same pattern as CampaignWe): a SHA-256 manifest
+   (`output/site_pageviews.manifest.json`) tracks processed files — unchanged
+   files are skipped, only new/changed ones are processed and **upserted** into
+   the existing parquet on `view_id`. Overlapping/chunked exports therefore
+   never double-count, and a re-exported (changed) file fully replaces the rows
+   it contributed before. Deleting a file from `input/` does **not** remove its
+   rows — use `--rebuild` for that. Overrides:
+   ```bash
+   python scripts/process_site_pageviews.py input/<export>.csv   # explicit file(s), skips hash check
+   python scripts/process_site_pageviews.py --hr /path/to/hr_history.parquet
+   python scripts/process_site_pageviews.py --no-hr              # skip HR join
+   python scripts/process_site_pageviews.py --rebuild            # full reprocess (also after changing filters)
    # re-filter locally by URL if you exported broadly:
-   python scripts/process_site_pageviews.py input/<export>.csv --url-contains news-and-events
+   python scripts/process_site_pageviews.py --url-contains news-and-events
    ```
 3. **Open.** `python -m http.server 8000` → `http://localhost:8000/dashboard/dashboard.html`.
 

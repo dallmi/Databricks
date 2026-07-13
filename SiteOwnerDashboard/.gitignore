@@ -4,5 +4,6 @@ input/*.csv
 input/*.xlsx
 input/*.xls
 output/*.parquet
+output/*.manifest.json
 # Standalone build embeds the (potentially sensitive) data — keep out of git.
 output/*.html
