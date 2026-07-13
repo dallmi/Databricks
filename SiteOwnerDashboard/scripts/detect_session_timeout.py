@@ -107,30 +107,49 @@ def main() -> None:
             best = (T, drop, pb, pa); star = ""
         print(f"   {T:>8d} {pb:>14.1%} {pa:>15.1%} {drop:>+8.1%}")
 
+    # Cliff detection: the timeout is the gap boundary where the per-bucket
+    # 'same session' rate DROPS the most (relative to the level just below it).
+    # Real session_id can also be renewed WITHIN a session (reloads, tabs), so
+    # the level below the timeout need not be ~100% — we look for a sharp
+    # relative fall, not an absolute one.
+    rates = grp["mean"]
+    ivs = list(grp.index)
+    cliff = None  # (est_min, lo_edge, hi_edge, rate_below, rate_above, drop)
+    for i in range(1, len(ivs)):
+        boundary = ivs[i].left
+        if not (args.lo <= boundary <= args.hi):
+            continue
+        rb, ra = rates.iloc[i - 1], rates.iloc[i]
+        drop = rb - ra
+        # timeout sits between the high bucket's right edge and the low bucket's
+        # left edge; the midpoint is the best point estimate (handles a gap in
+        # observed buckets, e.g. no data between 40 and 50 min).
+        lo_edge, hi_edge = int(ivs[i - 1].right), int(boundary)
+        est = (lo_edge + hi_edge) // 2
+        if cliff is None or drop > cliff[5]:
+            cliff = (est, lo_edge, hi_edge, rb, ra, drop)
+
     # verdict
     print("\nVERDICT")
+    is_cliff = cliff is not None and cliff[5] >= 0.15 and cliff[3] >= 2 * max(cliff[4], 1e-9)
     if overall_same < 0.02:
         print("   session_id is renewed on essentially EVERY page view "
               f"(P(same)={overall_same:.1%}).")
         print("   There is NO inactivity timeout — it does not persist across "
               "navigations at all.")
         print("   The reconstructed visit_id is what defines a visit here.")
-    elif best is not None and best[1] > 0.3 and best[2] > 0.6:
-        T, drop, pb, pa = best
-        # The timeout sits BETWEEN the largest gap still mostly 'same session'
-        # and the smallest gap already mostly 'new session' — you can only
-        # localise it to that window (no observations fall inside it).
-        hi_same = grp[grp["mean"] >= 0.5]
-        lo_new = grp[grp["mean"] < 0.5]
-        same_edge = int(labels[hi_same.index[-1]][1]) if len(hi_same) else T
-        new_edge = int(labels[lo_new.index[0]][0]) if len(lo_new) else same_edge
-        mid = (same_edge + new_edge) // 2
-        print(f"   session_id behaves like a session with an inactivity timeout of "
-              f"~{mid} min (between {same_edge} and {new_edge} min):")
-        print(f"   pairs closer than {same_edge} min keep their session_id "
-              f"(~{pb:.0%}), pairs {new_edge}+ min apart get a new one (~{pa:.0%}).")
-        print(f"   visit_id uses a 30-min gap; set SESSION_GAP_MIN to ~{mid} in")
-        print("   process_site_pageviews.py to match the source's own timeout exactly.")
+    elif is_cliff:
+        T, lo_edge, hi_edge, rb, ra, drop = cliff
+        window = f"~{T} min" if lo_edge == hi_edge else f"~{T} min (between {lo_edge} and {hi_edge})"
+        print(f"   session_id has an inactivity timeout of {window}: the 'same session'")
+        print(f"   rate falls sharply there ({rb:.0%} just below -> {ra:.0%} just above).")
+        if rb < 0.7:
+            print(f"   BUT below the timeout session_id already persists only ~{rb:.0%} of")
+            print("   the time — it is ALSO renewed within a session (reloads / new tabs),")
+            print("   so it over-fragments and stays unusable for counting raw.")
+        gap_note = "matches" if abs(T - 30) <= 5 else "differs from"
+        print(f"   The visit_id 30-min reconstruction {gap_note} this ~{T}-min timeout"
+              + ("." if gap_note == "matches" else f"; set SESSION_GAP_MIN to ~{T} to align."))
     else:
         print("   No sharp timeout between "
               f"{args.lo} and {args.hi} min — session_id renewal is not driven by a")
