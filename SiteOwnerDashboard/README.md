@@ -144,10 +144,45 @@ If the export has no `PublishingDate`, the tab shows an explanatory empty state
 - **Entry pages table** — where sessions start: entries, share, bounce rate and
   average session depth per entry page. Sortable.
 
+### Content & Interactions (Phase 2 — appears when `site_interactions.parquet` is present)
+- **KPIs** — Clicks, Unique Clickers, Downloads, CTR (clicks ÷ page views) and
+  Clicker Rate (clickers ÷ unique visitors), each with a MoM delta.
+- **Interactions over time** — adaptive: windows ≤ ~120 days show a **daily
+  dual-axis line** (clicks + unique clickers, CET); longer windows show monthly
+  bars with the selected window emphasised.
+- **Timing block** (ported from the CampaignWe clicks dashboard) — *Clicks by
+  hour* and *Clicks by weekday* (CET, peak bar highlighted, weekends dimmed)
+  plus an **Activity heatmap Weekday × Hour**: when the audience actually
+  clicks → the best publish/push windows.
+- **Clicks by Division** — who clicks: Clicks, Unique Clickers,
+  **Clicks/Clicker** (broad reach vs. a few heavy users) and **Clicker Rate**
+  (clickers ÷ that division's unique visitors — a pv↔ix aggregate join at the
+  Division grain), Downloads, Pages. Sortable + XLSX.
+- **Clicks: Division × Page heatmap** — top pages by clicks × divisions: which
+  content resonates with which audience.
+- **Interaction mix** — share of link clicks vs. downloads vs. video actions.
+- **Top components** — which page components (hero, related links, …) drive clicks.
+- **Pages — interest × action** — the cross-stream table: per logical page
+  (`page_key`) views/visits/unique **from pageViews** joined with
+  clicks/clickers/downloads **from interactions**, plus CTR. High views + low
+  CTR = unused potential; expand a page for (a) its per-language variants
+  (joined on `page_id`, each with its own recomputed UV/clicks/CTR) and (b) the
+  **link detail** — which links/files on that page are actually clicked, with
+  *Last clicked*.
+- **Top links / Top downloads** — site-wide ranking of clicked links (class,
+  type, clicks, unique clickers, pages, last clicked) and downloaded files.
+- Honest limitation: telemetry only records **clicked** links — a link with
+  zero clicks never appears. "Not clicked in this window but clicked before"
+  (see *Last clicked*) is the closest observable proxy.
+- The global filter bar applies to both streams; a filter on a column the
+  interactions lack (e.g. **Channel** — customEvents has no CammsTrackingID)
+  is skipped for interactions and flagged on the table.
+
 ### Export
-- **Export XLSX** — KPIs, Pages, Audience (KPIs + entry pages) and Content
-  Lifecycle (KPIs + published pages), corporate-styled, always reflecting the
-  current timeframe/language filter.
+- **Export XLSX** — KPIs, Pages, Audience (KPIs + entry pages), Content
+  Lifecycle (KPIs + published pages) and Interactions (KPIs + interest×action
+  pages, when present), corporate-styled, always reflecting the current
+  timeframe/language filter.
 
 Filters: **Timeframe** (30d / 90d / YTD / 12mo / All) and a **custom from–to date
 range** picker, plus a **global filter bar** — a primary row (Site Name, Page
@@ -159,24 +194,71 @@ auto-hide, so the bar stays clean. Everything lives in the browser; every
 KPI/chart/table/drilldown reacts instantly, all deltas vs. the prior
 equal-length period.
 
-## Phase 2 — customEvents (clicks, downloads, video, search)
+## Phase 2 — customEvents (clicks, downloads, video)
 
-The dashboard is built to grow. Drop a second Parquet
-`output/site_interactions.parquet` (built from the customEvents stream —
-clicks, downloads, video, on-site search for the same site) and a **Content &
-Interactions** tab appears. Without that file the dashboard runs fully on
-pageViews alone — nothing to configure. See [`DESIGN.md`](DESIGN.md) for the
-`fact_interaction` schema and the analyses it unlocks (top/bottom pages by
-engagement, downloads, link types, component performance, video, search).
+The interactions side of the site: the `customEvents` stream (`click_event` —
+link clicks, downloads, CTAs, video actions). Fully optional and additive:
+without `output/site_interactions.parquet` the dashboard runs on pageViews
+alone; with it, the **Content & Interactions** tab and the Clicks/CTR measures
+in the Pages table appear automatically.
+
+1. **Extract.** Open `export_site_interactions.kql`, set the SAME
+   `PageUrlFilter` and (at least) the same time window as your pageViews
+   export, run in Azure Portal → Logs → **Export → CSV (all columns)**.
+   Prefer CSV over Excel (Excel truncates timestamps to whole seconds).
+2. **Build.** Drop the export(s) into `input/interactions/` (kept separate
+   from the pageViews exports so neither build picks up the other's files) and:
+   ```bash
+   python scripts/process_site_interactions.py
+   ```
+   Same incremental behaviour as the pageViews build: SHA-256 manifest
+   (`output/site_interactions.manifest.json`), upsert on a composite
+   `event_key` that **includes the link identity** (timestamp + user + session
+   + page + component + link address/label), full replace of re-exported
+   files, `--rebuild` for a clean slate. Same `--site/--site-id/--url-contains/
+   --hr/--no-hr` options. Adds `interaction_class`
+   (download → video → link, source columns untouched), `language`, `page_key`
+   and `person_id` with exactly the pageViews derivations, so the two parquets
+   join cleanly.
+3. **Check the join.**
+   ```bash
+   python scripts/diagnose_interactions.py
+   ```
+   Read-only report: event families, Link_Type mix, GPN/PageURL coverage, and
+   the page_key / page_id / person / session overlap between the two stores
+   (orphan clicks > 10% ⇒ export windows or scopes differ).
+4. **Open / rebuild the standalone.** The dashboard and
+   `build_standalone_dashboard.py` pick the second parquet up automatically.
+
+**No interactions data?** Simply don't build (or delete)
+`output/site_interactions.parquet` — the tab and the Clicks/CTR measures
+disappear and the dashboard runs pure Phase 1. When switching to a **different
+site**, delete the old `site_interactions.parquet` (and its
+`.manifest.json`) before rebuilding only the pageViews side — otherwise the
+tab shows the previous site's clicks (the orphan note under the table will
+flag it, but stale data is stale data).
+
+**Join contract** (see [`DESIGN.md`](DESIGN.md)): both parquets stay at event
+grain and carry the same three page keys — `page_key` (language-stripped
+canonical URL, the logical page), `page_id` (language variant, GUID) and
+`page_url` (display). All joins are per-view aggregate joins at query time, so
+Unique Visitors / Unique Clickers are recomputed per grain via
+`COUNT(DISTINCT person_id)` — never summed across rows. On-site search events
+(`SEARCH_TRIGGERED`, …) have a different nested schema and are out of scope
+for now.
 
 ## Project layout
 
 | Path | Purpose |
 |---|---|
-| `export_site_pageviews.kql` | AppInsights export for one site (PageURL contains), raw customDimensions |
-| `input/` | Raw CSV/XLSX exports land here (gitignored — may contain GPN/Email) |
+| `export_site_pageviews.kql` | AppInsights pageViews export for one site (PageURL contains), raw customDimensions |
+| `export_site_interactions.kql` | AppInsights customEvents (click_event) export for the same site (Phase 2) |
+| `input/` | Raw pageViews CSV/XLSX exports land here (gitignored — may contain GPN/Email) |
+| `input/interactions/` | Raw customEvents exports land here (gitignored) |
 | `scripts/process_site_pageviews.py` | `input/` CSV/XLSX → `output/site_pageviews.parquet` (reuses the main pipeline) |
-| `scripts/generate_demo_data.py` | Fake single-site Parquet so the dashboard runs with no export |
+| `scripts/process_site_interactions.py` | `input/interactions/` → `output/site_interactions.parquet` (Phase 2) |
+| `scripts/diagnose_interactions.py` | Read-only join/coverage report: interactions store vs. pageViews store |
+| `scripts/generate_demo_data.py` | Fake single-site pageViews + correlated interactions so the dashboard runs with no export |
 | `scripts/build_standalone_dashboard.py` | dashboard + parquet + vendored libs → `output/site_dashboard_standalone.html` |
 | `scripts/vendor_libs.py` | Refresh `dashboard/vendor/` from the CDN (only on version bumps) |
 | `dashboard/dashboard.html` | The dashboard (DuckDB-WASM + Chart.js), loads `../output/` |

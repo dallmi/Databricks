@@ -1,0 +1,51 @@
+// =============================================================================
+// SiteOwnerDashboard — customEvents (click_event) export for ONE site
+// =============================================================================
+// Phase-2 pendant to export_site_pageviews.kql: exports the interactions
+// (link clicks, downloads, CTAs, video actions) for the SAME site. Returns
+// customDimensions as an UNMODIFIED JSON string so
+// scripts/process_site_interactions.py applies its own flatten logic
+// (same contract as export_site_pageviews.kql / ../kql/export_for_pipeline.kql).
+//
+// Scope: name == 'click_event' only. Search events (SEARCH_TRIGGERED,
+// SEARCH_RESULT_CLICK) have a 4-level nested schema and are out of scope for
+// this dashboard phase — see ../kql/customevents_clicks.kql QUERY 1 to
+// inventory the other event families.
+//
+// Procedure:
+//   1. Set PageUrlFilter to the SAME substring you used for the pageViews
+//      export (matched case-insensitively against CustomProps.PageURL).
+//   2. Use the SAME (or a wider) time window as the pageViews export, so the
+//      dashboard's CTR (clicks / views) compares like with like. Azure caps
+//      ~65k rows / export; page through by narrowing the window if needed.
+//   3. Azure Portal -> Logs -> run -> "Export -> CSV (all columns)".
+//      Prefer CSV over Excel: Excel truncates timestamps to whole seconds.
+//   4. Drop the CSV into SiteOwnerDashboard/input/ and run:
+//        python scripts/process_site_interactions.py
+//      (the KQL already scoped to one site, so --site is optional here.)
+// =============================================================================
+
+let StartTime = datetime(2025-06-01);
+let EndTime   = datetime(2026-07-01);
+// Site scope via PageURL — substring matched (case-insensitive) against
+// customDimensions.CustomProps.PageURL. PageURL is double-nested:
+// customDimensions (JSON) -> CustomProps (JSON string) -> PageURL.
+let PageUrlFilter = "news-and-events";
+customEvents
+| where timestamp between (StartTime .. EndTime)
+| where name == 'click_event'
+| where PageUrlFilter == ""
+    or tostring(parse_json(tostring(parse_json(customDimensions).CustomProps)).PageURL)
+       contains PageUrlFilter
+| project
+    timestamp,
+    id,
+    name,                     // <-- event-family discriminator, keep
+    customDimensions,         // <-- keep as raw JSON string for the pipeline
+    session_Id,
+    user_Id,
+    client_Type,
+    client_OS,
+    client_Browser,
+    client_CountryOrRegion
+| order by timestamp asc

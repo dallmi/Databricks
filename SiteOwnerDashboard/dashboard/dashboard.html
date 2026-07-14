@@ -169,8 +169,25 @@
   .cp-option input[type="checkbox"] { cursor: pointer; margin: 0; flex-shrink: 0; accent-color: var(--primary); }
   .cp-option .cp-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cp-table-actions { display: flex; align-items: center; gap: 0.5rem; }
-  #pagesTable tfoot td { padding: 0.45rem 0.75rem; font-weight: 600; border-top: 2px solid var(--grey-1); background: var(--bg); }
-  #pagesTable tfoot td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #pagesTable tfoot td, #ixPagesTable tfoot td { padding: 0.45rem 0.75rem; font-weight: 600; border-top: 2px solid var(--grey-1); background: var(--bg); }
+  #pagesTable tfoot td.num, #ixPagesTable tfoot td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Interactions tab: nested link-detail table inside an expanded page row */
+  .ix-sub { margin: 0.15rem 0 0.35rem 1.4rem; }
+  .ix-sub table { width: calc(100% - 1.4rem); font-size: 0.72rem; }
+  .ix-sub th { font-size: 0.62rem; color: var(--grey-4); border-bottom: 1px solid var(--grey-1); padding: 0.25rem 0.5rem; }
+  .ix-sub td { padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--surface); }
+  .ix-sub .cls-badge { display: inline-block; padding: 0.05rem 0.35rem; font-size: 0.62rem; border: 1px solid var(--grey-1);
+    border-radius: var(--radius); color: var(--grey-5); background: var(--bg); text-transform: capitalize; }
+  /* Heatmap tables (Weekday×Hour, Division×Page) — ported from CampaignWe */
+  .heatmap-scroll { overflow-x: auto; }
+  .heatmap-table { border-collapse: collapse; font-size: 0.72rem; width: 100%; }
+  .heatmap-table th { padding: 0.35rem 0.45rem; background: var(--surface); font-size: 0.66rem; white-space: nowrap;
+    font-weight: 600; color: var(--grey-6); border-bottom: 1px solid var(--black); text-align: center; }
+  .heatmap-table th:first-child { text-align: left; }
+  .heatmap-table td { padding: 0.32rem 0.45rem; text-align: center; border: 1px solid var(--white);
+    font-variant-numeric: tabular-nums; min-width: 34px; }
+  .heatmap-table td.row-header { text-align: left; font-weight: 600; background: var(--surface); min-width: 120px;
+    max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* Global filter bar (primary row + Advanced + chips) */
   .filter-bar { background: var(--white); border-bottom: 1px solid var(--grey-1); padding: 0.5rem 1.5rem;
@@ -273,8 +290,9 @@
       <button class="tab active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
       <button class="tab" data-tab="lifecycle" onclick="switchTab('lifecycle')">Content Lifecycle</button>
       <button class="tab" data-tab="audience" onclick="switchTab('audience')">Audience &amp; Sessions</button>
-      <!-- Phase 2: a "Content &amp; Interactions" tab is added here once
-           output/site_interactions.parquet (customEvents) is present. -->
+      <!-- Phase 2: shown by init() only when output/site_interactions.parquet loads. -->
+      <button class="tab" data-tab="interactions" style="display:none"
+        onclick="switchTab('interactions')">Content &amp; Interactions</button>
     </div>
   </div>
 
@@ -428,6 +446,88 @@
           <div class="table-scroll"><table>
             <thead><tr id="entryHead"></tr></thead>
             <tbody id="entryBody"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <!-- ==== Content & Interactions (Phase 2 — only when site_interactions.parquet is present) ==== -->
+      <div class="tab-content" id="tab-interactions">
+        <div class="kpi-grid" id="interactionsKpis"></div>
+        <div class="charts-grid">
+          <div class="chart-card full-width">
+            <div class="chart-title">Interactions over time
+              <span class="st" id="ixTrafficSub">selected window highlighted · rest for context</span></div>
+            <div class="chart-container tall"><canvas id="chartIxTraffic"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Clicks by hour <span class="st">CET · peak highlighted</span></div>
+            <div class="chart-container"><canvas id="chartIxHourly"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Clicks by weekday <span class="st">CET · peak highlighted</span></div>
+            <div class="chart-container"><canvas id="chartIxWeekday"></canvas></div>
+          </div>
+          <div class="chart-card full-width">
+            <div class="chart-title">Activity heatmap <span class="st">weekday × hour (CET) — when your audience clicks</span></div>
+            <div class="heatmap-scroll" id="ixWeekdayHourHeatmap"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Interaction mix <span class="st">share of interactions</span></div>
+            <div class="chart-container"><canvas id="chartIxMix"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Top components <span class="st">page components driving clicks</span></div>
+            <div class="bar-list" id="ixComponentBars"></div>
+          </div>
+        </div>
+        <div class="table-wrapper" style="margin-bottom:1.25rem;">
+          <div class="table-header">
+            <div><h3>Clicks by Division</h3>
+              <div class="st" id="ixDivisionsSub">who clicks — clicks/clicker separates broad reach from a few heavy users</div></div>
+            <button class="btn btn-sm" onclick="exportTableXlsx('ixdivisions', event)">Export XLSX</button>
+          </div>
+          <div class="table-scroll"><table>
+            <thead><tr id="ixDivisionsHead"></tr></thead>
+            <tbody id="ixDivisionsBody"></tbody>
+          </table></div>
+        </div>
+        <div class="chart-card full-width" style="margin-bottom:1.25rem;">
+          <div class="chart-title">Clicks: Division × Page <span class="st">top pages by clicks — which content resonates with which audience</span></div>
+          <div class="heatmap-scroll" id="ixDivPageHeatmap"></div>
+        </div>
+        <div class="table-wrapper" style="margin-bottom:1.25rem;">
+          <div class="table-header">
+            <div><h3>Pages — interest × action</h3>
+              <div class="st" id="ixPagesSub">views/visits/UV from pageViews · clicks/downloads from interactions · CTR = clicks ÷ views</div></div>
+            <button class="btn btn-sm" onclick="exportTableXlsx('ixpages', event)">Export XLSX</button>
+          </div>
+          <div class="table-scroll"><table id="ixPagesTable">
+            <thead><tr id="ixPagesHead"></tr></thead>
+            <tbody id="ixPagesBody"></tbody>
+            <tfoot id="ixPagesFoot"></tfoot>
+          </table></div>
+          <div class="st" id="ixOrphanNote" style="display:none;padding:0.5rem 0.25rem 0;"></div>
+        </div>
+        <div class="table-wrapper" style="margin-bottom:1.25rem;">
+          <div class="table-header">
+            <div><h3>Top links</h3>
+              <div class="st" id="ixLinksSub">clicked links only — links never clicked don't appear in telemetry</div></div>
+            <button class="btn btn-sm" onclick="exportTableXlsx('toplinks', event)">Export XLSX</button>
+          </div>
+          <div class="table-scroll"><table>
+            <thead><tr id="ixLinksHead"></tr></thead>
+            <tbody id="ixLinksBody"></tbody>
+          </table></div>
+        </div>
+        <div class="table-wrapper">
+          <div class="table-header">
+            <div><h3>Top downloads</h3>
+              <div class="st" id="ixDownloadsSub">file downloads across the site</div></div>
+            <button class="btn btn-sm" onclick="exportTableXlsx('topdownloads', event)">Export XLSX</button>
+          </div>
+          <div class="table-scroll"><table>
+            <thead><tr id="ixDownloadsHead"></tr></thead>
+            <tbody id="ixDownloadsBody"></tbody>
           </table></div>
         </div>
       </div>
@@ -586,6 +686,7 @@ Chart.register({ id:'barValueLabel',
 let db=null, conn=null, hasInteractions=false;
 let dataMin=null, dataMax=null;
 let pvCols=new Set(), hasPubDates=false;
+let ixCols=new Set();                 // column inventory of the ix view (Phase 2)
 let timeframe='90d', trafficMetric='visits', rankMetric='visits', langMetric='views';
 let customFrom=null, customTo=null;
 let articleSort={col:'pd', dir:'desc'}, entrySort={col:'entries', dir:'desc'};
@@ -593,6 +694,11 @@ let charts={};
 let activeTab='overview', dirtyTabs={};
 let lastPages=[], lastKpiRows=[];
 let lastArticles=[], lastLifecycleKpis=[], lastEntryPages=[], lastAudienceKpis=[];
+// Interactions tab state
+let ixPagesSort={col:'views', dir:'desc'}, ixLinksSort={col:'clicks', dir:'desc'},
+    ixDownloadsSort={col:'downloads', dir:'desc'};
+let lastIxPages=[], lastIxKpis=[], lastTopLinks=[], lastTopDownloads=[];
+let ixExpandState=new Set(), ixExpandData=new Map();   // page_key -> {variants, links}
 
 // ==== Helpers ====
 function fmt(n){ return n==null ? '–' : Number(n).toLocaleString('en-US'); }
@@ -652,6 +758,27 @@ function filterClause(){
   return s;
 }
 function win(a,b){ return `timestamp >= TIMESTAMP '${iso(a)}' AND timestamp <= TIMESTAMP '${iso(b)}'${filterClause()}`; }
+// Column-aware variants for the ix view (Phase 2): interactions carry the same
+// filterable columns as pv EXCEPT tracking_channel_abbr (customEvents has no
+// CammsTrackingID) — active filters on columns the ix view lacks are skipped
+// and surfaced as a hint (ixSkippedFilters) instead of silently ignored.
+function ixFilterClause(){
+  let s='';
+  for (const [col,set] of activeFilters){
+    if (!ixCols.has(col)) continue;
+    if (set && set.size){
+      const vals=[...set].map(v=>`'${String(v).replace(/'/g,"''")}'`).join(',');
+      s += ` AND ${col} IN (${vals})`;
+    }
+  }
+  return s;
+}
+function ixSkippedFilters(){
+  const dimByCol = Object.fromEntries(FILTER_DIMS.map(d=>[d.col,d.label]));
+  return [...activeFilters.keys()].filter(c=>activeFilters.get(c)?.size && !ixCols.has(c))
+    .map(c=>dimByCol[c]||c);
+}
+function winIx(a,b){ return `timestamp >= TIMESTAMP '${iso(a)}' AND timestamp <= TIMESTAMP '${iso(b)}'${ixFilterClause()}`; }
 
 function sparkline(vals, w=104, h=22){
   if (!vals || vals.length===0) return '';
@@ -745,6 +872,10 @@ async function loadData(){
   await reg('pv','site_pageviews.parquet',true);
   // Phase 2 (customEvents) — optional; dashboard runs fully without it.
   hasInteractions = await reg('ix','site_interactions.parquet',false);
+  if (hasInteractions){
+    ixCols = new Set((await query(`DESCRIBE SELECT * FROM ix`)).map(r=>r.column_name));
+    document.querySelector('.tab[data-tab="interactions"]').style.display='';
+  }
 
   // Column inventory — real exports vary (no --hr => no hr_*; PublishingDate may be absent).
   pvCols = new Set((await query(`DESCRIBE SELECT * FROM pv`)).map(r=>r.column_name));
@@ -796,8 +927,10 @@ async function render(){
   try {
     while (renderPending){
       renderPending = false;
-      dirtyTabs = { overview:true, lifecycle:true, audience:true };
+      dirtyTabs = { overview:true, lifecycle:true, audience:true, interactions:true };
       lastArticles=[]; lastLifecycleKpis=[]; lastEntryPages=[]; lastAudienceKpis=[];
+      lastIxPages=[]; lastIxKpis=[]; lastTopLinks=[]; lastTopDownloads=[]; lastIxDivisions=[];
+      ixExpandState=new Set(); ixExpandData=new Map();
       await renderActiveTab();
     }
   } finally { renderRunning = false; }
@@ -810,6 +943,7 @@ async function renderActiveTab(){
     await Promise.all([ renderKpis(w), renderTraffic(w), renderDivDrill(w), renderRegionDrill(w), renderContentType(w), renderLanguage(w), renderPages(w) ]);
   else if (activeTab==='lifecycle') await renderLifecycle(w);
   else if (activeTab==='audience') await renderAudience(w);
+  else if (activeTab==='interactions') await renderInteractions(w);
 }
 
 async function metricsFor(a,b){
@@ -1243,6 +1377,12 @@ const PAGES_COLDEFS = [
   { key:'avg_tos', label:'Avg time', kind:'metric', num:true, selectSql:`AVG(time_on_page_sec)`,
     cell:r=>`<td class="num">${fmtDur(r.avg_tos)}</td>` },
   // ---- Post metrics (secondary queries keyed by the visible dimensions) ----
+  // clicks/ctr (ix:true) come from the interactions parquet — offered in the
+  // picker only when site_interactions.parquet is loaded (Phase 2).
+  { key:'clicks', label:'Clicks', kind:'post', num:true, ix:true,
+    cell:r=>`<td class="num">${r.clicks==null?'–':fmt(r.clicks)}</td>` },
+  { key:'ctr', label:'CTR', kind:'post', num:true, ix:true,
+    cell:r=>`<td class="num">${r.ctr==null?'–':(r.ctr*100).toFixed(1)+'%'}</td>` },
   { key:'trend', label:'Trend', kind:'post', num:false, cell:r=>`<td>${sparkline(r.trend||[])}</td>` },
   { key:'mom', label:'MoM', kind:'post', num:true,
     cell:r=>`<td class="num">${r.mom==null?'<span class="delta flat">–</span>':deltaHtml(1+r.mom/100,1)}</td>` },
@@ -1260,7 +1400,10 @@ let pagesExpandState = new Set();     // currently-expanded page_names
 
 function setupColumnPickers(){
   pagesPicker = new ColumnPicker('cp_pages', {
-    columns: PAGES_COLDEFS.filter(c=>!c.hidden).map(c=>({key:c.key,label:c.label,kind:c.kind})),
+    // ix-sourced measures (Clicks/CTR) are offered only when the interactions
+    // parquet is present — without it the picker looks exactly like Phase 1.
+    columns: PAGES_COLDEFS.filter(c=>!c.hidden && (!c.ix || hasInteractions))
+      .map(c=>({key:c.key,label:c.label,kind:c.kind})),
     visible: PAGES_DEFAULT_VISIBLE,
     onChange: ()=>renderPagesTable(windows()),
   });
@@ -1339,6 +1482,9 @@ async function renderPagesTable(w){
   const needVisits = (visible.has('mom')||visible.has('trend')) && !includedKeys.has('visits');
   const mainSelect = needVisits ? [...selectParts, `COUNT(DISTINCT session_id) AS visits`] : selectParts.slice();
   if (needVisits) includedKeys.add('visits');
+  // CTR = clicks ÷ views — needs views even when the Views column is off.
+  const needViews = hasInteractions && visible.has('ctr') && !includedKeys.has('views');
+  if (needViews){ mainSelect.push(`COUNT(*) AS views`); includedKeys.add('views'); }
   if (!mainSelect.length) mainSelect.push('COUNT(*) AS views');   // guard: nothing selected
 
   // SQL ORDER BY on a real (non-post) column for a sensible top-N; final order in JS.
@@ -1370,12 +1516,30 @@ async function renderPagesTable(w){
     for (const t of tr){ const k=rowKey(t); if (!tmap.has(k)) tmap.set(k,[]); tmap.get(k).push(Number(t.v)); }
     for (const r of rows){ r.trend = tmap.get(rowKey(r)) || []; }
   }
+  // Clicks / CTR: secondary aggregate on the ix view, grouped by the SAME
+  // dimensions and mapped by rowKey (aggregate join at the table's grain).
+  // Requires every visible dimension to exist on ix — else the cells show '–'.
+  if (hasInteractions && (visible.has('clicks')||visible.has('ctr'))
+      && dimKeys.length && dimKeys.every(k=>ixCols.has(k))){
+    const ic = await query(
+      `SELECT ${dimSel}COUNT(*) AS clicks FROM ix WHERE ${winIx(w.from,w.to)} ${secGroupBy(dimKeys.length)}`);
+    const imap = new Map(ic.map(r=>[rowKey(r), Number(r.clicks)]));
+    for (const r of rows){ r.clicks = imap.get(rowKey(r)) || 0;
+      r.ctr = (r.views!=null && Number(r.views)>0) ? r.clicks/Number(r.views) : null; }
+  }
 
   // Totals: visible metrics across all rows in the window (no GROUP BY).
   const metricDefs = PAGES_COLDEFS.filter(c=>c.kind==='metric' && includedKeys.has(c.key) && visible.has(c.key));
   let totals = null;
   if (metricDefs.length){
     totals = (await query(`SELECT ${metricDefs.map(c=>`${c.selectSql} AS ${c.key}`).join(', ')} FROM pv WHERE ${win(w.from,w.to)}`))[0];
+  }
+  if (hasInteractions && (visible.has('clicks')||visible.has('ctr'))){
+    const tj = (await query(`SELECT (SELECT COUNT(*) FROM pv WHERE ${win(w.from,w.to)}) AS tv,
+      (SELECT COUNT(*) FROM ix WHERE ${winIx(w.from,w.to)}) AS tc`))[0];
+    totals = totals || {};
+    totals.clicks = Number(tj.tc);
+    totals.ctr = Number(tj.tv) ? Number(tj.tc)/Number(tj.tv) : null;
   }
 
   // Page -> URL/Language drill is available only when the table is grouped by
@@ -1434,6 +1598,8 @@ function drawPagesTableUI(){
   let footHtml='';
   if (totals && firstMetricIdx>0){
     const cells = visibleDefs.slice(firstMetricIdx).map(c=>{
+      if (c.key==='clicks' && totals.clicks!==undefined) return `<td class="num">${fmt(totals.clicks)}</td>`;
+      if (c.key==='ctr' && totals.ctr!==undefined) return `<td class="num">${totals.ctr==null?'–':(totals.ctr*100).toFixed(1)+'%'}</td>`;
       if (c.kind==='post') return `<td></td>`;
       const v = totals[c.key];
       const disp = c.key==='engagement' ? (+v||0).toFixed(2) : c.key==='avg_tos' ? fmtDur(v) : fmt(v);
@@ -1491,6 +1657,8 @@ function pageExportCell(c,r){
   if (c.key==='trend') return (r.trend||[]).at(-1)??'';
   if (c.key==='engagement') return +(+r.engagement||0).toFixed(2);
   if (c.key==='avg_tos') return r.avg_tos==null?'':Math.round(r.avg_tos);
+  if (c.key==='ctr') return r.ctr==null?'':((r.ctr*100).toFixed(1)+'%');
+  if (c.key==='clicks') return r.clicks==null?'':Number(r.clicks);
   if (c.num) return Number(r[c.key])||0;
   return r[c.key]??'';
 }
@@ -1835,6 +2003,486 @@ function drawEntryTable(){
     `${lastEntryPages.length} entry pages · click a column to sort · bounce = single-page sessions`;
 }
 
+// ==== Content & Interactions tab (Phase 2) ====
+// pv and ix stay at event grain; every table below joins PER-VIEW AGGREGATES at
+// query time on the grain of the view (page_key for the ranking, page_id for
+// the language-variant drill), so COUNT(DISTINCT person_id) is always
+// recomputed at that grain — never summed across rows.
+function dlExpr(){ return ixCols.has('interaction_class')
+  ? `interaction_class = 'download'` : `file_name_label IS NOT NULL`; }
+function fmtPct(v, dec=1){ return v==null ? '–' : (v*100).toFixed(dec)+'%'; }
+
+async function ixMetricsFor(a,b){
+  const c = (await query(`SELECT COUNT(*) clicks, COUNT(DISTINCT person_id) clickers,
+    COALESCE(SUM(CASE WHEN ${dlExpr()} THEN 1 ELSE 0 END),0)::BIGINT downloads
+    FROM ix WHERE ${winIx(a,b)}`))[0];
+  const v = (await query(`SELECT COUNT(*) n_views, COUNT(DISTINCT person_id) uniques
+    FROM pv WHERE ${win(a,b)}`))[0];
+  const clicks=c.clicks||0, views=v.n_views||0, uniques=v.uniques||0;
+  return { clicks, clickers:c.clickers||0, downloads:c.downloads||0,
+    ctr: views ? clicks/views : null,
+    clickerRate: uniques ? (c.clickers||0)/uniques : null };
+}
+
+async function renderInteractions(w){
+  await Promise.all([ renderIxKpis(w), renderIxTraffic(w), renderIxMix(w),
+    renderIxComponents(w), renderIxHourly(w), renderIxWeekday(w), renderIxHeatmap(w),
+    renderIxDivisions(w), renderIxDivPageHeatmap(w),
+    renderIxPages(w), renderTopLinks(w), renderTopDownloads(w) ]);
+}
+
+async function renderIxKpis(w){
+  const cur = await ixMetricsFor(w.from, w.to);
+  const prev = w.hasPrev ? await ixMetricsFor(w.prevFrom, w.prevTo) : null;
+  lastIxKpis = [
+    { cls:'highlight', label:'Clicks', value:fmt(cur.clicks), c:cur.clicks, p:prev?prev.clicks:null,
+      sub:'all interactions' },
+    { cls:'', label:'Unique Clickers', value:fmt(cur.clickers), c:cur.clickers, p:prev?prev.clickers:null,
+      sub:'distinct people who clicked' },
+    { cls:'info', label:'Downloads', value:fmt(cur.downloads), c:cur.downloads, p:prev?prev.downloads:null,
+      sub:'file downloads' },
+    { cls:'', label:'CTR', value:fmtPct(cur.ctr), c:cur.ctr, p:prev?prev.ctr:null,
+      sub:'clicks ÷ page views' },
+    { cls:'success', label:'Clicker Rate', value:fmtPct(cur.clickerRate), c:cur.clickerRate,
+      p:prev?prev.clickerRate:null, sub:'clickers ÷ unique visitors' },
+  ];
+  drawKpiCards('interactionsKpis', lastIxKpis);
+}
+
+// Adaptive: short windows (≤ ~120 days) get a DAILY dual-axis line — clicks +
+// unique clickers (CampaignWe's Daily Activity pattern); longer windows keep
+// the monthly bars with the selected window emphasised.
+async function renderIxTraffic(w){
+  const days = (w.to - w.from) / 86400000;
+  destroy('ixTraffic');
+  if (days <= 120){
+    const rows = await query(`SELECT strftime(date_trunc('day', timestamp), '%Y-%m-%d') d,
+      COUNT(*) clicks, COUNT(DISTINCT person_id) clickers
+      FROM ix WHERE ${winIx(w.from,w.to)} GROUP BY 1 ORDER BY 1`);
+    document.getElementById('ixTrafficSub').textContent = 'daily clicks & unique clickers (CET)';
+    charts.ixTraffic = new Chart(document.getElementById('chartIxTraffic'), {
+      type:'line',
+      data:{ labels: rows.map(r=>new Date(r.d+'T00:00:00Z')), datasets:[
+        { label:'Clicks', data: rows.map(r=>Number(r.clicks)), yAxisID:'y',
+          borderColor:'#404040', backgroundColor:'rgba(64,64,64,0.08)', fill:true,
+          tension:0.3, borderWidth:2, pointRadius:0, pointHoverRadius:5, pointHoverBackgroundColor:'#404040' },
+        { label:'Unique Clickers', data: rows.map(r=>Number(r.clickers)), yAxisID:'y1',
+          borderColor:'#B8B3A2', backgroundColor:'transparent', borderDash:[5,5],
+          tension:0.3, borderWidth:2, pointRadius:0, pointHoverRadius:5, pointHoverBackgroundColor:'#B8B3A2' } ] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'top', labels:{ usePointStyle:true, pointStyle:'line', font:{size:10} } } },
+        scales:{ x:{ type:'time', time:{ unit:'day' }, grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10}, maxRotation:0, autoSkip:true } },
+                 y:{ position:'left', beginAtZero:true, grid:{display:false}, border:{display:false},
+                     ticks:{ font:{size:10} }, title:{ display:true, text:'Clicks', font:{size:10} } },
+                 y1:{ position:'right', beginAtZero:true, grid:{display:false}, border:{display:false},
+                     ticks:{ font:{size:10} }, title:{ display:true, text:'Clickers', font:{size:10} } } } }
+    });
+    return;
+  }
+  const rows = await query(`SELECT strftime(date_trunc('month', timestamp), '%Y-%m') m,
+    COUNT(*) clicks FROM ix WHERE TRUE${ixFilterClause()} GROUP BY 1 ORDER BY 1`);
+  const labels = rows.map(r=>r.m), vals = rows.map(r=>r.clicks);
+  const fromM = `${w.from.getUTCFullYear()}-${String(w.from.getUTCMonth()+1).padStart(2,'0')}`;
+  const toM   = `${w.to.getUTCFullYear()}-${String(w.to.getUTCMonth()+1).padStart(2,'0')}`;
+  const colors = labels.map(m => (m>=fromM && m<=toM) ? BAR_EMPHASIS : BAR_CONTEXT);
+  document.getElementById('ixTrafficSub').textContent =
+    timeframe==='all' ? 'all months' : 'selected window highlighted · rest for context';
+  charts.ixTraffic = new Chart(document.getElementById('chartIxTraffic'), {
+    type:'bar',
+    data:{ labels, datasets:[{ data:vals, backgroundColor:colors, borderRadius:0, maxBarThickness:34 }] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, barValueLabel:{}, tooltip:{ callbacks:{ label:c=>`Clicks: ${c.parsed.y.toLocaleString()}` } } },
+      scales:{ x:{ grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:10}, maxRotation:0, autoSkip:true } },
+               y:{ beginAtZero:true, grid:{display:false}, border:{display:false}, ticks:{ font:{size:10} } } } }
+  });
+}
+
+async function renderIxMix(w){
+  const col = ixCols.has('interaction_class') ? 'interaction_class'
+    : (ixCols.has('link_type') ? 'link_type' : null);
+  if (!col){ chartEmpty('chartIxMix','No interaction_class / link_type column.'); return; }
+  const rows = await query(`SELECT COALESCE(${col},'(unknown)') k, COUNT(*) v
+    FROM ix WHERE ${winIx(w.from,w.to)} GROUP BY 1 ORDER BY 2 DESC`);
+  const labels=rows.map(r=>r.k), vals=rows.map(r=>r.v);
+  const colors = labels.map((_,i)=>DONUT_PALETTE[i % DONUT_PALETTE.length]);
+  destroy('ixMix');
+  charts.ixMix = new Chart(document.getElementById('chartIxMix'), {
+    type:'doughnut',
+    data:{ labels, datasets:[{ data:vals, backgroundColor:colors, borderWidth:1, borderColor:'#fff' }] },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'64%',
+      plugins:{ legend:{ position:'right', labels:{ font:{size:10} } } } }
+  });
+}
+
+async function renderIxComponents(w){
+  if (!ixCols.has('component_name')){
+    drillMissing('ixComponentBars','No component_name in this export.'); return; }
+  const rows = await query(`SELECT COALESCE(component_name,'(unknown)') AS name, COUNT(*) AS v
+    FROM ix WHERE ${winIx(w.from,w.to)} GROUP BY 1 ORDER BY v DESC LIMIT 12`);
+  renderBars('ixComponentBars', rows, (n,i)=>DIVISION_GRAYS_FALLBACK[i % DIVISION_GRAYS_FALLBACK.length], false, '');
+}
+
+// ==== Timing block (ported from the CampaignWe clicks dashboard) ====
+// When does the audience click — hour / weekday profile + weekday×hour heatmap.
+// Timestamps are already CET (pipeline converts UTC→CET at build time).
+const WEEKDAY_LABELS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+
+function ixTimeBar(key, canvasId, labels, vals, colors, unit){
+  destroy(key);
+  charts[key] = new Chart(document.getElementById(canvasId), {
+    type:'bar',
+    data:{ labels, datasets:[{ data:vals, backgroundColor:colors, borderRadius:0, maxBarThickness:30 }] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, barValueLabel:{ pct:true }, tooltip:{ callbacks:{
+        label:c=>{ const total=vals.reduce((a,b)=>a+b,0);
+          return `${fmt(c.parsed.y)} ${unit} (${total?(c.parsed.y/total*100).toFixed(1):0}%)`; } } } },
+      scales:{ x:{ grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:9}, maxRotation:0, autoSkip:true } },
+               y:{ beginAtZero:true, grid:{display:false}, border:{display:false}, ticks:{ font:{size:10} } } } }
+  });
+}
+
+async function renderIxHourly(w){
+  const rows = await query(`SELECT EXTRACT(hour FROM timestamp) h, COUNT(*) c
+    FROM ix WHERE ${winIx(w.from,w.to)} GROUP BY 1 ORDER BY 1`);
+  const byHour = new Map(rows.map(r=>[Number(r.h), Number(r.c)]));
+  const vals = Array.from({length:24}, (_,h)=>byHour.get(h)||0);
+  const peak = vals.indexOf(Math.max(...vals));
+  // Peak bar in red — a small accent, the rest carries in grey.
+  const colors = vals.map((_,i)=> i===peak ? '#E60000' : '#5A5D5C');
+  ixTimeBar('ixHourly','chartIxHourly', Array.from({length:24},(_,h)=>h+':00'), vals, colors, 'clicks');
+}
+
+async function renderIxWeekday(w){
+  const rows = await query(`SELECT isodow(timestamp) d, COUNT(*) c
+    FROM ix WHERE ${winIx(w.from,w.to)} GROUP BY 1 ORDER BY 1`);
+  const byDay = new Map(rows.map(r=>[Number(r.d), Number(r.c)]));
+  const vals = Array.from({length:7}, (_,i)=>byDay.get(i+1)||0);
+  const peak = vals.indexOf(Math.max(...vals));
+  const colors = vals.map((_,i)=> i===peak ? '#E60000' : (i<5 ? '#5A5D5C' : '#CCCABC'));
+  ixTimeBar('ixWeekday','chartIxWeekday', WEEKDAY_LABELS.map(d=>d.slice(0,3)), vals, colors, 'clicks');
+}
+
+// White → pastel → amber → red → dark red (the CampaignWe heat ramp; RAG-toned
+// intensity is data-driven meaning here, not a category palette).
+function heatColor(val, max){
+  if (!max || val === 0) return '#FFFFFF';
+  const t = Math.min(val / max, 1);
+  const stops = [[255,255,255],[245,240,225],[228,169,17],[230,0,0],[138,0,10]];
+  const seg = t * (stops.length - 1);
+  const i = Math.min(Math.floor(seg), stops.length - 2), f = seg - i;
+  const mix = k => Math.round(stops[i][k] + f * (stops[i+1][k] - stops[i][k]));
+  return `rgb(${mix(0)},${mix(1)},${mix(2)})`;
+}
+function heatInk(val, max){ return (max && val > max * 0.5) ? '#FFFFFF' : '#404040'; }
+
+function renderHeatmapTable(rowLabels, colLabels, getValue, maxVal, corner, rowTitles){
+  const head = `<tr><th>${escapeHtml(corner||'')}</th>${colLabels.map(c=>`<th>${escapeHtml(String(c))}</th>`).join('')}</tr>`;
+  const body = rowLabels.map((rl,ri)=>{
+    const title = rowTitles ? ` title="${escapeHtml(rowTitles[ri])}"` : '';
+    const cells = colLabels.map((_,ci)=>{ const v=getValue(ri,ci);
+      return `<td style="background:${heatColor(v,maxVal)};color:${heatInk(v,maxVal)}">${v?fmt(v):''}</td>`; }).join('');
+    return `<tr><td class="row-header"${title}>${escapeHtml(rl)}</td>${cells}</tr>`;
+  }).join('');
+  return `<table class="heatmap-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+async function renderIxHeatmap(w){
+  const rows = await query(`SELECT isodow(timestamp) d, EXTRACT(hour FROM timestamp) h, COUNT(*) c
+    FROM ix WHERE ${winIx(w.from,w.to)} GROUP BY 1,2`);
+  const map = new Map(); let maxVal = 0;
+  for (const r of rows){ const v=Number(r.c); map.set(`${r.d}_${r.h}`, v); if (v>maxVal) maxVal=v; }
+  const getValue = (ri,ci) => map.get(`${ri+1}_${ci}`) || 0;
+  document.getElementById('ixWeekdayHourHeatmap').innerHTML =
+    renderHeatmapTable(WEEKDAY_LABELS, Array.from({length:24},(_,h)=>h), getValue, maxVal, 'Weekday');
+}
+
+// ==== Audience: who clicks (CampaignWe engagement-depth pattern) ====
+// clicker_rate joins a pv aggregate on hr_division — same aggregate-join
+// principle as the pages table, at the Division grain.
+const IX_DIVISIONS_COLS = [
+  { key:'division',   label:'Division', name:true, fmt:r=>escapeHtml(r.division) },
+  { key:'clicks',     label:'Clicks', num:true, fmt:r=>fmt(r.clicks) },
+  { key:'clickers',   label:'Unique Clickers', num:true, fmt:r=>fmt(r.clickers) },
+  { key:'per_clicker',label:'Clicks/Clicker', num:true, fmt:r=>r.per_clicker==null?'–':(+r.per_clicker).toFixed(1) },
+  { key:'clicker_rate',label:'Clicker Rate', num:true, fmt:r=>fmtPct(r.clicker_rate) },
+  { key:'downloads',  label:'Downloads', num:true, fmt:r=>fmt(r.downloads) },
+  { key:'pages',      label:'Pages', num:true, fmt:r=>fmt(r.pages) },
+];
+let ixDivisionsSort = { col:'clicks', dir:'desc' };
+let lastIxDivisions = [];
+
+async function renderIxDivisions(w){
+  const host = document.getElementById('ixDivisionsBody');
+  if (!ixCols.has('hr_division')){
+    document.getElementById('ixDivisionsHead').innerHTML='';
+    host.innerHTML = `<tr><td style="color:var(--grey-4)">No HR enrichment — rebuild the interactions parquet with --hr for divisions.</td></tr>`;
+    lastIxDivisions = []; return;
+  }
+  const rows = await query(`WITH c AS (
+      SELECT COALESCE(hr_division,'(unknown)') division, COUNT(*) clicks,
+        COUNT(DISTINCT person_id) clickers,
+        COALESCE(SUM(CASE WHEN ${dlExpr()} THEN 1 ELSE 0 END),0)::BIGINT downloads,
+        COUNT(DISTINCT page_key) pages
+      FROM ix WHERE ${winIx(w.from,w.to)} GROUP BY 1),
+    v AS (
+      SELECT COALESCE(hr_division,'(unknown)') division, COUNT(DISTINCT person_id) uniques
+      FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1)
+    SELECT c.*, v.uniques FROM c LEFT JOIN v USING (division) ORDER BY c.clicks DESC`);
+  lastIxDivisions = rows.map(r=>({ division:r.division, clicks:Number(r.clicks),
+    clickers:Number(r.clickers), per_clicker: r.clickers ? Number(r.clicks)/Number(r.clickers) : null,
+    clicker_rate: r.uniques ? Number(r.clickers)/Number(r.uniques) : null,
+    downloads:Number(r.downloads), pages:Number(r.pages) }));
+  drawIxDivisions();
+}
+function drawIxDivisions(){
+  drawSortableTable('ixDivisionsHead','ixDivisionsBody', IX_DIVISIONS_COLS, lastIxDivisions, ixDivisionsSort, drawIxDivisions);
+  document.getElementById('ixDivisionsSub').textContent =
+    `${lastIxDivisions.length} divisions · clicker rate = unique clickers ÷ unique visitors of that division`;
+}
+
+// ==== Division × Page heatmap: which content resonates with which audience ====
+async function renderIxDivPageHeatmap(w){
+  const host = document.getElementById('ixDivPageHeatmap');
+  if (!ixCols.has('hr_division')){
+    host.innerHTML = `<div class="chart-empty" style="padding:1.5rem">No HR enrichment — rebuild the interactions parquet with --hr for divisions.</div>`;
+    return;
+  }
+  const top = await query(`SELECT page_key, any_value(page_name) pname, COUNT(*) c
+    FROM ix WHERE ${winIx(w.from,w.to)} GROUP BY 1 ORDER BY c DESC LIMIT 15`);
+  if (!top.length){ host.innerHTML = `<div class="chart-empty" style="padding:1.5rem">No interactions in the selected window.</div>`; return; }
+  const keys = top.map(r=>`'${escSql(r.page_key)}'`).join(',');
+  const divs = await query(`SELECT COALESCE(hr_division,'(unknown)') dv, COUNT(*) c
+    FROM ix WHERE ${winIx(w.from,w.to)} AND page_key IN (${keys}) GROUP BY 1 ORDER BY c DESC LIMIT 8`);
+  const divNames = divs.map(r=>r.dv);
+  const cells = await query(`SELECT page_key, COALESCE(hr_division,'(unknown)') dv, COUNT(*) c
+    FROM ix WHERE ${winIx(w.from,w.to)} AND page_key IN (${keys}) GROUP BY 1,2`);
+  const map = new Map(); let maxVal = 0;
+  for (const r of cells){ const v=Number(r.c); map.set(`${r.page_key}|${r.dv}`, v); if (v>maxVal) maxVal=v; }
+  const getValue = (ri,ci) => map.get(`${top[ri].page_key}|${divNames[ci]}`) || 0;
+  host.innerHTML = renderHeatmapTable(
+    top.map(r=>r.pname), divNames, getValue, maxVal, 'Page', top.map(r=>r.page_key));
+}
+
+// Pages: interest × action — per-page_key aggregates from pv LEFT JOIN ix.
+const IX_PAGES_COLS = [
+  { key:'pname',     label:'Page',      num:false, name:true },
+  { key:'ct',        label:'Type',      num:false },
+  { key:'views',     label:'Views',     num:true },
+  { key:'visits',    label:'Visits',    num:true },
+  { key:'uniques',   label:'Unique',    num:true },
+  { key:'clicks',    label:'Clicks',    num:true },
+  { key:'ctr',       label:'CTR',       num:true },
+  { key:'clickers',  label:'Clickers',  num:true },
+  { key:'downloads', label:'Downloads', num:true },
+];
+let lastIxTotals=null, lastIxOrphans=0;
+
+async function renderIxPages(w){
+  await computeIxPages(w);
+  drawIxPagesTable();
+}
+async function computeIxPages(w){
+  const rows = await query(`WITH v AS (
+      SELECT page_key, any_value(page_name) pname, any_value(content_type) ct,
+        COUNT(*) n_views, COUNT(DISTINCT session_id) visits, COUNT(DISTINCT person_id) uniques
+      FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1),
+    c AS (
+      SELECT page_key, COUNT(*) clicks, COUNT(DISTINCT person_id) clickers,
+        COALESCE(SUM(CASE WHEN ${dlExpr()} THEN 1 ELSE 0 END),0)::BIGINT downloads
+      FROM ix WHERE ${winIx(w.from,w.to)} GROUP BY 1)
+    SELECT v.page_key, v.pname, v.ct, v.n_views, v.visits, v.uniques,
+      COALESCE(c.clicks,0) clicks, COALESCE(c.clickers,0) clickers, COALESCE(c.downloads,0) downloads
+    FROM v LEFT JOIN c USING (page_key) ORDER BY v.n_views DESC LIMIT 500`);
+  lastIxPages = rows.map(r=>({ page_key:r.page_key, pname:r.pname, ct:r.ct,
+    views:r.n_views, visits:r.visits, uniques:r.uniques, clicks:r.clicks,
+    clickers:r.clickers, downloads:r.downloads,
+    ctr: r.n_views ? r.clicks/r.n_views : null }));
+
+  const tv = (await query(`SELECT COUNT(*) n_views, COUNT(DISTINCT session_id) visits,
+    COUNT(DISTINCT person_id) uniques FROM pv WHERE ${win(w.from,w.to)}`))[0];
+  const tc = (await query(`SELECT COUNT(*) clicks, COUNT(DISTINCT person_id) clickers,
+    COALESCE(SUM(CASE WHEN ${dlExpr()} THEN 1 ELSE 0 END),0)::BIGINT downloads
+    FROM ix WHERE ${winIx(w.from,w.to)}`))[0];
+  lastIxTotals = { views:tv.n_views, visits:tv.visits, uniques:tv.uniques,
+    clicks:tc.clicks, clickers:tc.clickers, downloads:tc.downloads,
+    ctr: tv.n_views ? tc.clicks/tv.n_views : null };
+
+  lastIxOrphans = (await query(`SELECT COUNT(*) n FROM ix WHERE ${winIx(w.from,w.to)}
+    AND (page_key IS NULL OR page_key NOT IN (
+      SELECT DISTINCT page_key FROM pv WHERE page_key IS NOT NULL${filterClause()}))`))[0].n;
+}
+
+function ixCellHtml(c, r){
+  if (c.key==='pname'){
+    const chev = `<span class="pg-exp" data-pk="${escapeHtml(r.page_key)}">${ixExpandState.has(r.page_key)?'▾':'▸'}</span>`;
+    return `<td class="name" title="${escapeHtml(r.page_key)}">${chev}${escapeHtml(r.pname)}</td>`;
+  }
+  if (c.key==='ct') return `<td><span class="ct-badge">${escapeHtml(r.ct)}</span></td>`;
+  if (c.key==='ctr') return `<td class="num">${fmtPct(r.ctr)}</td>`;
+  return `<td class="num">${fmt(r[c.key])}</td>`;
+}
+
+function drawIxPagesTable(){
+  const sc=ixPagesSort.col, sd=ixPagesSort.dir;
+  const sorted=[...lastIxPages].sort((a,b)=>{ let x=a[sc], y=b[sc];
+    if (x==null) x=-Infinity; if (y==null) y=-Infinity;
+    if (typeof x==='string' && typeof y==='string') return sd==='asc'?x.localeCompare(y):y.localeCompare(x);
+    return sd==='asc'?x-y:y-x; });
+  document.getElementById('ixPagesHead').innerHTML = IX_PAGES_COLS.map(c=>
+    `<th class="${c.num?'num':''}" onclick="sortIxPages('${c.key}')">${c.label}${
+      sc===c.key?`<span class="arr">${sd==='asc'?'▲':'▼'}</span>`:''}</th>`).join('');
+  const body=[];
+  for (const r of sorted){
+    body.push(`<tr>${IX_PAGES_COLS.map(c=>ixCellHtml(c,r)).join('')}</tr>`);
+    if (ixExpandState.has(r.page_key)){
+      const d = ixExpandData.get(r.page_key);
+      if (!d){ body.push(`<tr class="pg-child"><td colspan="${IX_PAGES_COLS.length}">Loading…</td></tr>`); }
+      else {
+        if (d.variants.length > 1) for (const vr of d.variants)
+          body.push(`<tr class="pg-child">${IX_PAGES_COLS.map(c=>ixVariantCell(c,vr)).join('')}</tr>`);
+        body.push(`<tr class="pg-child"><td colspan="${IX_PAGES_COLS.length}">${linkDetailHtml(d.links)}</td></tr>`);
+      }
+    }
+  }
+  document.getElementById('ixPagesBody').innerHTML = body.join('');
+  document.querySelectorAll('#ixPagesBody .pg-exp').forEach(s=>s.addEventListener('click', e=>{
+    e.stopPropagation(); toggleIxExpand(s.dataset.pk); }));
+
+  let foot='';
+  if (lastIxTotals){
+    const t=lastIxTotals;
+    foot = `<tr><td colspan="2">Overall (filtered)</td>
+      <td class="num">${fmt(t.views)}</td><td class="num">${fmt(t.visits)}</td><td class="num">${fmt(t.uniques)}</td>
+      <td class="num">${fmt(t.clicks)}</td><td class="num">${fmtPct(t.ctr)}</td>
+      <td class="num">${fmt(t.clickers)}</td><td class="num">${fmt(t.downloads)}</td></tr>`;
+  }
+  document.getElementById('ixPagesFoot').innerHTML = foot;
+
+  const skipped = ixSkippedFilters();
+  document.getElementById('ixPagesSub').textContent =
+    `${sorted.length} pages · expand a page for language variants & link detail · CTR = clicks ÷ views`
+    + (skipped.length ? ` · ⚠ ${skipped.join(', ')} filter not applicable to interactions` : '');
+  const note = document.getElementById('ixOrphanNote');
+  if (lastIxOrphans > 0){
+    note.style.display='';
+    note.textContent = `Note: ${fmt(lastIxOrphans)} clicks in this window land on pages with no page views loaded `
+      + `(different export window/scope?) — they count in the KPIs but have no row above.`;
+  } else note.style.display='none';
+}
+window.sortIxPages = function(col){
+  if (ixPagesSort.col===col) ixPagesSort.dir = ixPagesSort.dir==='asc'?'desc':'asc';
+  else { const d=IX_PAGES_COLS.find(c=>c.key===col); ixPagesSort={col, dir:(d&&d.num)?'desc':'asc'}; }
+  drawIxPagesTable();
+};
+
+// Child row: one language variant (page_id grain — GUID-stable across the two
+// streams; URL + language are display attributes).
+function ixVariantCell(c, vr){
+  if (c.key==='pname'){
+    const tail = String(vr.page_url||'').split('/').slice(-2).join('/');
+    return `<td class="name pg-child-label" title="${escapeHtml(vr.page_url)}">↳ <b>${escapeHtml(vr.language)}</b> · <span class="url">${escapeHtml(tail)}</span></td>`; }
+  if (c.key==='ct') return '<td></td>';
+  if (c.key==='ctr') return `<td class="num">${fmtPct(vr.ctr)}</td>`;
+  return `<td class="num">${fmt(vr[c.key])}</td>`;
+}
+
+function linkDetailHtml(links){
+  if (!links.length) return `<div class="ix-sub" style="color:var(--grey-4)">No interactions recorded on this page in the selected window.</div>`;
+  const rows = links.map(l=>`<tr>
+    <td class="name" title="${escapeHtml(l.addr||'')}">${escapeHtml(l.label)}</td>
+    <td><span class="cls-badge">${escapeHtml(l.cls||'link')}</span></td>
+    <td>${escapeHtml(l.ltype||'')}</td>
+    <td class="num">${fmt(l.clicks)}</td>
+    <td class="num">${fmt(l.clickers)}</td>
+    <td>${escapeHtml(l.last||'')}</td></tr>`).join('');
+  return `<div class="ix-sub"><table>
+    <thead><tr><th style="text-align:left">Link</th><th style="text-align:left">Class</th><th style="text-align:left">Type</th>
+    <th class="num" style="text-align:right">Clicks</th><th class="num" style="text-align:right">Clickers</th>
+    <th style="text-align:left">Last clicked</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+async function toggleIxExpand(pk){
+  if (ixExpandState.has(pk)){ ixExpandState.delete(pk); drawIxPagesTable(); return; }
+  ixExpandState.add(pk);
+  if (!ixExpandData.has(pk)){
+    drawIxPagesTable();                          // paint the Loading… row first
+    const w = windows(), key = escSql(pk);
+    // (a) language variants — aggregate join on page_id
+    const variants = await query(`WITH v AS (
+        SELECT page_id, any_value(page_url) page_url, any_value(language) AS "language",
+          COUNT(*) n_views, COUNT(DISTINCT session_id) visits, COUNT(DISTINCT person_id) uniques
+        FROM pv WHERE ${win(w.from,w.to)} AND page_key = '${key}' GROUP BY 1),
+      c AS (
+        SELECT page_id, COUNT(*) clicks, COUNT(DISTINCT person_id) clickers,
+          COALESCE(SUM(CASE WHEN ${dlExpr()} THEN 1 ELSE 0 END),0)::BIGINT downloads
+        FROM ix WHERE ${winIx(w.from,w.to)} AND page_key = '${key}' GROUP BY 1)
+      SELECT v.page_url, v.language, v.n_views, v.visits, v.uniques,
+        COALESCE(c.clicks,0) clicks, COALESCE(c.clickers,0) clickers, COALESCE(c.downloads,0) downloads
+      FROM v LEFT JOIN c USING (page_id) ORDER BY v.n_views DESC`);
+    // (b) link detail — what is actually clicked on this page
+    const links = await query(`SELECT COALESCE(link_label,'(no label)') AS "label",
+        COALESCE(link_address,'') addr, any_value(link_type) ltype,
+        ${ixCols.has('interaction_class')?'any_value(interaction_class)':`'link'`} cls,
+        COUNT(*) clicks, COUNT(DISTINCT person_id) clickers,
+        strftime(MAX(timestamp),'%Y-%m-%d') AS "last"
+      FROM ix WHERE ${winIx(w.from,w.to)} AND page_key = '${key}'
+      GROUP BY 1,2 ORDER BY clicks DESC LIMIT 15`);
+    ixExpandData.set(pk, {
+      variants: variants.map(r=>({ page_url:r.page_url, language:r.language, views:r.n_views,
+        visits:r.visits, uniques:r.uniques, clicks:r.clicks, clickers:r.clickers,
+        downloads:r.downloads, ctr: r.n_views ? r.clicks/r.n_views : null })),
+      links });
+  }
+  drawIxPagesTable();
+}
+
+// Top links (downloads excluded — they have their own table below).
+const IX_LINKS_COLS = [
+  { key:'label',    label:'Link', name:true, fmt:r=>escapeHtml(r.label) },
+  { key:'ltype',    label:'Type', fmt:r=>escapeHtml(r.ltype||'') },
+  { key:'clicks',   label:'Clicks', num:true, fmt:r=>fmt(r.clicks) },
+  { key:'clickers', label:'Clickers', num:true, fmt:r=>fmt(r.clickers) },
+  { key:'pages',    label:'Pages', num:true, fmt:r=>fmt(r.pages) },
+  { key:'last',     label:'Last clicked', fmt:r=>escapeHtml(r.last||'') },
+];
+async function renderTopLinks(w){
+  lastTopLinks = await query(`SELECT COALESCE(link_label,'(no label)') AS "label",
+      COALESCE(link_address,'') addr, any_value(link_type) ltype,
+      COUNT(*) clicks, COUNT(DISTINCT person_id) clickers, COUNT(DISTINCT page_key) pages,
+      strftime(MAX(timestamp),'%Y-%m-%d') AS "last"
+    FROM ix WHERE ${winIx(w.from,w.to)} AND NOT (${dlExpr()})
+    GROUP BY 1,2 ORDER BY clicks DESC LIMIT 100`);
+  drawTopLinks();
+}
+function drawTopLinks(){
+  drawSortableTable('ixLinksHead','ixLinksBody', IX_LINKS_COLS, lastTopLinks, ixLinksSort, drawTopLinks);
+  document.getElementById('ixLinksSub').textContent =
+    `${lastTopLinks.length} links · clicked links only — links never clicked don't appear in telemetry`;
+}
+
+const IX_DOWNLOADS_COLS = [
+  { key:'file',        label:'File', name:true, fmt:r=>escapeHtml(r.file) },
+  { key:'ftype',       label:'Type', fmt:r=>`<span class="ct-badge">${escapeHtml(r.ftype||'?')}</span>` },
+  { key:'downloads',   label:'Downloads', num:true, fmt:r=>fmt(r.downloads) },
+  { key:'downloaders', label:'Downloaders', num:true, fmt:r=>fmt(r.downloaders) },
+  { key:'pages',       label:'Pages', num:true, fmt:r=>fmt(r.pages) },
+  { key:'last',        label:'Last download', fmt:r=>escapeHtml(r.last||'') },
+];
+async function renderTopDownloads(w){
+  lastTopDownloads = await query(`SELECT COALESCE(file_name_label,'(unknown file)') AS "file",
+      any_value(file_type_label) ftype, COUNT(*) downloads,
+      COUNT(DISTINCT person_id) downloaders, COUNT(DISTINCT page_key) pages,
+      strftime(MAX(timestamp),'%Y-%m-%d') AS "last"
+    FROM ix WHERE ${winIx(w.from,w.to)} AND ${dlExpr()}
+    GROUP BY 1 ORDER BY downloads DESC LIMIT 100`);
+  drawTopDownloads();
+}
+function drawTopDownloads(){
+  drawSortableTable('ixDownloadsHead','ixDownloadsBody', IX_DOWNLOADS_COLS, lastTopDownloads, ixDownloadsSort, drawTopDownloads);
+  document.getElementById('ixDownloadsSub').textContent =
+    `${lastTopDownloads.length} files · downloads = clicks classified as file downloads`;
+}
+
 // ==== Controls ====
 function setTimeframe(tf){ timeframe=tf; customFrom=customTo=null;
   document.getElementById('dateFrom').value=''; document.getElementById('dateTo').value='';
@@ -1966,6 +2614,17 @@ async function exportXlsx(evt){
       sheetTable(wsL, lKpi.length+3, ['Page','Type','Published','Age (d)','First 7d visits','7d share','Visits (window)'],
         aRows,[false,false,false,true,true,true,true]);
     }
+    if (hasInteractions){
+      if (!lastIxKpis.length) await renderIxKpis(w);
+      if (!lastIxPages.length) await computeIxPages(w);
+      const wsI=wb.addWorksheet('Interactions');
+      const iKpi=lastIxKpis.map(k=>[k.label,k.value, k.p==null?'':(((k.c-k.p)/k.p)*100).toFixed(1)+'%']);
+      sheetTable(wsI,1,['Metric','Value','vs. prior period'],iKpi,[false,true,true]);
+      const ipRows=[...lastIxPages].sort((a,b)=>b.views-a.views).map(r=>[r.pname,r.ct,r.views,r.visits,
+        r.uniques,r.clicks, r.ctr==null?'':((r.ctr*100).toFixed(1)+'%'), r.clickers,r.downloads]);
+      sheetTable(wsI, iKpi.length+3, ['Page','Type','Views','Visits','Unique','Clicks','CTR','Clickers','Downloads'],
+        ipRows,[false,false,true,true,true,true,true,true,true]);
+    }
     await downloadWorkbook(wb, `site_analytics_${timeframe}.xlsx`);
   } catch(e){ console.error(e); alert('Export failed: '+e.message); }
   finally { if (btn){ btn.textContent=orig; btn.disabled=false; } }
@@ -1998,6 +2657,40 @@ const TABLE_EXPORTS = {
     right:[false,false,true,true,true,true],
     rows(){ return sortByState(lastEntryPages, entrySort).map(r=>[r.nm,r.ct,r.entries,
       (r.share*100).toFixed(1)+'%',(r.bounce*100).toFixed(1)+'%',+r.avgd.toFixed(2)]); },
+  },
+  // ---- Phase 2: Content & Interactions ----
+  ixpages: {
+    sheet:'Pages interest x action', file:'pages_interest_action',
+    async ensure(w){ if (!lastIxPages.length) await computeIxPages(w); },
+    headers:['Page','Type','Views','Visits','Unique','Clicks','CTR','Clickers','Downloads'],
+    right:[false,false,true,true,true,true,true,true,true],
+    rows(){ return sortByState(lastIxPages, ixPagesSort).map(r=>[r.pname,r.ct,r.views,r.visits,
+      r.uniques,r.clicks, r.ctr==null?'':((r.ctr*100).toFixed(1)+'%'), r.clickers,r.downloads]); },
+  },
+  toplinks: {
+    sheet:'Top links', file:'top_links',
+    async ensure(w){ if (!lastTopLinks.length) await renderTopLinks(w); },
+    headers:['Link','Address','Type','Clicks','Clickers','Pages','Last clicked'],
+    right:[false,false,false,true,true,true,false],
+    rows(){ return sortByState(lastTopLinks, ixLinksSort).map(r=>[r.label,r.addr,r.ltype??'',
+      r.clicks,r.clickers,r.pages,r.last??'']); },
+  },
+  topdownloads: {
+    sheet:'Top downloads', file:'top_downloads',
+    async ensure(w){ if (!lastTopDownloads.length) await renderTopDownloads(w); },
+    headers:['File','Type','Downloads','Downloaders','Pages','Last download'],
+    right:[false,false,true,true,true,false],
+    rows(){ return sortByState(lastTopDownloads, ixDownloadsSort).map(r=>[r.file,r.ftype??'',
+      r.downloads,r.downloaders,r.pages,r.last??'']); },
+  },
+  ixdivisions: {
+    sheet:'Clicks by Division', file:'clicks_by_division',
+    async ensure(w){ if (!lastIxDivisions.length) await renderIxDivisions(w); },
+    headers:['Division','Clicks','Unique Clickers','Clicks/Clicker','Clicker Rate','Downloads','Pages'],
+    right:[false,true,true,true,true,true,true],
+    rows(){ return sortByState(lastIxDivisions, ixDivisionsSort).map(r=>[r.division,r.clicks,r.clickers,
+      r.per_clicker==null?'':+(+r.per_clicker).toFixed(1),
+      r.clicker_rate==null?'':((r.clicker_rate*100).toFixed(1)+'%'), r.downloads,r.pages]); },
   },
 };
 async function exportTableXlsx(kind, evt){

@@ -10,6 +10,14 @@ CammsTrackingID on the News articles, and staggered publishing dates with
 age-weighted views (burst + decay) so the Content Lifecycle tab shows
 realistic curves.
 
+Also emits output/site_interactions.parquet (Phase 2) with the SAME columns
+process_site_interactions.py produces: click_event interactions CORRELATED
+with the page views above — clicks are a subset of views (per-page CTR
+~2–35 % depending on content type), Download pages and some articles carry
+file downloads, Video pages get play actions, every page has a small link
+catalogue with a dominant top link + long tail, and a few links stop being
+clicked mid-window (the "declining link" story for Last clicked).
+
 Run (from the SiteOwnerDashboard project root):
     python scripts/generate_demo_data.py
 """
@@ -138,6 +146,24 @@ THEMES = {
 
 LANG_SEG = {"EN": "en", "DE": "de", "FR": "fr", "IT": "it"}
 
+# --- Phase 2: link catalogue building blocks (site_interactions.parquet) ----
+# (label, link_type) pool the per-page catalogues sample from. Weights are
+# Zipf-ish per page so one link dominates and the tail is rarely clicked.
+LINK_POOL = [
+    ("Read the full story",        "internal"),
+    ("Related: strategy hub",      "internal"),
+    ("All news",                   "internal"),
+    ("Contact the editorial team", "mailto"),
+    ("Share on Workplace",         "external"),
+    ("Register for the event",     "external"),
+    ("Previous coverage",          "internal"),
+    ("Leadership bios",            "internal"),
+    ("Media gallery",              "internal"),
+]
+COMPONENTS = ["HeroBanner", "RelatedLinks", "QuickLinks", "BodyCopy"]
+# Base probability that a page view produces at least one interaction.
+CTR_BASE = {"Article": 0.08, "Download": 0.35, "Video": 0.50}
+
 
 def walk_org(division: str):
     """Pick a deterministic-ish (RNG-seeded) Unit -> Area -> Sector path."""
@@ -173,6 +199,130 @@ def weighted_choice(pairs):
     labels = [p[0] for p in pairs]
     weights = np.array([p[1] for p in pairs], dtype=float)
     return labels, weights / weights.sum()
+
+
+# --- Phase 2: interactions (clicks / downloads / video) ---------------------
+# All RNG draws for interactions happen AFTER the page-view generation, so the
+# pageviews parquet stays identical to the Phase-1 demo output.
+
+def build_link_catalogs():
+    """Per-page link catalogue: dominant top link + long tail, plus a file
+    download on Download pages (and some articles) and video actions on Video
+    pages. A few links 'decline' — no clicks in the last ~75 days."""
+    catalogs = {}
+    decline_cutoff = REF_TODAY - timedelta(days=75)
+    for i, (name, ct, lang, *_rest) in enumerate(PAGES):
+        links = []
+        n_links = 3 + int(RNG.integers(0, 3))
+        idxs = RNG.choice(len(LINK_POOL), size=n_links, replace=False)
+        for rank, j in enumerate(idxs):
+            label, ltype = LINK_POOL[int(j)]
+            links.append({
+                "component_name": COMPONENTS[int(RNG.integers(0, len(COMPONENTS)))],
+                "link_type": ltype,
+                "link_label": label,
+                "link_address": f"https://intranet.corp/{slug(label)}",
+                "weight": 1.0 / (rank + 1) ** 1.3,
+                "active_before": decline_cutoff if (rank == n_links - 1 and RNG.random() < 0.35) else None,
+                "file_type_label": None, "file_name_label": None, "video": False,
+            })
+        has_file = ct == "Download" or (ct == "Article" and RNG.random() < 0.3)
+        if has_file:
+            ftype = "PDF" if RNG.random() < 0.75 else "XLSX"
+            fname = f"{slug(name)}.{ftype.lower()}"
+            links.append({
+                "component_name": "DocumentList",
+                "link_type": "download",
+                "link_label": name if ct == "Download" else f"{name} — briefing",
+                "link_address": f"https://intranet.corp/docs/{fname}",
+                "weight": 3.0 if ct == "Download" else 0.8,
+                "active_before": None,
+                "file_type_label": ftype, "file_name_label": fname, "video": False,
+            })
+        if ct == "Video":
+            links.append({
+                "component_name": "VideoPlayer",
+                "link_type": "video",
+                "link_label": name,
+                "link_address": f"https://video.corp/watch/{slug(name)}",
+                "weight": 3.0,
+                "active_before": None,
+                "file_type_label": None, "file_name_label": None, "video": True,
+            })
+        catalogs[i] = links
+    return catalogs
+
+
+def build_interactions(df, page_ids):
+    """One click_event row per interaction, correlated with the views in df."""
+    catalogs = build_link_catalogs()
+    idx_by_page_id = {pid: i for i, pid in enumerate(page_ids)}
+    # Per-page CTR multiplier 0.3–2.0: some high-interest pages get a LOW CTR
+    # (the "unused potential" quadrant the dashboard should surface).
+    ctr = {i: float(np.clip(CTR_BASE[PAGES[i][1]] * RNG.lognormal(0.0, 0.5), 0.01, 0.6))
+           for i in range(len(PAGES))}
+    video_ids = {i: f"v-{1000 + i}" for i in range(len(PAGES))}
+
+    rows = []
+    hr_cols = ["hr_division", "hr_unit", "hr_area", "hr_sector", "hr_region", "hr_country"]
+    for row in df.itertuples(index=False):
+        i = idx_by_page_id[row.page_id]
+        if RNG.random() >= ctr[i]:
+            continue
+        n_clicks = 1 + (1 if RNG.random() < 0.25 else 0)
+        links = catalogs[i]
+        t = row.timestamp
+        for _ in range(n_clicks):
+            active = [l for l in links
+                      if l["active_before"] is None or t < l["active_before"]]
+            if not active:
+                continue
+            w = np.array([l["weight"] for l in active], dtype=float)
+            link = active[int(RNG.choice(len(active), p=w / w.sum()))]
+            t = t + timedelta(seconds=float(RNG.uniform(3, 90)))
+            is_video = link["video"]
+            r = {
+                "event_id": str(uuid.uuid4()),
+                "timestamp": t,
+                "event_name": "click_event",
+                "page_id": row.page_id,
+                "page_key": row.page_key,
+                "page_name": row.page_name,
+                "page_url": row.page_url,
+                "language": row.language,
+                "site_id": row.site_id,
+                "site_name": row.site_name,
+                "content_owner": row.content_owner,
+                "content_type": row.content_type,
+                "theme": row.theme,
+                "topic": row.topic,
+                "publishing_date": row.publishing_date,
+                "user_id": row.user_id,
+                "session_id": row.session_id,
+                "person_id": row.person_id,
+                "gpn": row.gpn,
+                "client_os": row.client_os,
+                "client_browser": row.client_browser,
+                "client_country": row.client_country,
+                "component_name": link["component_name"],
+                "link_type": link["link_type"],
+                "link_label": link["link_label"],
+                "link_address": link["link_address"],
+                "link_ancestors": f"{row.page_name} > {link['component_name']}",
+                "file_type_label": link["file_type_label"],
+                "file_name_label": link["file_name_label"],
+                "video_action": (["Play", "Play", "Play", "Pause", "Complete"]
+                                 [int(RNG.integers(0, 5))] if is_video else None),
+                "video_id": video_ids[i] if is_video else None,
+                "video_type": "OnDemand" if is_video else None,
+                "video_duration": str(int(RNG.integers(60, 2400))) if is_video else None,
+                "interaction_class": ("download" if link["file_name_label"]
+                                      else "video" if is_video else "link"),
+            }
+            for c in hr_cols:
+                r[c] = getattr(row, c)
+            rows.append(r)
+    return pd.DataFrame(rows).sort_values("timestamp").reset_index(drop=True)
 
 
 def main():
@@ -214,18 +364,27 @@ def main():
 
     n_sessions = 15000
     days_span = (REF_TODAY - START).days
-    # Upward trend: later days more likely (linear ramp 0.6 -> 1.4)
+    # Upward trend: later days more likely (linear ramp 0.6 -> 1.4), damped by a
+    # working-week profile (weekdays dominate, weekends quiet) so the Phase-2
+    # timing charts (hour/weekday/heatmap) show a realistic intranet pattern.
+    weekday_factor = [1.0, 1.05, 1.0, 0.95, 0.85, 0.35, 0.25]  # Mon..Sun
     day_idx = np.arange(days_span)
     day_weight = 0.6 + 0.8 * (day_idx / days_span)
+    day_weight = day_weight * np.array(
+        [weekday_factor[(START + timedelta(days=int(d))).weekday()] for d in day_idx])
     day_weight = day_weight / day_weight.sum()
     sess_days = RNG.choice(day_idx, size=n_sessions, p=day_weight)
+    # Intraday profile 6:00-19:00: mid-morning peak, lunch dip, afternoon bump.
+    hour_choices = np.arange(6, 20)
+    hour_weights = np.array([0.3, 0.7, 1.4, 2.2, 2.4, 2.0, 1.2, 0.9, 1.6, 1.8, 1.5, 1.1, 0.7, 0.4])
+    hour_weights = hour_weights / hour_weights.sum()
 
     rows = []
     for s in range(n_sessions):
         u = users[RNG.integers(0, n_users)]
         day = START + timedelta(days=int(sess_days[s]))
-        # working-hours-ish start time
-        start = day + timedelta(hours=int(RNG.integers(6, 19)),
+        # working-hours start time following the intraday profile
+        start = day + timedelta(hours=int(RNG.choice(hour_choices, p=hour_weights)),
                                 minutes=int(RNG.integers(0, 60)),
                                 seconds=int(RNG.integers(0, 60)))
         session_id = f"s-{s:06d}"
@@ -307,6 +466,17 @@ def main():
     print(f"  pages:     {df['page_id'].nunique()}")
     print(f"  range:     {df['timestamp'].min()}  ->  {df['timestamp'].max()}")
     print(f"  languages: {dict(df['language'].value_counts())}")
+
+    # Phase 2: correlated interactions (clicks / downloads / video)
+    ix = build_interactions(df, page_ids)
+    ix_out = out.parent / "site_interactions.parquet"
+    ix.to_parquet(ix_out, index=False)
+    print(f"\nWrote {len(ix):,} interactions -> {ix_out}")
+    print(f"  overall CTR: {len(ix) / len(df) * 100:.1f}% (clicks / views)")
+    print(f"  classes:   {dict(ix['interaction_class'].value_counts())}")
+    print(f"  clickers:  {ix['person_id'].nunique():,}")
+    print(f"  top links: "
+          + ", ".join(f"{k} ({v})" for k, v in ix["link_label"].value_counts().head(3).items()))
 
 
 if __name__ == "__main__":

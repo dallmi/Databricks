@@ -102,6 +102,48 @@ DROP_COLUMNS = [
     "cp_NewsCategory",
 ]
 
+# -- customEvents (click_event) — interactions variant of the maps above --
+# `name` is the event-family discriminator on customEvents (click_event,
+# SEARCH_TRIGGERED, …) and is therefore KEPT (renamed), unlike on pageViews
+# where DROP_COLUMNS discards it. customEvents carries no CammsTrackingID.
+
+INTERACTION_FACT_COLUMNS = {
+    "id": "event_id",
+    "timestamp [UTC]": "timestamp_utc",
+    "name": "event_name",
+    "user_Id": "user_id",
+    "session_Id": "session_id",
+    "client_OS": "client_os",
+    "client_Browser": "client_browser",
+    "client_CountryOrRegion": "client_country",
+    "cp_PageId": "page_id",
+    "cp_Email": "email",
+    "cp_GPN": "gpn",
+    "cp_refUri": "referrer_url",
+    # Click detail
+    "cp_ComponentName": "component_name",
+    "cp_Link_Type": "link_type",
+    "cp_Link_label": "link_label",
+    "cp_Link_address": "link_address",
+    "cp_Link_ancestors": "link_ancestors",
+    # Download detail
+    "cp_FileType_Label": "file_type_label",
+    "cp_FileName_Label": "file_name_label",
+    # Video sub-domain
+    "cp_Video_Action": "video_action",
+    "cp_Video_Id": "video_id",
+    "cp_Video_Type": "video_type",
+    "cp_Video_Duration": "video_duration",
+}
+
+INTERACTION_DROP_COLUMNS = [
+    "appId", "iKey", "sdkVersion", "itemCount", "itemType",
+    "operation_Id", "operation_ParentId", "operation_Name",
+    "client_IP", "client_Type", "client_Model",
+    "client_City", "client_StateOrProvince",
+    "cp_NewsCategory",
+]
+
 # CammsTrackingID join key — links page views with CPLAN packs/clusters/channels
 # and with the iMEP email channel. See CPLAN/pipeline/docs/tracking-id.md.
 # Source CSV may spell the field "CammsTrackingID" or "CommsTrackingID".
@@ -263,6 +305,28 @@ def flatten_appinsights(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def normalize_gpn(series: pd.Series) -> pd.Series:
+    """Normalise GPN to an 8-digit zero-padded string; blanks/zeros -> None."""
+    gpn = (
+        series.astype(str)
+        .str.replace(r"\.0$", "", regex=True)
+        .str.strip().str.zfill(8)
+    )
+    gpn.loc[gpn.isin(["", "nan", "None", "00000000"])] = None
+    return gpn
+
+
+def _convert_timestamp_utc(flat: pd.DataFrame) -> pd.DataFrame:
+    """Replace timestamp_utc with a CET `timestamp` column (if present)."""
+    if "timestamp_utc" in flat.columns:
+        # utc=True parses both naive strings (assumed UTC) and tz-aware ISO
+        # timestamps ending in 'Z' or with an offset — uniformly to UTC.
+        ts = pd.to_datetime(flat["timestamp_utc"], errors="coerce", utc=True)
+        flat["timestamp"] = ts.dt.tz_convert(TIMEZONE)
+        flat = flat.drop(columns=["timestamp_utc"])
+    return flat
+
+
 def build_clean_table(df: pd.DataFrame) -> pd.DataFrame:
     """Drop noise columns, rename, parse dates, convert UTC to CET."""
     flat = df.copy()
@@ -276,25 +340,46 @@ def build_clean_table(df: pd.DataFrame) -> pd.DataFrame:
     existing_renames = {k: v for k, v in rename_map.items() if k in flat.columns}
     flat = flat.rename(columns=existing_renames)
 
-    if "timestamp_utc" in flat.columns:
-        # utc=True parses both naive strings (assumed UTC) and tz-aware ISO
-        # timestamps ending in 'Z' or with an offset — uniformly to UTC.
-        ts = pd.to_datetime(flat["timestamp_utc"], errors="coerce", utc=True)
-        flat["timestamp"] = ts.dt.tz_convert(TIMEZONE)
-        flat = flat.drop(columns=["timestamp_utc"])
+    flat = _convert_timestamp_utc(flat)
 
     if "publishing_date" in flat.columns:
         flat["publishing_date"] = pd.to_datetime(flat["publishing_date"], errors="coerce")
 
     if "gpn" in flat.columns:
-        flat["gpn"] = (
-            flat["gpn"].astype(str)
-            .str.replace(r"\.0$", "", regex=True)
-            .str.strip().str.zfill(8)
-        )
-        flat.loc[flat["gpn"].isin(["", "nan", "None", "00000000"]), "gpn"] = None
+        flat["gpn"] = normalize_gpn(flat["gpn"])
 
     flat = parse_tracking_id(flat)
+
+    return flat
+
+
+def build_clean_interactions_table(df: pd.DataFrame) -> pd.DataFrame:
+    """customEvents (click_event) variant of build_clean_table.
+
+    Same drop/rename/UTC->CET/GPN treatment, but keeps `name` (renamed to
+    event_name — the event-family discriminator) and the click/download/video
+    detail columns, and skips the CammsTrackingID split (customEvents never
+    carries a tracking id — cross-channel attribution of interactions runs via
+    the page, not the event).
+    """
+    flat = df.copy()
+
+    cols_to_drop = [c for c in INTERACTION_DROP_COLUMNS if c in flat.columns]
+    flat = flat.drop(columns=cols_to_drop)
+
+    rename_map = {}
+    rename_map.update(INTERACTION_FACT_COLUMNS)
+    rename_map.update(DIM_PAGE_COLUMNS)  # page context is shared with pageViews
+    existing_renames = {k: v for k, v in rename_map.items() if k in flat.columns}
+    flat = flat.rename(columns=existing_renames)
+
+    flat = _convert_timestamp_utc(flat)
+
+    if "publishing_date" in flat.columns:
+        flat["publishing_date"] = pd.to_datetime(flat["publishing_date"], errors="coerce")
+
+    if "gpn" in flat.columns:
+        flat["gpn"] = normalize_gpn(flat["gpn"])
 
     return flat
 

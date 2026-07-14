@@ -196,13 +196,20 @@ def partition_files(files: list[Path], manifest: dict) -> tuple[list[tuple[Path,
 KEY_COLS = ["user_id", "session_id", "page_id"]
 
 
-def add_event_key(df: pd.DataFrame) -> pd.DataFrame:
+def add_event_key(df: pd.DataFrame, key_cols: list[str] | None = None) -> pd.DataFrame:
+    """Composite key from second-truncated timestamp + key_cols (default pv KEY_COLS).
+
+    process_site_interactions.py reuses this with its own (wider) column list —
+    a click needs the link identity in the key, a page view does not.
+    """
+    if key_cols is None:
+        key_cols = KEY_COLS
     if "timestamp" in df.columns:
         key = (pd.to_datetime(df["timestamp"], errors="coerce")
                .dt.strftime("%Y-%m-%d %H:%M:%S").fillna(""))
     else:
         key = pd.Series("", index=df.index, dtype="string")
-    for c in KEY_COLS:
+    for c in key_cols:
         part = df[c].fillna("").astype(str) if c in df.columns else ""
         key = key + "|" + part
     df = df.copy()
@@ -212,7 +219,8 @@ def add_event_key(df: pd.DataFrame) -> pd.DataFrame:
 
 # --- Upsert into the existing output parquet ---------------------------------
 def upsert_store(store: pd.DataFrame | None, new: pd.DataFrame,
-                 replaced_files: list[str]) -> pd.DataFrame:
+                 replaced_files: list[str],
+                 key_cols: list[str] | None = None) -> pd.DataFrame:
     """Delete-then-insert (CampaignWe upsert pattern), key = event_key.
 
     1. Evict every store row contributed by a re-processed file (source_file)
@@ -221,12 +229,15 @@ def upsert_store(store: pd.DataFrame | None, new: pd.DataFrame,
        (overlapping time windows across different exports) — incoming wins.
     3. Append the new rows. Missing columns on either side become NA
        (schema evolution, e.g. HR columns present in only one batch).
+
+    key_cols is only used to (re)build event_key on a store written before the
+    key existed — pass the same list the new batch was keyed with.
     """
     if store is None or store.empty:
         return new
 
     if "event_key" not in store.columns:  # store written before the key existed
-        store = add_event_key(store)
+        store = add_event_key(store, key_cols)
 
     before = len(store)
     if replaced_files and "source_file" in store.columns:

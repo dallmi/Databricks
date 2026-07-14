@@ -1,8 +1,8 @@
 # Site data — exports and built parquets may contain GPN/Email; never commit.
 # Regenerate the demo with:  python scripts/generate_demo_data.py
-input/*.csv
-input/*.xlsx
-input/*.xls
+input/**/*.csv
+input/**/*.xlsx
+input/**/*.xls
 output/*.parquet
 output/*.manifest.json
 # Standalone build embeds the (potentially sensitive) data — keep out of git.

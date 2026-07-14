@@ -18,6 +18,9 @@ dashboard — DuckDB-WASM does all aggregation in the browser. Reusable per site
 | 6 | **House design language** (CampaignWe/MURL), mockup 1a as rough direction only | Consistency across our dashboards beats pixel-matching a placeholder mockup. |
 | 7 | **On-brand colour translation of 1a** | 1a highlights the selected range in **red**; the mandatory corporate palette forbids red chart fills. Selected range = dark grey `#404040`, context = light grey `#CCCABC`. Red stays a small accent (KPI top bar, active tab, negative MoM). Sparklines neutral grey; direction is carried by the MoM column. |
 | 8 | **Phase 2 additive, dashboard works without it** | customEvents (`site_interactions.parquet`) is loaded only if present; its tab appears only then. Phase 1 is fully functional on pageViews alone. |
+| 9 | **No physical pv×ix join — aggregate joins at query time, per view grain** | Both parquets stay at event grain and carry the same three page keys (`page_key`, `page_id`, `page_url`). Every table joins per-view aggregates on ITS grain, so `COUNT(DISTINCT person_id)` is recomputed per grain — UV is never summed (a DE+FR reader counts once per logical page, once per variant). |
+| 10 | **`page_key` for rankings, `page_id` for the variant drill** | Rankings answer a content question — language variants must not compete (the CAWB-4× fix). The drill joins on `page_id` (GUID): string-equality-safe across the two streams and stable across URL renames. |
+| 11 | **Filters are column-aware per view** | ix carries the same filterable columns as pv EXCEPT `tracking_channel_abbr` (customEvents has no CammsTrackingID). A filter on a column ix lacks is skipped for ix queries and flagged on the table — never silently ignored. |
 
 ## Reused from the main pipeline
 `scripts/process_site_pageviews.py` imports `read_input`, `flatten_appinsights`,
@@ -77,24 +80,68 @@ the workbook always matches the current filters. Column presence is detected
 via `DESCRIBE` at load — missing `hr_*` shows a hint in the Division donut,
 missing `publishing_date` collapses the Lifecycle tab to its empty state.
 
-## Phase 2 — customEvents (planned, additive)
+## Phase 2 — customEvents (shipped)
 
-customEvents scopes to a site the **same way** (SiteName/SiteID/PageId in
-CustomProps) and shares `page_id` with pageViews → `dim_page` — **no
-CammsTrackingID needed** (customEvents doesn't carry it). A second export
-+ build produces `output/site_interactions.parquet`:
+customEvents scopes to a site the **same way** (PageURL/PageId in CustomProps)
+— **no CammsTrackingID needed** (customEvents doesn't carry it; the Channel
+filter therefore never applies to interactions). `export_site_interactions.kql`
+→ `input/interactions/` → `scripts/process_site_interactions.py` →
+`output/site_interactions.parquet`. `click_event` only — search events
+(`SEARCH_TRIGGERED`, `SEARCH_RESULT_CLICK`) have a 4-level nested schema and
+stay out of scope.
 
-**`fact_interaction`** — one row per interaction, `event_name` discriminates the
-family (as customEvents itself does):
-`event_id, timestamp, page_id, user_id, session_id, gpn, event_name,
+**`site_interactions.parquet`** — one wide row per interaction:
+`event_id, timestamp, event_name, page_id, page_key, page_name, page_url,
+language, site_id, site_name, content_owner, content_type, theme, topic,
+target_region, target_org, page_status, publishing_date, user_id, session_id,
+person_id, email, gpn, client_os, client_browser, client_country, referrer_url,
 component_name, link_type, link_label, link_address, link_ancestors,
 file_type_label, file_name_label, video_action, video_id, video_type,
-video_duration`
+video_duration, interaction_class, hr_*, source_file, event_key`
 
-Unlocks: downloads (top files, volume), link-type mix, top CTAs, **top/bottom
-pages by engagement** (views × clicks × downloads, not views alone),
-component performance, video engagement, on-site search. The Pages table becomes
-drillable into a page's interactions.
+Derivations are IDENTICAL to the pageViews build (same functions imported):
+`language`/`page_key` from PageURL, `person_id` = GPN else `anon:<user_id>`,
+temporal HR join via GPN. `interaction_class` is an ADDED column
+(download → video → link; source columns untouched). The upsert `event_key`
+includes the link identity (component + address + label) so two different-link
+clicks in the same second stay distinct.
 
-The dashboard's data layer registers `site_interactions.parquet` only if it
-loads; a **Content & Interactions** tab is added when present.
+### Join contract (pv × ix)
+
+| Grain | Key | Used for |
+|---|---|---|
+| Logical page (default reporting) | `page_key` | Pages interest×action table, rankings, CTR = clicks ÷ views |
+| Language variant (drill) | `page_id` (GUID; URL + language are display) | per-variant UV/clicks/CTR under an expanded page |
+| Person | `person_id` | Unique Clickers, Clicker Rate = clickers ÷ unique visitors |
+| Session (NOT used yet) | `session_id` | a same-visit view→click funnel — run `diagnose_interactions.py` for the overlap evidence first |
+
+All joins are per-view **aggregate joins in DuckDB-WASM at query time** (pv CTE
+LEFT JOIN ix CTE on the grain key). Distinct counts are recomputed per grain —
+never summed. Known limitation (documented in the UI): telemetry records only
+**clicked** links; a link with zero clicks is invisible (no link inventory).
+*Last clicked* is the observable proxy for "no longer clicked". Clicks whose
+`page_key` has no pv rows in the window (mismatched export windows/scopes) are
+counted in the KPIs and flagged as orphans under the table.
+
+The tab adds: KPI row (Clicks / Unique Clickers / Downloads / CTR / Clicker
+Rate, MoM), interactions over time, interaction mix, top components, the
+interest×action pages table (expand → variants + link detail), top links and
+top downloads. The Overview Pages table gains optional **Clicks** and **CTR**
+measures (secondary ix aggregate mapped onto the same visible dimensions).
+
+### Ported from the CampaignWe clicks dashboard (2026-07-14)
+
+Four patterns from the sister project (`../CampaignWe/dashboard/dashboard.html`)
+answer questions the tab previously didn't; story-submission specifics
+(creation/invite funnels, deleted stories) were deliberately NOT ported:
+
+| Pattern | What it answers | Notes |
+|---|---|---|
+| Adaptive daily line (clicks + unique clickers, dual axis) | traffic shape inside short windows | windows ≤ ~120 days; longer windows keep monthly bars |
+| Clicks by hour / by weekday + **Weekday×Hour heatmap** (CET) | when the audience clicks → publish/push timing | heat ramp white→pastel→amber→red→dark red is data-driven *intensity* (RAG-toned), not a category palette; peak bar red = small accent |
+| **Clicks by Division** table with Clicks/Clicker + **Clicker Rate** | who clicks, and how deep | Clicker Rate = ix clickers ÷ pv uniques per division — an aggregate join at the *Division* grain (decision #9 applied to a non-page grain) |
+| **Division × Page heatmap** | which content resonates with which audience | top-15 pages by clicks × top-8 divisions |
+
+All four honour the column-aware filter contract (decision #11) and degrade
+gracefully: division views show a "rebuild with --hr" hint when `hr_division`
+is absent from the interactions parquet.
