@@ -52,6 +52,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parents[0]
 sys.path.insert(0, str(SCRIPT_DIR))
 from process_site_pageviews import canonical_page_key  # noqa: E402
+from process_site_interactions import classify_interactions  # noqa: E402
 from flatten_appinsights import (  # noqa: E402
     read_input,
     flatten_appinsights,
@@ -126,6 +127,29 @@ def coverage_table(df: pd.DataFrame, group_col: str | list[str], total_rows: int
     return out.head(top)
 
 
+def print_crosstab(df: pd.DataFrame, row_col: str, col_col: str,
+                    row_order: list | None = None, as_share: bool = False) -> None:
+    """Print a row x col count (or row-normalised %) matrix, columns by total volume."""
+    ct = pd.crosstab(df[row_col], df[col_col])
+    col_order = ct.sum(axis=0).sort_values(ascending=False).index
+    ct = ct[col_order]
+    if row_order is not None:
+        ct = ct.reindex([r for r in row_order if r in ct.index])
+    if as_share:
+        ct = ct.div(ct.sum(axis=1), axis=0) * 100
+
+    col_w = 9
+    print(f"{row_col:32s}" + "".join(f"{str(c)[:col_w-1]:>{col_w}s}" for c in ct.columns))
+    for idx, row in ct.iterrows():
+        label = str(idx)
+        label = (label[:29] + "...") if len(label) > 32 else label
+        if as_share:
+            cells = "".join(f"{v:>{col_w-1}.0f}%" for v in row)
+        else:
+            cells = "".join(f"{int(v):>{col_w},}" for v in row)
+        print(f"{label:32s}{cells}")
+
+
 def print_component_table(table: pd.DataFrame, label_col: str) -> None:
     has_cov = "page_coverage" in table.columns
     head = f"{label_col:32s} {'rows':>10s} {'share':>7s} {'cum':>7s}"
@@ -182,6 +206,20 @@ def main() -> int:
         hdr("Link_Type breakdown")
         lt_table = coverage_table(df, "link_type", total_rows, total_pages, args.top)
         print_component_table(lt_table, "link_type")
+
+        df = classify_interactions(df)  # adds interaction_class: download/video/link
+        hdr("interaction_class x Link_Type — does span/div carry downloads or video?")
+        print("  (row counts — a nonzero cell outside 'link' means that Link_Type")
+        print("   tags real download/video interactions, not just chrome wrappers)")
+        print_crosstab(df, "interaction_class", "link_type")
+
+        top_components = comp_table["component_name"].head(min(args.top, 15)).tolist()
+        hdr(f"Link_Type mix inside the top {len(top_components)} ComponentName (row %)")
+        print("  If span/div sit almost entirely inside nav/header/footer-looking rows")
+        print("  here, filtering them is low-risk. If they also dominate a content")
+        print("  component (e.g. your rich-text editor), filtering them is NOT.")
+        print_crosstab(df[df["component_name"].isin(top_components)],
+                       "component_name", "link_type", row_order=top_components, as_share=True)
 
     if "link_label" in df.columns:
         hdr(f"Top {args.top} (ComponentName, Link_label) combos by row volume")
