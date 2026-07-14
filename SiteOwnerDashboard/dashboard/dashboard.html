@@ -1065,6 +1065,8 @@ class ColumnPicker {
     if (this.open) this.positionPopover();
     this.popoverEl.classList.toggle('hidden', !this.open);
     this.triggerEl.classList.toggle('open', this.open);
+    // Focus the search box on open so the user can type immediately.
+    if (this.open && this.searchEl) setTimeout(()=>this.searchEl.focus(), 0);
   }
   render(){
     const groups = [{id:'dim',label:'Dimensions (Group By)'},{id:'metric',label:'Metrics'}];
@@ -1139,6 +1141,8 @@ class FilterControl {
     if (this.open) this.positionPopover();
     this.popoverEl.classList.toggle('hidden', !this.open);
     this.triggerEl.classList.toggle('open', this.open);
+    // Focus the search box on open so the user can type immediately.
+    if (this.open && this.searchEl) setTimeout(()=>this.searchEl.focus(), 0);
   }
   render(){
     const optHtml = this.values.map(v=>{ const safe=escapeHtml(v);
@@ -1164,6 +1168,17 @@ class FilterControl {
     this.searchEl.addEventListener('input', ()=>{ const q=this.searchEl.value.toLowerCase();
       this.listEl.querySelectorAll('.cp-option').forEach(o=>{ const t=o.querySelector('.cp-text').textContent.toLowerCase();
         o.classList.toggle('filtered-out', !!q && !t.includes(q)); }); });
+    // Enter → select every option currently matching the search text, apply,
+    // then clear the box so the user can chain more searches without re-opening.
+    this.searchEl.addEventListener('keydown', e=>{ if (e.key!=='Enter') return;
+      e.preventDefault();
+      const q = this.searchEl.value.trim().toLowerCase(); if (!q) return;
+      const matches = [...this.listEl.querySelectorAll('.cp-option:not(.filtered-out) input[type="checkbox"]')];
+      if (!matches.length) return;
+      matches.forEach(cb=>this.selected.add(cb.dataset.val));
+      this.searchEl.value='';
+      this.listEl.querySelectorAll('.cp-option').forEach(o=>o.classList.remove('filtered-out'));
+      this.refresh(); this.onChange(); });
     this.root.querySelector('[data-action="all"]').addEventListener('click', ()=>{ this.values.forEach(v=>this.selected.add(v)); this.refresh(); this.onChange(); });
     this.root.querySelector('[data-action="none"]').addEventListener('click', ()=>{ this.selected.clear(); this.refresh(); this.onChange(); });
     this.listEl.querySelectorAll('input[type="checkbox"]').forEach(cb=>{ cb.addEventListener('change', ()=>{
