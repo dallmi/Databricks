@@ -783,10 +783,23 @@ function updateSiteTitle(){
 // ==== Render ====
 // Filter changes mark every tab dirty; only the visible tab renders (charts can't
 // size themselves inside display:none). Hidden tabs render lazily on switch.
+// Serialise + coalesce renders. Filter clicks fire render() rapidly; without
+// this, overlapping async renders can finish out of order and a stale (e.g.
+// unfiltered) result paints last. We run one render at a time and, if more
+// were requested meanwhile, run once more with the latest filter state.
+let renderRunning=false, renderPending=false;
 async function render(){
-  dirtyTabs = { overview:true, lifecycle:true, audience:true };
-  lastArticles=[]; lastLifecycleKpis=[]; lastEntryPages=[]; lastAudienceKpis=[];
-  await renderActiveTab();
+  renderPending = true;
+  if (renderRunning) return;
+  renderRunning = true;
+  try {
+    while (renderPending){
+      renderPending = false;
+      dirtyTabs = { overview:true, lifecycle:true, audience:true };
+      lastArticles=[]; lastLifecycleKpis=[]; lastEntryPages=[]; lastAudienceKpis=[];
+      await renderActiveTab();
+    }
+  } finally { renderRunning = false; }
 }
 async function renderActiveTab(){
   if (!dirtyTabs[activeTab]) return;
