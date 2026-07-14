@@ -43,6 +43,11 @@ from pathlib import Path
 
 import pandas as pd
 
+# Force line-buffered stdout: on some Windows consoles a fully-buffered pipe
+# means a crash before the buffer fills shows neither output nor a traceback.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parents[0]
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -187,20 +192,27 @@ def main() -> int:
             cov = f"{r['page_coverage']*100:6.1f}%" if "page_coverage" in combo_table.columns else "     –"
             print(f"  {comp:22s} | {label:32s} {r['rows']:>10,} {r['row_share']*100:>6.1f}%  cov={cov}")
 
-    hdr(f"Site-wide chrome candidates (page coverage >= {args.coverage_threshold*100:.0f}%)")
+    hdr(f"Page-coverage >= {args.coverage_threshold*100:.0f}% (REVIEW, not auto-exclude)")
     full_comp = coverage_table(df, "component_name", total_rows, total_pages, top=len(df["component_name"].unique()))
     candidates = full_comp[full_comp.get("page_coverage", 0) >= args.coverage_threshold]
     if candidates.empty:
         print("  None — no component shows up on that large a share of pages. "
               "Either your site is small, or nothing here looks like pure navigation chrome.")
     else:
+        print("  High page coverage is AMBIGUOUS, not a verdict: it also matches a universal")
+        print("  content widget (a rich-text/body editor instantiated on nearly every page) —")
+        print("  excluding one of those silently deletes real content clicks, not noise.")
+        print("  Check every name below against your site's component list before excluding")
+        print("  anything. Names like '...Header...', '...Footer...', '...Nav...', '...Chrome...',")
+        print("  '...CookieBanner...' are safe bets; '...Editor...', '...Text...', '...Content...' are not.\n")
         print_component_table(candidates, "component_name")
         savings_rows = int(candidates["rows"].sum())
-        print(f"\n  Excluding these {len(candidates)} component(s) would have dropped "
+        print(f"\n  If ALL of these were navigation/chrome, excluding them would drop "
               f"{savings_rows:,}/{total_rows:,} rows ({savings_rows/total_rows*100:.1f}%) "
-              "from this export.")
+              "from this export — treat that number as an upper bound, not a target.")
         names = "\", \"".join(str(v) for v in candidates["component_name"])
-        print("\n  Paste into export_site_interactions.kql, right after the click_event filter:")
+        print("\n  Once you've pruned the list above to genuine chrome, paste into")
+        print("  export_site_interactions.kql right after the click_event filter:")
         print(f'    | where ComponentName !in ("{names}")')
         print("  (extend cp = parse_json(...) first if ComponentName isn't already in scope there —")
         print("   see kql/customevents_clicks.kql QUERY 0 for the full extend/project pattern.)")
@@ -211,8 +223,19 @@ def main() -> int:
         full_comp.to_csv(out_path, index=False)
         print(f"\nFull component breakdown written to {out_path}")
 
+    print("\nDone.")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Belt-and-braces: guarantee SOME output even on an exception class that
+    # would otherwise print nothing on this console (seen once on Windows —
+    # command returned to the prompt with neither a result nor a traceback).
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
