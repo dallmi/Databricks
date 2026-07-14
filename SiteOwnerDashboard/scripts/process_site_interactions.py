@@ -100,7 +100,7 @@ IX_KEY_COLS = ["user_id", "session_id", "page_id",
 # Denormalised output columns (kept when present). hr_* columns are appended
 # dynamically. One wide table, page attributes inline per event row.
 IX_COLUMNS = [
-    "event_id", "timestamp", "event_name",
+    "timestamp", "event_name",
     "page_id", "page_key", "page_name", "page_url", "language",
     "site_id", "site_name",
     "content_owner", "content_type", "theme", "topic",

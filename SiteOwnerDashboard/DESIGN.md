@@ -91,7 +91,7 @@ filter therefore never applies to interactions). `export_site_interactions.kql`
 stay out of scope.
 
 **`site_interactions.parquet`** — one wide row per interaction:
-`event_id, timestamp, event_name, page_id, page_key, page_name, page_url,
+`timestamp, event_name, page_id, page_key, page_name, page_url,
 language, site_id, site_name, content_owner, content_type, theme, topic,
 target_region, target_org, page_status, publishing_date, user_id, session_id,
 person_id, email, gpn, client_os, client_browser, client_country, referrer_url,

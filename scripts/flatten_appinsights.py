@@ -108,7 +108,6 @@ DROP_COLUMNS = [
 # where DROP_COLUMNS discards it. customEvents carries no CammsTrackingID.
 
 INTERACTION_FACT_COLUMNS = {
-    "id": "event_id",
     "timestamp [UTC]": "timestamp_utc",
     "name": "event_name",
     "user_Id": "user_id",

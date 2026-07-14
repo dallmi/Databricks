@@ -12,6 +12,11 @@
 // this dashboard phase — see ../kql/customevents_clicks.kql QUERY 1 to
 // inventory the other event families.
 //
+// Unlike pageViews, customEvents has no `id` column in this workspace —
+// projecting it throws a semantic error. Not needed: the pipeline's dedup
+// key (event_key) is built from timestamp+user+session+page+component+link,
+// not a source id.
+//
 // Procedure:
 //   1. Set PageUrlFilter to the SAME substring you used for the pageViews
 //      export (matched case-insensitively against CustomProps.PageURL).
@@ -39,7 +44,6 @@ customEvents
        contains PageUrlFilter
 | project
     timestamp,
-    id,
     name,                     // <-- event-family discriminator, keep
     customDimensions,         // <-- keep as raw JSON string for the pipeline
     session_Id,

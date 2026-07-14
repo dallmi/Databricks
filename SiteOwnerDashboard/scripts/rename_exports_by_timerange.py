@@ -7,14 +7,31 @@ names like "query_data.csv". This script inspects every CSV and XLSX file
 directly in the input folder (subfolders are not crawled), determines the
 min and max timestamp inside the file, and renames it to:
 
-    <SiteName>_<minDate>_<maxDate>.<original extension>
-    e.g. Digital_20250601_20250630.csv / Digital_20250601_20250630.xlsx
+    <SiteName>_<pv|ce>_<minDate>_<maxDate>.<original extension>
+    e.g. Digital_pv_20250601_20250630.csv (pageViews export)
+         Digital_ce_20250601_20250630.csv (customEvents/interactions export)
+
+customEvents exports (pv/ce detection below) are additionally MOVED into an
+interactions/ subfolder of whichever folder was scanned — e.g. scanning the
+default input/ moves them to input/interactions/, matching where
+process_site_interactions.py looks. pageViews exports stay put, matching
+where process_site_pageviews.py looks. This lets you drop both export kinds
+into the same input/ folder and have this script sort them out.
 
 The site prefix is read from the file itself: the SiteName property inside
 the customDimensions / CustomProps JSON column (both plain and escaped
 double-nested encodings are handled). If a file contains several site
 names, the most frequent one wins (with a warning); if none can be found,
 the prefix falls back to "Digital".
+
+The pv/ce tag is read from the file's column set, not from the `name`
+column's values — both export_site_pageviews.kql and
+export_site_interactions.kql project a `name` column, but it means
+different things (page title vs. event family), so it isn't a reliable
+discriminator. Instead: pageViews exports uniquely project `url`,
+`duration` and `itemType` (see export_site_pageviews.kql); the
+customEvents export never does (see export_site_interactions.kql). Any of
+those columns present -> "pv", otherwise -> "ce".
 
 Timestamps are taken from the "timestamp [UTC]" column (Azure Portal CSV
 export) or "timestamp" as fallback, and formatted as YYYYMMDD in UTC.
@@ -33,7 +50,7 @@ Usage (from SiteOwnerDashboard/):
 Without an explicit folder argument the script always targets
 SiteOwnerDashboard/input/, regardless of the current working directory.
 
-Files already matching the <prefix>_<min>_<max> pattern are skipped,
+Files already matching the <prefix>_<pv|ce>_<min>_<max> pattern are skipped,
 so the script is safe to re-run after dropping new chunks into input/.
 """
 
@@ -47,8 +64,11 @@ import pandas as pd
 
 TIMESTAMP_COLUMNS = ["timestamp [utc]", "timestamp"]  # matched case-insensitively
 CUSTOM_DIMENSIONS_COLUMNS = ["customdimensions"]  # matched case-insensitively
+# Columns export_site_pageviews.kql projects that export_site_interactions.kql
+# never does — presence discriminates pv from ce regardless of `name` values.
+PAGEVIEWS_ONLY_COLUMNS = {"url", "duration", "itemtype"}  # matched case-insensitively
 SUPPORTED_SUFFIXES = (".csv", ".xlsx")
-RENAMED_PATTERN = re.compile(r"^.+_\d{8}_\d{8}\.(csv|xlsx)$", re.IGNORECASE)
+RENAMED_PATTERN = re.compile(r"^.+_(pv|ce)_\d{8}_\d{8}\.(csv|xlsx)$", re.IGNORECASE)
 FMT = "%Y%m%d"
 FALLBACK_SITE_PREFIX = "Digital"
 DEFAULT_INPUT_DIR = Path(__file__).resolve().parent.parent / "input"
@@ -109,6 +129,12 @@ def extract_site_prefix(values: pd.Series, filename: str) -> str:
     return safe or FALLBACK_SITE_PREFIX
 
 
+def detect_file_type(path: Path, sep: str | None) -> str:
+    """'pv' (pageViews) or 'ce' (customEvents/interactions), from the column set."""
+    cols = {str(c).strip().lower() for c in read_header(path, sep).columns}
+    return "pv" if cols & PAGEVIEWS_ONLY_COLUMNS else "ce"
+
+
 def rename_file(path: Path, dry_run: bool) -> bool:
     if RENAMED_PATTERN.match(path.name):
         print(f"  SKIP {path.name} (already renamed)")
@@ -120,6 +146,7 @@ def rename_file(path: Path, dry_run: bool) -> bool:
         print(f"  SKIP {path.name} (no timestamp column, expected one of {TIMESTAMP_COLUMNS})")
         return False
     cd_col = find_column(path, sep, CUSTOM_DIMENSIONS_COLUMNS)
+    file_type = detect_file_type(path, sep)
 
     data = read_columns(path, [ts_col] + ([cd_col] if cd_col else []), sep)
     ts = pd.to_datetime(
@@ -135,18 +162,29 @@ def rename_file(path: Path, dry_run: bool) -> bool:
         print(f"  NOTE {path.name}: no customDimensions column, using '{FALLBACK_SITE_PREFIX}'")
         prefix = FALLBACK_SITE_PREFIX
 
-    new_name = f"{prefix}_{ts.min().strftime(FMT)}_{ts.max().strftime(FMT)}{path.suffix.lower()}"
-    if new_name == path.name:
+    new_name = (f"{prefix}_{file_type}_{ts.min().strftime(FMT)}_"
+                f"{ts.max().strftime(FMT)}{path.suffix.lower()}")
+
+    # Route ce (customEvents) files into an interactions/ subfolder — unless
+    # we're already scanning one (avoids nesting interactions/interactions/).
+    target_dir = path.parent
+    if file_type == "ce" and path.parent.name.lower() != "interactions":
+        target_dir = path.parent / "interactions"
+    target = target_dir / new_name
+
+    if new_name == path.name and target_dir == path.parent:
         print(f"  OK   {path.name} (name already correct)")
         return False
-
-    target = path.with_name(new_name)
     if target.exists():
-        print(f"  SKIP {path.name} -> {new_name} (target exists — same window exported twice?)")
+        print(f"  SKIP {path.name} -> {target.relative_to(path.parent)} "
+              "(target exists — same window exported twice?)")
         return False
 
-    print(f"  {'WOULD RENAME' if dry_run else 'RENAME'} {path.name} -> {new_name}")
+    action = "MOVE+RENAME" if target_dir != path.parent else "RENAME"
+    print(f"  {'WOULD ' + action if dry_run else action} "
+          f"{path.name} -> {target.relative_to(path.parent)}")
     if not dry_run:
+        target_dir.mkdir(parents=True, exist_ok=True)
         path.rename(target)
     return True
 
