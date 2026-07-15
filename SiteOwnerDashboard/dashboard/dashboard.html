@@ -195,8 +195,12 @@
   .cp-option input[type="checkbox"] { cursor: pointer; margin: 0; flex-shrink: 0; accent-color: var(--primary); }
   .cp-option .cp-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cp-table-actions { display: flex; align-items: center; gap: 0.5rem; }
-  #pagesTable tfoot td, #ixPagesTable tfoot td { padding: 0.45rem 0.75rem; font-weight: 600; border-top: 2px solid var(--grey-1); background: var(--bg); }
-  #pagesTable tfoot td.num, #ixPagesTable tfoot td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Totals rows — GENERIC on purpose (was #pagesTable/#ixPagesTable-scoped, which
+     silently skipped every newer table's tfoot): any table's tfoot gets the same
+     padding as tbody td (global * reset zeroes it otherwise → ~12px offset) and
+     right-aligned .num cells. New tables inherit this — no per-id rule needed. */
+  tfoot td { padding: 0.45rem 0.75rem; font-weight: 600; border-top: 2px solid var(--grey-1); background: var(--bg); }
+  tfoot td.num { text-align: right; font-variant-numeric: tabular-nums; }
   /* Interactions tab: nested link-detail table inside an expanded page row */
   .ix-sub { margin: 0.15rem 0 0.35rem 1.4rem; }
   .ix-sub table { width: calc(100% - 1.4rem); font-size: 0.72rem; }
