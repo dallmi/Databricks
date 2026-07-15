@@ -92,6 +92,31 @@
   .kpi-label { font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; color: var(--grey-4); margin-bottom: 0.3rem; }
   .kpi-value { font-size: 1.55rem; font-weight: 300; color: var(--black); line-height: 1.15; }
   .kpi-sub { font-size: 0.72rem; color: var(--grey-4); margin-top: 0.25rem; display: flex; align-items: center; gap: 0.3rem; }
+  /* Grouped KPI collection cards (Overview only — detail tabs keep .kpi-card).
+     CampaignWe pattern on house tokens: coloured left accent + coloured title,
+     stacked value|delta|label rows, derived rates greyed. */
+  .kpi-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 0.75rem; margin-bottom: 1.25rem; }
+  .kpi-group { background: var(--white); border: 1px solid var(--grey-1); border-left: 3px solid var(--grey-3);
+    border-radius: var(--radius); padding: 0.85rem 1rem; box-shadow: var(--shadow-card); }
+  .kpi-group:hover { box-shadow: var(--shadow-hover); }
+  .kpi-group.reach      { border-left-color: var(--primary); }
+  .kpi-group.engagement { border-left-color: var(--success); }
+  .kpi-group.audience   { border-left-color: var(--warning); }
+  .kpi-group.actions    { border-left-color: var(--primary-dark); }
+  .kpi-group.content    { border-left-color: var(--info); }
+  .kpi-group-title { font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
+    color: var(--grey-4); margin-bottom: 0.4rem; }
+  .kpi-group.reach .kpi-group-title      { color: var(--primary); }
+  .kpi-group.engagement .kpi-group-title { color: var(--success); }
+  .kpi-group.audience .kpi-group-title   { color: var(--warning); }
+  .kpi-group.actions .kpi-group-title    { color: var(--primary-dark); }
+  .kpi-group.content .kpi-group-title    { color: var(--info); }
+  .kpi-row { display: flex; align-items: baseline; gap: 0.45rem; padding: 0.28rem 0; border-bottom: 1px solid var(--surface); }
+  .kpi-row:last-child { border-bottom: none; }
+  .kpi-row .v { font-size: 1.05rem; font-weight: 300; color: var(--black); line-height: 1.15; white-space: nowrap; }
+  .kpi-row.derived .v { font-weight: 400; color: var(--grey-4); }
+  .kpi-row .delta { font-size: 0.62rem; }
+  .kpi-row .l { font-size: 0.72rem; color: var(--grey-4); text-align: right; margin-left: auto; }
   .delta { font-weight: 600; } .delta.up { color: var(--success); } .delta.down { color: var(--bordeaux-1); } .delta.flat { color: var(--grey-4); }
 
   .charts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
@@ -305,7 +330,7 @@
 
     <div id="dashboard" style="display:none;">
       <div class="tab-content active" id="tab-overview">
-        <div class="kpi-grid" id="kpiGrid"></div>
+        <div class="kpi-groups" id="kpiGrid"></div>
         <div class="charts-grid">
           <div class="chart-card full-width">
             <div class="chart-title">
@@ -997,23 +1022,78 @@ async function metricsFor(a,b){
   return { views, visits, uniques, avgSession: avg.a, engagement: visits? uniques/visits : 0 };
 }
 
+// Content pulse for the Overview groups: distinct pages / languages seen in the
+// window, plus pages PUBLISHED in the window (only when publishing_date exists).
+async function contentMetricsFor(a,b){
+  const c = (await query(`SELECT COUNT(DISTINCT page_key) pages,
+      ${pvCols.has('language') ? `COUNT(DISTINCT language)` : `NULL`} langs
+    FROM pv WHERE ${win(a,b)}`))[0];
+  let published = null;
+  if (hasPubDates){
+    published = Number((await query(`SELECT COUNT(DISTINCT page_key) n FROM pv
+      WHERE publishing_date >= TIMESTAMP '${iso(a)}' AND publishing_date <= TIMESTAMP '${iso(b)}'${filterClause()}`))[0].n);
+  }
+  return { pages:Number(c.pages)||0, langs: c.langs==null?null:Number(c.langs), published };
+}
+
+// Overview = grouped collection cards (CampaignWe pattern): one card per theme,
+// stacked value|delta|label rows. Detail tabs keep the large flat .kpi-card row.
+function kpiRowHtml(r){
+  const delta = r.c!==undefined ? deltaHtml(r.c, r.p==null?null:r.p, r.invert) : '';
+  return `<div class="kpi-row${r.derived?' derived':''}"${r.t?` title="${escapeHtml(r.t)}"`:''}>
+    <span class="v">${r.v}</span>${delta}<span class="l">${r.l}</span></div>`;
+}
+function kpiGroupHtml(title, cls, rows){
+  return `<div class="kpi-group ${cls}"><div class="kpi-group-title">${title}</div>${rows.map(kpiRowHtml).join('')}</div>`;
+}
+
 async function renderKpis(w){
-  const cur = await metricsFor(w.from, w.to);
-  const prev = w.hasPrev ? await metricsFor(w.prevFrom, w.prevTo) : null;
-  const cards = [
-    { cls:'highlight', label:'Page Views', value:fmt(cur.views), c:cur.views, p:prev?prev.views:null, sub:'total page loads' },
-    { cls:'', label:'Page Visits', value:fmt(cur.visits), c:cur.visits, p:prev?prev.visits:null, sub:'sessions started' },
-    { cls:'info', label:'Unique Visitors', value:fmt(cur.uniques), c:cur.uniques, p:prev?prev.uniques:null, sub:'distinct people' },
-    { cls:'', label:'Avg. Session', value:fmtDur(cur.avgSession), c:cur.avgSession, p:prev?prev.avgSession:null, sub:'engaged time on site' },
-    { cls:'success', label:'Engagement', value:cur.engagement.toFixed(2), c:cur.engagement, p:prev?prev.engagement:null, sub:'unique ÷ visits' },
+  const [cur, aud, cont] = await Promise.all([
+    metricsFor(w.from,w.to), audienceKpisFor(w.from,w.to), contentMetricsFor(w.from,w.to) ]);
+  const [prev, audP, contP] = w.hasPrev ? await Promise.all([
+    metricsFor(w.prevFrom,w.prevTo), audienceKpisFor(w.prevFrom,w.prevTo), contentMetricsFor(w.prevFrom,w.prevTo) ])
+    : [null,null,null];
+  const ix  = hasInteractions ? await ixMetricsFor(w.from,w.to) : null;
+  const ixP = hasInteractions && w.hasPrev ? await ixMetricsFor(w.prevFrom,w.prevTo) : null;
+
+  const P = (o,k)=> o ? o[k] : null;
+  const groups = [
+    { title:'Reach', cls:'reach', rows:[
+      { v:fmt(cur.views), l:'Page Views', c:cur.views, p:P(prev,'views') },
+      { v:fmt(cur.visits), l:'Visits', c:cur.visits, p:P(prev,'visits') },
+      { v:fmt(cur.uniques), l:'Unique Visitors', c:cur.uniques, p:P(prev,'uniques') },
+      { v: cur.visits ? (cur.views/cur.visits).toFixed(2) : '–', l:'Views / Visit', derived:true,
+        c: cur.visits ? cur.views/cur.visits : null, p: (prev&&prev.visits) ? prev.views/prev.visits : null },
+    ]},
+    { title:'Engagement', cls:'engagement', rows:[
+      { v:cur.engagement.toFixed(2), l:'Engagement', c:cur.engagement, p:P(prev,'engagement'), t:'unique visitors ÷ visits' },
+      { v:fmtDur(cur.avgSession), l:'Avg. Session', c:cur.avgSession, p:P(prev,'avgSession') },
+      { v:aud.depth.toFixed(2), l:'Pages / Session', c:aud.depth, p:P(audP,'depth') },
+      { v:(aud.bounce*100).toFixed(1)+'%', l:'Bounce Rate', c:aud.bounce, p:P(audP,'bounce'), invert:true, derived:true },
+    ]},
+    { title:'Audience', cls:'audience', rows:[
+      { v:fmt(aud.newu), l:'New Visitors', c:aud.newu, p:P(audP,'newu'), t:'first ever visit in window' },
+      { v:(aud.retShare*100).toFixed(1)+'%', l:'Returning Share', c:aud.retShare, p:P(audP,'retShare'), derived:true },
+      { v:aud.perVisitor.toFixed(2), l:'Visits / Visitor', c:aud.perVisitor, p:P(audP,'perVisitor'), derived:true },
+    ]},
   ];
-  document.getElementById('kpiGrid').innerHTML = cards.map(k=>`
-    <div class="kpi-card ${k.cls}">
-      <div class="kpi-label">${k.label}</div>
-      <div class="kpi-value">${k.value}</div>
-      <div class="kpi-sub">${deltaHtml(k.c,k.p)} <span>${k.sub}</span></div>
-    </div>`).join('');
-  lastKpiRows = cards.map(k=>[k.label, k.value, k.p==null?'':(((k.c-k.p)/k.p)*100).toFixed(1)+'%']);
+  if (ix) groups.push({ title:'Actions', cls:'actions', rows:[
+    { v:fmt(ix.clicks), l:'Clicks', c:ix.clicks, p:P(ixP,'clicks') },
+    { v:fmt(ix.downloads), l:'Downloads', c:ix.downloads, p:P(ixP,'downloads') },
+    { v:fmtPct(ix.ctr), l:'CTR', c:ix.ctr, p:P(ixP,'ctr'), derived:true, t:'clicks ÷ page views' },
+    { v:fmtPct(ix.clickerRate), l:'Clicker Rate', c:ix.clickerRate, p:P(ixP,'clickerRate'), derived:true, t:'clickers ÷ unique visitors' },
+  ]});
+  const contRows = [
+    { v:fmt(cont.pages), l:'Pages Viewed', c:cont.pages, p:P(contP,'pages'), t:'distinct pages with views in window' },
+  ];
+  if (cont.langs!=null) contRows.push({ v:fmt(cont.langs), l:'Languages' });
+  if (cont.published!=null) contRows.push({ v:fmt(cont.published), l:'Pages Published', c:cont.published, p:contP?contP.published:null });
+  groups.push({ title:'Content', cls:'content', rows:contRows });
+
+  document.getElementById('kpiGrid').innerHTML =
+    groups.map(g=>kpiGroupHtml(g.title, g.cls, g.rows)).join('');
+  lastKpiRows = groups.flatMap(g=>g.rows.map(r=>[g.title, r.l, r.v,
+    (r.c==null||r.p==null||r.p===0) ? '' : (((r.c-r.p)/r.p)*100).toFixed(1)+'%']));
 }
 
 async function renderTraffic(w){
@@ -3065,7 +3145,7 @@ async function exportXlsx(evt){
     if (hasPubDates && !lastLifecycleKpis.length) await computeLifecycle(w);
     const wb=new ExcelJS.Workbook(); wb.creator='Site Owner Dashboard'; wb.created=new Date();
     const wsK=wb.addWorksheet('KPIs');
-    sheetTable(wsK,1,['Metric','Value','MoM'], lastKpiRows,[false,true,true]);
+    sheetTable(wsK,1,['Group','Metric','Value','MoM'], lastKpiRows,[false,false,true,true]);
     const wsP=wb.addWorksheet('Pages');
     const pRows=[...lastPages].sort((a,b)=>b.visits-a.visits).map(r=>[r.name,r.ct,r.views,r.visits,r.uniques,
       +r.engagement.toFixed(2), r.avg_tos==null?'':Math.round(r.avg_tos), r.mom==null?'':(r.mom.toFixed(1)+'%')]);
