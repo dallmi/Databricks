@@ -19,6 +19,11 @@ Bilder/
 # Same sensitivity as the section above — the shots show real telemetry.
 .playwright-mcp/
 
+# Per-session git worktrees. A worktree checkout inside the repo is picked up by
+# `git add -A` as a gitlink (mode 160000) with no .gitmodules entry — that shipped
+# once already and broke `git submodule status` for every clone.
+.claude/worktrees/
+
 # macOS
 .DS_Store
 **/.DS_Store
