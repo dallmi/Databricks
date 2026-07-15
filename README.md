@@ -70,11 +70,14 @@ pip install pandas duckdb openpyxl pyarrow
 | view_id | Primary key (from AppInsights) |
 | timestamp | Event time (CET) |
 | page_id | FK to dim_page |
-| user_id | Anonymous browser ID (for unique visitor counts) |
-| session_id | Session grouping |
+| user_id | Anonymous browser ID (source column; near-unique per view on the corp source — do NOT count visitors on it) |
+| session_id | OFFICIAL AppInsights session id (company standard for visit counts; resets on most navigations — 92% single-view sessions on corp data) |
+| person_id | Derived: GPN where present, else `anon:<user_id>` — the unique-visitor unit |
+| visit_id | Derived: person + 30-min inactivity rule — the time/engagement grouping unit |
 | page_load_ms | Page load time (performance metric) |
-| time_on_page_sec | Time until next view in session (engagement metric) |
-| is_last_in_session | True = last page, time_on_page not measurable |
+| time_on_page_sec | Time until next view in the OFFICIAL session (kept for reconciliation/QA — almost always NULL on corp data) |
+| time_on_page_visit_sec | Time until the same person's next view within the visit — **the engagement metric** |
+| is_last_in_session | True = last page of the official session, time_on_page not measurable |
 | referrer_url | Where the user came from |
 | client_os / client_browser / client_country | Client info |
 | gpn / email | Visitor identity (temporary, for HR join validation) |
@@ -83,7 +86,11 @@ pip install pandas duckdb openpyxl pyarrow
 | hr_job_title / hr_management_level | Role info from HR |
 | source_file | Input filename (for upsert tracking) |
 
-### agg_session (1 row per session, derived from fact_page_view)
+### agg_session (1 row per OFFICIAL session, derived from fact_page_view)
+
+Kept because the official session_id is the company standard for visit counts.
+Its engagement columns have almost no signal on corp data (92% single-view
+sessions) — use agg_visit for time/engagement analysis.
 
 | Column | Description |
 |---|---|
@@ -96,6 +103,21 @@ pip install pandas duckdb openpyxl pyarrow
 | entry_page_id / exit_page_id | First and last page |
 | is_bounce | True if only 1 page view |
 | hr_* | HR dimensions (from first view in session) |
+
+### agg_visit (1 row per reconstructed visit — time & engagement metrics read THIS table)
+
+| Column | Description |
+|---|---|
+| visit_id | Primary key (person + 30-min inactivity rule) |
+| person_id | The visitor (GPN, else `anon:<user_id>`) |
+| visit_date / visit_start / visit_end | Timing |
+| duration_sec | Last view minus first view |
+| engagement_time_sec | Sum of time_on_page_visit_sec |
+| avg_time_on_page_sec | Average per page (last view of the visit excluded) |
+| page_view_count | Pages viewed in the visit |
+| entry_page_id / exit_page_id | First and last page |
+| is_bounce | True if only 1 page view |
+| hr_* | HR dimensions (from first view in visit) |
 
 ### dim_page (deduplicated page metadata)
 
@@ -110,12 +132,12 @@ date_key (YYYYMMDD), date, year, quarter, month, month_name, week, day_of_week
 | Metric | How to compute |
 |---|---|
 | Views | `COUNT(*)` from fact_page_view |
-| Unique Visitors | `COUNT(DISTINCT user_id)` from fact_page_view |
-| Sessions / Visits | `COUNT(*)` from agg_session |
-| Bounce Rate | `AVG(is_bounce)` from agg_session |
-| Avg Pages/Session | `AVG(page_view_count)` from agg_session |
-| Avg Time on Page | `AVG(time_on_page_sec)` from fact_page_view |
-| Avg Session Duration | `AVG(engagement_time_sec)` from agg_session |
+| Unique Visitors | `COUNT(DISTINCT person_id)` from fact_page_view (user_id is near-unique per view — never count on it) |
+| Sessions / Visits | `COUNT(*)` from agg_session (official session_id — company standard) |
+| Bounce Rate | `AVG(is_bounce)` from agg_visit |
+| Avg Pages/Visit | `AVG(page_view_count)` from agg_visit |
+| Avg Time on Page | `AVG(time_on_page_visit_sec)` from fact_page_view |
+| Avg Visit Duration | `AVG(engagement_time_sec)` from agg_visit |
 
 ## Delta Load & Upsert
 
@@ -220,10 +242,12 @@ WITH email AS (
   FROM fact_email GROUP BY 1
 ),
 intranet AS (
+  -- person_id / time_on_page_visit_sec, NOT user_id / time_on_page_sec:
+  -- user_id and session_id are near-unique per view on the corp source.
   SELECT tracking_pack_id,
-         COUNT(*)                 AS views,
-         COUNT(DISTINCT user_id)  AS unique_readers,
-         AVG(time_on_page_sec)    AS avg_tos
+         COUNT(*)                        AS views,
+         COUNT(DISTINCT person_id)       AS unique_readers,
+         AVG(time_on_page_visit_sec)     AS avg_tos
   FROM fact_page_view GROUP BY 1
 ),
 events AS (

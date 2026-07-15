@@ -93,6 +93,7 @@ from flatten_appinsights import (  # noqa: E402
     join_hr_data,
     build_fact_page_view,
     build_dim_page,
+    derive_person_visit,
     strip_tz,
 )
 
@@ -256,97 +257,17 @@ def upsert_store(store: pd.DataFrame | None, new: pd.DataFrame,
 
 # --- Person / visit derivation (metrics only — source columns untouched) -----
 # The dashboard counts VISITS on the official AppInsights `session_id` (the
-# company standard, so our numbers reconcile with other company reports). We
-# keep our OWN 30-min reconstruction as `visit_id` alongside it for comparison
-# (see reconcile_visit_session.py) — the real session_id has a ~30-min
-# inactivity timeout but also renews within a sitting (~48% persistence below
-# 30 min), so visit_id is the cleaner grouping; both are available.
+# company standard, so our numbers reconcile with other company reports), and
+# TIME metrics (Avg time / Avg. Session) on the reconstructed `visit_id` — the
+# official session_id resets on most navigations (92% single-view sessions on
+# corp data), so session-based time-on-page has (almost) no measurable rows.
+# Unique Visitors = `person_id` (CustomProps.GPN; user_Id is per-device).
 #
-# The real person lives in CustomProps.GPN (the `gpn` column). Since user_Id is
-# an anonymous per-device id, Unique Visitors is counted on `person_id`.
-#
-# Source columns user_id / session_id are kept AS-IS. AFTER the full store is
-# assembled we ADD:
-#   person_id              = GPN where present, else 'anon:<user_id>' (Unique Visitors).
-#   visit_id               = our 30-min-gap reconstruction per person.
-#   time_on_page_sec       = gap to next view in the OFFICIAL session_id (QA).
-#   time_on_page_visit_sec = gap to next view in the reconstructed visit_id —
-#     what the dashboard's Avg time / Avg. Session read. The official
-#     session_id resets on most navigations (92% single-view sessions on corp
-#     data), so session-based time-on-page has (almost) no measurable rows.
-#
-# This runs on the WHOLE store every run (deterministic, safe under the upsert).
-SESSION_GAP_MIN = 30
-
-
-def derive_person_visit(df: pd.DataFrame) -> pd.DataFrame:
-    if "timestamp" not in df.columns:
-        print("  Person/visit: no timestamp column — skipping derivation")
-        return df
-    df = df.copy()
-    n = len(df)
-
-    # 1. person_id: GPN, else anonymous device id (never collapse anon → 1)
-    if "gpn" in df.columns:
-        person = df["gpn"].astype("string")
-    else:
-        person = pd.Series(pd.NA, index=df.index, dtype="string")
-    gpn_present = int(person.notna().sum())
-    if "user_id" in df.columns:
-        person = person.fillna("anon:" + df["user_id"].astype("string").fillna(""))
-    else:
-        person = person.fillna("anon:unknown")
-    df["person_id"] = person
-
-    # 2. visit_id: OUR reconstruction — new visit when the person changes or
-    #    after an inactivity gap. Kept for comparison; not what the dashboard
-    #    counts (that is the official session_id).
-    ts = pd.to_datetime(df["timestamp"], errors="coerce")
-    order = df[["person_id"]].assign(_ts=ts).sort_values(
-        ["person_id", "_ts"], kind="mergesort")
-    gap_min = order["_ts"].diff().dt.total_seconds().div(60)
-    new_visit = (order["person_id"] != order["person_id"].shift(1)) | (gap_min > SESSION_GAP_MIN) | gap_min.isna()
-    # pandas>=3 str columns yield arrow-backed booleans, which lack a cumsum
-    # kernel — cast to plain numpy bool first.
-    visit_no = new_visit.astype(bool).cumsum()
-    df["visit_id"] = (order["person_id"].astype(str) + "#" + visit_no.astype(str)).reindex(df.index)
-
-    # 3. time-on-page over the OFFICIAL session_id (the dashboard's visit unit)
-    if "session_id" in df.columns:
-        order2 = df[["session_id"]].assign(_ts=ts).sort_values(
-            ["session_id", "_ts"], kind="mergesort")
-        nxt = order2.groupby("session_id", sort=False)["_ts"].shift(-1)
-        tos = (nxt - order2["_ts"]).dt.total_seconds()
-        tos = tos.where(tos <= 30 * 60)  # cap runaway gaps (tab left open), keep NaN
-        df["time_on_page_sec"] = tos.reindex(df.index)
-        df["is_last_in_session"] = nxt.isna().reindex(df.index)
-
-    # 4. time-on-page over the reconstructed visit_id. Same gap-to-next-view,
-    #    but grouped by visit, so it survives the source's mid-sitting
-    #    session_id resets (corp data: 92% of session_ids have exactly ONE
-    #    view -> time_on_page_sec is NULL for most rows and its non-NULL rest
-    #    is dominated by same-instant double-fires, shown as "0s" Avg time).
-    #    The dashboard's Avg time / Avg. Session read THIS column; Visits stay
-    #    on the official session_id. No 30-min cap needed: consecutive views
-    #    inside one visit are <= SESSION_GAP_MIN apart by construction.
-    order3 = df[["visit_id"]].assign(_ts=ts).sort_values(
-        ["visit_id", "_ts"], kind="mergesort")
-    nxt3 = order3.groupby("visit_id", sort=False)["_ts"].shift(-1)
-    df["time_on_page_visit_sec"] = (nxt3 - order3["_ts"]).dt.total_seconds().reindex(df.index)
-
-    persons = df["person_id"].nunique()
-    off_visits = df["session_id"].nunique() if "session_id" in df.columns else -1
-    our_visits = df["visit_id"].nunique()
-    anon = n - gpn_present
-    print(f"  Derived: {persons:,} persons ({gpn_present:,}/{n:,} rows have GPN, "
-          f"{anon:,} anonymous)")
-    print(f"  Visits — OFFICIAL session_id: {off_visits:,} ({n/max(off_visits,1):.1f} "
-          f"views/visit)  |  our visit_id (gap {SESSION_GAP_MIN}m): {our_visits:,} "
-          f"({n/max(our_visits,1):.1f} views/visit)")
-    if anon / max(n, 1) > 0.3:
-        print(f"  WARNING: {anon/n:.0%} of views have no GPN — each anonymous view "
-              "counts as its own visitor. Check CustomProps.GPN coverage at the source.")
-    return df
+# The implementation is SHARED with the repo star schema:
+# flatten_appinsights.derive_person_visit adds person_id, visit_id,
+# time_on_page_sec (official session_id, QA), time_on_page_visit_sec and
+# is_last_in_session — source columns stay AS-IS. It runs here on the WHOLE
+# store every run (cross-file visits; deterministic, safe under the upsert).
 
 
 def resolve_hr_path(hr_arg: str | None, no_hr: bool) -> Path | None:

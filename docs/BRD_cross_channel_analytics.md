@@ -147,10 +147,14 @@ WITH email AS (
   FROM silver.fact_email GROUP BY 1
 ),
 intranet AS (
+  -- person_id / time_on_page_visit_sec, NOT user_id / time_on_page_sec:
+  -- the AppInsights user_id and session_id are near-unique per page view on
+  -- the corp source (fresh ids on most navigations), so distinct-counting
+  -- user_id or averaging session-based time-on-page yields no signal.
   SELECT tracking_pack_id,
-         COUNT(*)                AS page_views,
-         COUNT(DISTINCT user_id) AS unique_readers,
-         AVG(time_on_page_sec)   AS avg_time_on_page
+         COUNT(*)                          AS page_views,
+         COUNT(DISTINCT person_id)         AS unique_readers,
+         AVG(time_on_page_visit_sec)       AS avg_time_on_page
   FROM silver.fact_page_view GROUP BY 1
 )
 SELECT p.*, e.*, i.*

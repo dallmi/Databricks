@@ -38,21 +38,21 @@ def build_input() -> pd.DataFrame:
         # the corp pattern. Views: EN entry -> 0.3s redirect (same session,
         # the double-fire that produced the "0s" artifacts) -> article 39.7s
         # later (NEW session) -> back to start 140s later (NEW session again).
-        dict(timestamp=ts("2026-06-01 09:00:00.000"), user_id="devA", session_id="S1", gpn="00123456"),
-        dict(timestamp=ts("2026-06-01 09:00:00.300"), user_id="devA", session_id="S1", gpn="00123456"),
-        dict(timestamp=ts("2026-06-01 09:00:40.000"), user_id="devA", session_id="S2", gpn="00123456"),
-        dict(timestamp=ts("2026-06-01 09:03:00.000"), user_id="devA", session_id="S3", gpn="00123456"),
+        dict(timestamp=ts("2026-06-01 09:00:00.000"), user_id="devA", session_id="S1", gpn="00123456", page_id="p-home"),
+        dict(timestamp=ts("2026-06-01 09:00:00.300"), user_id="devA", session_id="S1", gpn="00123456", page_id="p-home-de"),
+        dict(timestamp=ts("2026-06-01 09:00:40.000"), user_id="devA", session_id="S2", gpn="00123456", page_id="p-article"),
+        dict(timestamp=ts("2026-06-01 09:03:00.000"), user_id="devA", session_id="S3", gpn="00123456", page_id="p-home-de"),
         # Person B (GPN): two views 31 min apart INSIDE one source session —
         # a new visit starts (gap > 30 min), so neither view gets a visit time.
-        dict(timestamp=ts("2026-06-01 10:00:00.000"), user_id="devB", session_id="S9", gpn="00234567"),
-        dict(timestamp=ts("2026-06-01 10:31:00.000"), user_id="devB", session_id="S9", gpn="00234567"),
+        dict(timestamp=ts("2026-06-01 10:00:00.000"), user_id="devB", session_id="S9", gpn="00234567", page_id="p-article"),
+        dict(timestamp=ts("2026-06-01 10:31:00.000"), user_id="devB", session_id="S9", gpn="00234567", page_id="p-home"),
         # Person C (no GPN -> anon:<user_id>): 60s apart, distinct sessions.
-        dict(timestamp=ts("2026-06-01 11:00:00.000"), user_id="devC", session_id="S5", gpn=None),
-        dict(timestamp=ts("2026-06-01 11:01:00.000"), user_id="devC", session_id="S6", gpn=None),
+        dict(timestamp=ts("2026-06-01 11:00:00.000"), user_id="devC", session_id="S5", gpn=None, page_id="p-home"),
+        dict(timestamp=ts("2026-06-01 11:01:00.000"), user_id="devC", session_id="S6", gpn=None, page_id="p-article"),
         # Person D (GPN): exactly 30 min apart — boundary stays ONE visit
         # (new visit only when the gap EXCEEDS 30 min), so the gap is measured.
-        dict(timestamp=ts("2026-06-01 12:00:00.000"), user_id="devD", session_id="S7", gpn="00345678"),
-        dict(timestamp=ts("2026-06-01 12:30:00.000"), user_id="devD", session_id="S8", gpn="00345678"),
+        dict(timestamp=ts("2026-06-01 12:00:00.000"), user_id="devD", session_id="S7", gpn="00345678", page_id="p-home"),
+        dict(timestamp=ts("2026-06-01 12:30:00.000"), user_id="devD", session_id="S8", gpn="00345678", page_id="p-article"),
     ]
     return pd.DataFrame(rows)
 
@@ -105,6 +105,25 @@ def main() -> None:
         assert col in df.columns, f"existing derived column {col} missing"
     # Person A's four views must share ONE visit despite three session_ids.
     assert df["visit_id"].iloc[:4].nunique() == 1, "person A views did not land in one visit"
+
+    # --- agg_visit: the visit-grain twin of agg_session in the shared pipeline
+    from flatten_appinsights import build_agg_visit
+    agg = build_agg_visit(df)
+    assert len(agg) == 5, f"expected 5 visits (A=1, B=2, C=1, D=1), got {len(agg)}"
+
+    a = agg[agg["person_id"] == "00123456"].iloc[0]
+    print("agg_visit (person A: 4 views, 3 source sessions, ONE visit):")
+    check("A engagement_time_sec (0.3+39.7+140)", a["engagement_time_sec"], 180.0)
+    check("A avg_time_on_page_sec", a["avg_time_on_page_sec"], 60.0)
+    check("A duration_sec (first->last view)", a["duration_sec"], 180.0)
+    assert a["page_view_count"] == 4, f"A page_view_count: {a['page_view_count']}"
+    assert a["entry_page_id"] == "p-home" and a["exit_page_id"] == "p-home-de", \
+        f"A entry/exit: {a['entry_page_id']}/{a['exit_page_id']}"
+    assert not a["is_bounce"], "A visit with 4 views must not be a bounce"
+
+    b = agg[agg["person_id"] == "00234567"]
+    assert len(b) == 2 and bool(b["is_bounce"].all()), \
+        "person B must yield two single-view visits (both bounces)"
 
     print("\nAll assertions passed.")
 

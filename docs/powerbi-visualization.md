@@ -43,8 +43,18 @@ This document explains how to build an intranet usage analytics report in Power 
 2. **Rename tables** in Model view:
    - `fact_page_view` → **PageViews**
    - `agg_session` → **Sessions**
+   - `agg_visit` → **Visits**
    - `dim_page` → **Pages**
    - `dim_date` → **DateTable**
+
+   > **Which table for which metric?** The OFFICIAL AppInsights `session_id`
+   > resets on most navigations on the corp source (92% of sessions span
+   > exactly one page view), so **Sessions** is only used to COUNT visits (the
+   > company-standard number) — its behavioural columns carry almost no
+   > signal. All time, engagement and navigation metrics (bounce, depth,
+   > entry/exit, durations) come from **Visits** (reconstructed per person via
+   > GPN + 30-min inactivity rule) and from
+   > `PageViews[time_on_page_visit_sec]`.
 
 3. **Check column types** in Power Query Editor (Transform Data):
 
@@ -53,7 +63,8 @@ This document explains how to build an intranet usage analytics report in Power 
    |--------|------|
    | `timestamp` | DateTime |
    | `view_id`, `page_id`, `session_id`, `user_id` | Text |
-   | `page_load_ms`, `time_on_page_sec` | Decimal Number |
+   | `person_id`, `visit_id` | Text |
+   | `page_load_ms`, `time_on_page_sec`, `time_on_page_visit_sec` | Decimal Number |
    | `is_last_in_session` | True/False |
    | `gpn`, `email` | Text |
    | `referrer_url` | Text |
@@ -67,6 +78,18 @@ This document explains how to build an intranet usage analytics report in Power 
    | `session_date` | Date |
    | `session_start`, `session_end` | DateTime |
    | `session_id`, `user_id`, `gpn`, `email` | Text |
+   | `duration_sec`, `engagement_time_sec`, `avg_time_on_page_sec` | Decimal Number |
+   | `page_view_count` | Whole Number |
+   | `entry_page_id`, `exit_page_id` | Text |
+   | `is_bounce` | True/False |
+   | All `hr_*` columns | Text |
+
+   **Visits:**
+   | Column | Type |
+   |--------|------|
+   | `visit_date` | Date |
+   | `visit_start`, `visit_end` | DateTime |
+   | `visit_id`, `person_id`, `user_id`, `gpn`, `email` | Text |
    | `duration_sec`, `engagement_time_sec`, `avg_time_on_page_sec` | Decimal Number |
    | `page_view_count` | Whole Number |
    | `entry_page_id`, `exit_page_id` | Text |
@@ -111,25 +134,34 @@ This document explains how to build an intranet usage analytics report in Power 
 │ view_id (PK)                                    │     │ page_id (PK) │
 │ view_date ──► DateTable (active)                │*───1│ page_name    │
 │ page_id   ──► Pages (active)                    │     │ site_name    │
-│ session_id                                       │     │ theme, topic │
-│ user_id (for UV counts)                          │     │ content_owner│
-│ time_on_page_sec, page_load_ms                  │     └──────────────┘
+│ session_id, visit_id                             │     │ theme, topic │
+│ person_id (for UV counts — NOT user_id)          │     │ content_owner│
+│ time_on_page_visit_sec (engagement),             │     └──────────────┘
+│ time_on_page_sec (QA), page_load_ms              │
 │ hr_division, hr_region, ...                      │
 └──────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────┐
-│                   Sessions                       │
-│              (aggregated table)                  │
+│           Sessions (official — counts/QA)        │
 │ session_id (PK)                                  │
 │ session_date ──► DateTable (INACTIVE)            │
 │ entry_page_id ──► Pages (INACTIVE)               │
 │ user_id, page_view_count, is_bounce              │
 │ duration_sec, engagement_time_sec                │
+└──────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────┐
+│        Visits (reconstructed — behaviour)        │
+│ visit_id (PK), person_id                         │
+│ visit_date ──► DateTable (INACTIVE)              │
+│ entry_page_id ──► Pages (INACTIVE)               │
+│ page_view_count, is_bounce                       │
+│ duration_sec, engagement_time_sec                │
 │ hr_division, hr_region, ...                      │
 └──────────────────────────────────────────────────┘
 
-⚠️  Sessions relationships are INACTIVE. All Session-based
-    measures MUST use USERELATIONSHIP() to respond to slicers.
+⚠️  Sessions AND Visits relationships are INACTIVE. All measures on
+    these tables MUST use USERELATIONSHIP() to respond to slicers.
 
 ┌──────────────────────┐
 │     _Measures        │
@@ -164,10 +196,12 @@ PageViews has a `timestamp` (DateTime) but needs a Date column for the relations
 | PageViews[page_id] | Pages[page_id] | Many-to-One | Active |
 | Sessions[session_date] | DateTable[date] | Many-to-One | **Inactive** |
 | Sessions[entry_page_id] | Pages[page_id] | Many-to-One | **Inactive** |
+| Visits[visit_date] | DateTable[date] | Many-to-One | **Inactive** |
+| Visits[entry_page_id] | Pages[page_id] | Many-to-One | **Inactive** |
 
 Set cross-filter direction to **Single** for all relationships.
 
-> **Why inactive?** Sessions and PageViews both connect to DateTable and Pages. Power BI allows only one active path per table pair. All Session-based measures must explicitly activate these relationships using `USERELATIONSHIP()`. This is handled in the DAX measures below — just use the correct measure names.
+> **Why inactive?** Sessions/Visits and PageViews both connect to DateTable and Pages. Power BI allows only one active path per table pair. All Session-/Visit-based measures must explicitly activate these relationships using `USERELATIONSHIP()`. This is handled in the DAX measures below — just use the correct measure names.
 
 ---
 
@@ -178,14 +212,15 @@ These columns already exist in the parquet files. Verify they are present:
 | Column | Table | Description | In Parquet? |
 |--------|-------|-------------|-------------|
 | `timestamp` | PageViews | CET datetime | Yes |
-| `time_on_page_sec` | PageViews | Engagement duration (NULL for last page) | Yes |
-| `is_last_in_session` | PageViews | True if last page in session | Yes |
+| `person_id` | PageViews | Visitor identity (GPN, else anon device) | Yes |
+| `visit_id` | PageViews | Reconstructed visit (person + 30-min rule) | Yes |
+| `time_on_page_visit_sec` | PageViews | Engagement duration on the visit grain (NULL for last page of a visit) | Yes |
+| `time_on_page_sec` | PageViews | Session-grain duration — QA only, almost always NULL on corp data | Yes |
+| `is_last_in_session` | PageViews | True if last page in official session | Yes |
 | `page_load_ms` | PageViews | Page load performance | Yes |
 | `hr_division` through `hr_management_level` | PageViews | HR org fields | Yes |
 | `session_date` | Sessions | CET date | Yes |
-| `is_bounce` | Sessions | True if 1 page view only | Yes |
-| `engagement_time_sec` | Sessions | Sum of measurable time-on-page | Yes |
-| `page_view_count` | Sessions | Pages per session | Yes |
+| `visit_date`, `is_bounce`, `engagement_time_sec`, `page_view_count` | Visits | Visit-grain engagement fields | Yes |
 | `theme`, `topic`, `site_name` | Pages | Content classification | Yes |
 
 **Add in Power Query** via Add Column → Custom Column (not in parquet):
@@ -223,34 +258,46 @@ Create a dedicated measures table: Enter Data → empty table → rename to `_Me
 ```dax
 Total Views = COUNTROWS(PageViews)
 
-Unique Visitors = DISTINCTCOUNT(PageViews[user_id])
+// person_id, NOT user_id — the AppInsights user_id is near-unique per
+// page view on the corp source (fresh id on most navigations)
+Unique Visitors = DISTINCTCOUNT(PageViews[person_id])
 
 Views per Visitor =
 DIVIDE([Total Views], [Unique Visitors], 0)
 ```
 
-### Core KPIs (Session-based — require USERELATIONSHIP)
+### Core KPIs (Sessions = official count; Visits = behaviour — require USERELATIONSHIP)
 
 ```dax
+// Company-standard visit count (official AppInsights session_id)
 Total Sessions =
 CALCULATE(
     COUNTROWS(Sessions),
     USERELATIONSHIP(Sessions[session_date], DateTable[date])
 )
 
+Total Visits =
+CALCULATE(
+    COUNTROWS(Visits),
+    USERELATIONSHIP(Visits[visit_date], DateTable[date])
+)
+
+// Behavioural KPIs run on Visits — session_id resets on most navigations,
+// which would report ~92% "bounces" and ~1 page per session regardless of
+// actual behaviour.
 Bounce Rate =
-VAR TotalSess = [Total Sessions]
+VAR TotalV = [Total Visits]
 VAR Bounces =
     CALCULATE(
-        COUNTROWS(FILTER(Sessions, Sessions[is_bounce] = TRUE)),
-        USERELATIONSHIP(Sessions[session_date], DateTable[date])
+        COUNTROWS(FILTER(Visits, Visits[is_bounce] = TRUE)),
+        USERELATIONSHIP(Visits[visit_date], DateTable[date])
     )
-RETURN DIVIDE(Bounces, TotalSess, 0)
+RETURN DIVIDE(Bounces, TotalV, 0)
 
-Avg Pages per Session =
+Avg Pages per Visit =
 CALCULATE(
-    AVERAGE(Sessions[page_view_count]),
-    USERELATIONSHIP(Sessions[session_date], DateTable[date])
+    AVERAGE(Visits[page_view_count]),
+    USERELATIONSHIP(Visits[visit_date], DateTable[date])
 )
 ```
 
@@ -258,7 +305,7 @@ CALCULATE(
 
 ```dax
 Avg Time on Page (sec) =
-AVERAGE(PageViews[time_on_page_sec])
+AVERAGE(PageViews[time_on_page_visit_sec])
 
 Avg Time on Page (formatted) =
 VAR AvgSec = [Avg Time on Page (sec)]
@@ -269,17 +316,17 @@ RETURN
         FORMAT(AvgSec / 86400, "m:ss")
     )
 
-Avg Session Duration (sec) =
+Avg Visit Duration (sec) =
 CALCULATE(
     AVERAGEX(
-        FILTER(Sessions, Sessions[is_bounce] = FALSE),
-        Sessions[engagement_time_sec]
+        FILTER(Visits, Visits[is_bounce] = FALSE),
+        Visits[engagement_time_sec]
     ),
-    USERELATIONSHIP(Sessions[session_date], DateTable[date])
+    USERELATIONSHIP(Visits[visit_date], DateTable[date])
 )
 
-Avg Session Duration (formatted) =
-VAR AvgSec = [Avg Session Duration (sec)]
+Avg Visit Duration (formatted) =
+VAR AvgSec = [Avg Visit Duration (sec)]
 RETURN
     IF(
         ISBLANK(AvgSec),
@@ -289,7 +336,7 @@ RETURN
 
 Measurable Views % =
 DIVIDE(
-    COUNTROWS(FILTER(PageViews, NOT(ISBLANK(PageViews[time_on_page_sec])))),
+    COUNTROWS(FILTER(PageViews, NOT(ISBLANK(PageViews[time_on_page_visit_sec])))),
     [Total Views],
     0
 )
@@ -298,7 +345,7 @@ Avg Page Load (ms) =
 AVERAGE(PageViews[page_load_ms])
 ```
 
-> **Note on Avg Session Duration**: Bounces are excluded (`is_bounce = FALSE`) because bounce sessions have 0 or NULL duration, which would drag the average down artificially. This gives a more meaningful engagement metric for multi-page visits.
+> **Note on Avg Visit Duration**: Bounces are excluded (`is_bounce = FALSE`) because bounce visits have 0 or NULL duration, which would drag the average down artificially. This gives a more meaningful engagement metric for multi-page visits.
 
 ### Content Performance
 
@@ -384,19 +431,19 @@ CALCULATE(
 Page Bounce Rate =
 DIVIDE(
     CALCULATE(
-        COUNTROWS(Sessions),
-        FILTER(Sessions,
-            Sessions[entry_page_id] = SELECTEDVALUE(Pages[page_id])
-            && Sessions[is_bounce] = TRUE()
+        COUNTROWS(Visits),
+        FILTER(Visits,
+            Visits[entry_page_id] = SELECTEDVALUE(Pages[page_id])
+            && Visits[is_bounce] = TRUE()
         ),
-        USERELATIONSHIP(Sessions[session_date], DateTable[date])
+        USERELATIONSHIP(Visits[visit_date], DateTable[date])
     ),
     CALCULATE(
-        COUNTROWS(Sessions),
-        FILTER(Sessions,
-            Sessions[entry_page_id] = SELECTEDVALUE(Pages[page_id])
+        COUNTROWS(Visits),
+        FILTER(Visits,
+            Visits[entry_page_id] = SELECTEDVALUE(Pages[page_id])
         ),
-        USERELATIONSHIP(Sessions[session_date], DateTable[date])
+        USERELATIONSHIP(Visits[visit_date], DateTable[date])
     ),
     0
 )
@@ -431,11 +478,11 @@ CALCULATE(
 | Card | Measure | Format | Notes |
 |------|---------|--------|-------|
 | Total Views | `[Total Views]` | #,0 | |
-| Unique Visitors | `[Unique Visitors]` | #,0 | |
-| Sessions | `[Total Sessions]` | #,0 | Uses USERELATIONSHIP — responds to date slicer |
-| Bounce Rate | `[Bounce Rate]` | 0.0% | Uses USERELATIONSHIP — responds to date slicer |
-| Avg Time on Page | `[Avg Time on Page (formatted)]` | Text | |
-| Avg Pages/Session | `[Avg Pages per Session]` | 0.0 | Uses USERELATIONSHIP — responds to date slicer |
+| Unique Visitors | `[Unique Visitors]` | #,0 | person_id-based |
+| Sessions | `[Total Sessions]` | #,0 | Official count. Uses USERELATIONSHIP — responds to date slicer |
+| Bounce Rate | `[Bounce Rate]` | 0.0% | Visit-based. Uses USERELATIONSHIP — responds to date slicer |
+| Avg Time on Page | `[Avg Time on Page (formatted)]` | Text | Visit-based |
+| Avg Pages/Visit | `[Avg Pages per Visit]` | 0.0 | Visit-based. Uses USERELATIONSHIP — responds to date slicer |
 
 ### Visuals
 
@@ -501,21 +548,21 @@ IF(
 | Bar Chart — By Management Level | PageViews[hr_management_level] | `[Unique Visitors]` | Are senior leaders using the intranet? |
 | Table — Division Detail | PageViews[Division] | `[Total Views]`, `[Unique Visitors]`, `[Avg Time on Page (formatted)]` | |
 
-> **Note on Bounce Rate by Division**: Do not place `[Bounce Rate]` in a table sliced by PageViews[Division]. The Sessions table has its own `hr_division` from the first pageview in the session — use the dedicated measure below instead:
+> **Note on Bounce Rate by Division**: Do not place `[Bounce Rate]` in a table sliced by PageViews[Division]. The Visits table has its own `hr_division` from the first pageview in the visit — use the dedicated measure below instead:
 
 ```dax
 Bounce Rate by Division =
 CALCULATE(
     DIVIDE(
-        COUNTROWS(FILTER(Sessions, Sessions[is_bounce] = TRUE)),
-        COUNTROWS(Sessions),
+        COUNTROWS(FILTER(Visits, Visits[is_bounce] = TRUE)),
+        COUNTROWS(Visits),
         0
     ),
-    USERELATIONSHIP(Sessions[session_date], DateTable[date])
+    USERELATIONSHIP(Visits[visit_date], DateTable[date])
 )
 ```
 
-This measure uses the Sessions table's own Division column (which is in filter context when sliced by Sessions[Division]).
+This measure uses the Visits table's own Division column (which is in filter context when sliced by Visits[Division]).
 
 ### Slicers
 
@@ -524,17 +571,17 @@ This measure uses the Sessions table's own Division column (which is in filter c
 
 ---
 
-## 8. Page 4 — Sessions & Engagement
+## 8. Page 4 — Visits & Engagement
 
-**Purpose**: How visitors navigate the intranet — session depth, bounces, entry/exit pages.
+**Purpose**: How visitors navigate the intranet — visit depth, bounces, entry/exit pages. All on the **Visits** table: the official session_id resets on most navigations, so session-grain navigation metrics would show every page as an entry AND an exit and ~92% bounces.
 
 ### KPI Cards
 
 | Card | Measure | Format |
 |------|---------|--------|
 | Bounce Rate | `[Bounce Rate]` | 0.0% |
-| Avg Pages/Session | `[Avg Pages per Session]` | 0.0 |
-| Avg Session Duration | `[Avg Session Duration (formatted)]` | Text |
+| Avg Pages/Visit | `[Avg Pages per Visit]` | 0.0 |
+| Avg Visit Duration | `[Avg Visit Duration (formatted)]` | Text |
 
 All three use USERELATIONSHIP and respond to the date slicer.
 
@@ -542,33 +589,33 @@ All three use USERELATIONSHIP and respond to the date slicer.
 
 | Visual | Axis / Legend | Values | Notes |
 |--------|--------------|--------|-------|
-| Histogram — Pages per Session | Sessions[page_view_count] | Count of session_id | Distribution: how deep do users go? |
-| Bar Chart — Top Entry Pages | Pages[page_name] | `[Entry Page Sessions]` | Where users land |
-| Bar Chart — Top Exit Pages | Pages[page_name] | `[Exit Page Sessions]` | Where users leave |
+| Histogram — Pages per Visit | Visits[page_view_count] | Count of visit_id | Distribution: how deep do users go? |
+| Bar Chart — Top Entry Pages | Pages[page_name] | `[Entry Page Visits]` | Where users land |
+| Bar Chart — Top Exit Pages | Pages[page_name] | `[Exit Page Visits]` | Where users leave |
 | Bar Chart — Bounce Rate by Page | Pages[page_name] | `[Page Bounce Rate]` | Which pages lose users immediately? |
 | Line Chart — Bounce Rate Trend | DateTable[date] | `[Bounce Rate]` | Is it improving? |
 
 ### Entry/Exit Page Measures
 
-Because Sessions → Pages is inactive, use explicit FILTER:
+Because Visits → Pages is inactive, use explicit FILTER:
 
 ```dax
-Entry Page Sessions =
+Entry Page Visits =
 CALCULATE(
-    COUNTROWS(Sessions),
-    FILTER(Sessions,
-        Sessions[entry_page_id] = SELECTEDVALUE(Pages[page_id])
+    COUNTROWS(Visits),
+    FILTER(Visits,
+        Visits[entry_page_id] = SELECTEDVALUE(Pages[page_id])
     ),
-    USERELATIONSHIP(Sessions[session_date], DateTable[date])
+    USERELATIONSHIP(Visits[visit_date], DateTable[date])
 )
 
-Exit Page Sessions =
+Exit Page Visits =
 CALCULATE(
-    COUNTROWS(Sessions),
-    FILTER(Sessions,
-        Sessions[exit_page_id] = SELECTEDVALUE(Pages[page_id])
+    COUNTROWS(Visits),
+    FILTER(Visits,
+        Visits[exit_page_id] = SELECTEDVALUE(Pages[page_id])
     ),
-    USERELATIONSHIP(Sessions[session_date], DateTable[date])
+    USERELATIONSHIP(Visits[visit_date], DateTable[date])
 )
 ```
 
@@ -597,7 +644,7 @@ View → Sync Slicers → enable sync across all pages for Date Range and Site.
 
 - The Date slicer filters **DateTable**, which flows to **PageViews** (active) but **not Sessions** (inactive). All Session measures handle this via `USERELATIONSHIP()`.
 - The Site slicer filters **Pages**, which flows to **PageViews** (active) but **not Sessions** (inactive). Session measures that need page context use explicit `FILTER()`.
-- Division/Region slicers filter **PageViews** directly. For Session visuals on Page 4, add a separate slicer on Sessions[Division] if needed.
+- Division/Region slicers filter **PageViews** directly. For Visit visuals on Page 4, add a separate slicer on Visits[Division] if needed.
 
 ### Cross-Filter Tips
 
@@ -611,16 +658,23 @@ View → Sync Slicers → enable sync across all pages for Date Range and Site.
 
 ### Time on Page
 
-- `time_on_page_sec` is NULL for the **last page** in every session and for gaps **>30 minutes**
+- Time metrics use `time_on_page_visit_sec` (visit grain). The session-grain
+  `time_on_page_sec` is kept for reconciliation/QA only: the official
+  session_id resets on most navigations on the corp source (92% single-view
+  sessions), so `AVERAGE(time_on_page_sec)` degenerates to an average over a
+  handful of same-instant double-fire artifacts — dashboards showed "0s" on
+  100k-view pages before the switch.
+- `time_on_page_visit_sec` is NULL for the **last page** of every visit (no
+  next view to measure against)
 - DAX `AVERAGE` ignores NULLs — this is correct behaviour, but means the average is based only on measurable views
 - Use `[Measurable Views %]` to monitor what fraction of views have a valid time-on-page
 - When filtering to a single page with few views, the average may be volatile (small sample)
 
-### Session Duration
+### Visit Duration
 
-- `[Avg Session Duration]` **excludes bounces** (sessions with only 1 page view) because their duration is 0 by definition
+- `[Avg Visit Duration]` **excludes bounces** (visits with only 1 page view) because their duration is 0 by definition
 - This gives a more meaningful engagement metric but means the measure only reflects multi-page visits
-- The bounce rate tells you what fraction of sessions are excluded
+- The bounce rate tells you what fraction of visits are excluded
 
 ### HR Division Slicing
 
@@ -653,65 +707,74 @@ All measures in one place for easy copy-paste.
 
 Total Views = COUNTROWS(PageViews)
 
-Unique Visitors = DISTINCTCOUNT(PageViews[user_id])
+// person_id, NOT user_id — user_id is near-unique per view on the corp source
+Unique Visitors = DISTINCTCOUNT(PageViews[person_id])
 
 Views per Visitor =
 DIVIDE([Total Views], [Unique Visitors], 0)
 
 
 // ============================================================
-// CORE KPIs (Session-based — all use USERELATIONSHIP)
+// CORE KPIs (Sessions = official count, Visits = behaviour —
+// all use USERELATIONSHIP)
 // ============================================================
 
+// Company-standard visit count (official AppInsights session_id)
 Total Sessions =
 CALCULATE(
     COUNTROWS(Sessions),
     USERELATIONSHIP(Sessions[session_date], DateTable[date])
 )
 
+Total Visits =
+CALCULATE(
+    COUNTROWS(Visits),
+    USERELATIONSHIP(Visits[visit_date], DateTable[date])
+)
+
 Bounce Rate =
-VAR TotalSess = [Total Sessions]
+VAR TotalV = [Total Visits]
 VAR Bounces =
     CALCULATE(
-        COUNTROWS(FILTER(Sessions, Sessions[is_bounce] = TRUE)),
-        USERELATIONSHIP(Sessions[session_date], DateTable[date])
+        COUNTROWS(FILTER(Visits, Visits[is_bounce] = TRUE)),
+        USERELATIONSHIP(Visits[visit_date], DateTable[date])
     )
-RETURN DIVIDE(Bounces, TotalSess, 0)
+RETURN DIVIDE(Bounces, TotalV, 0)
 
-Avg Pages per Session =
+Avg Pages per Visit =
 CALCULATE(
-    AVERAGE(Sessions[page_view_count]),
-    USERELATIONSHIP(Sessions[session_date], DateTable[date])
+    AVERAGE(Visits[page_view_count]),
+    USERELATIONSHIP(Visits[visit_date], DateTable[date])
 )
 
 
 // ============================================================
-// ENGAGEMENT
+// ENGAGEMENT (visit grain — session-grain time has no signal)
 // ============================================================
 
-Avg Time on Page (sec) = AVERAGE(PageViews[time_on_page_sec])
+Avg Time on Page (sec) = AVERAGE(PageViews[time_on_page_visit_sec])
 
 Avg Time on Page (formatted) =
 VAR AvgSec = [Avg Time on Page (sec)]
 RETURN IF(ISBLANK(AvgSec), BLANK(), FORMAT(AvgSec / 86400, "m:ss"))
 
 // Excludes bounces — their duration is 0 by definition
-Avg Session Duration (sec) =
+Avg Visit Duration (sec) =
 CALCULATE(
     AVERAGEX(
-        FILTER(Sessions, Sessions[is_bounce] = FALSE),
-        Sessions[engagement_time_sec]
+        FILTER(Visits, Visits[is_bounce] = FALSE),
+        Visits[engagement_time_sec]
     ),
-    USERELATIONSHIP(Sessions[session_date], DateTable[date])
+    USERELATIONSHIP(Visits[visit_date], DateTable[date])
 )
 
-Avg Session Duration (formatted) =
-VAR AvgSec = [Avg Session Duration (sec)]
+Avg Visit Duration (formatted) =
+VAR AvgSec = [Avg Visit Duration (sec)]
 RETURN IF(ISBLANK(AvgSec), BLANK(), FORMAT(AvgSec / 86400, "m:ss"))
 
 Measurable Views % =
 DIVIDE(
-    COUNTROWS(FILTER(PageViews, NOT(ISBLANK(PageViews[time_on_page_sec])))),
+    COUNTROWS(FILTER(PageViews, NOT(ISBLANK(PageViews[time_on_page_visit_sec])))),
     [Total Views], 0
 )
 
@@ -755,10 +818,10 @@ Unique Divisions = DISTINCTCOUNT(PageViews[hr_division])
 Bounce Rate by Division =
 CALCULATE(
     DIVIDE(
-        COUNTROWS(FILTER(Sessions, Sessions[is_bounce] = TRUE)),
-        COUNTROWS(Sessions), 0
+        COUNTROWS(FILTER(Visits, Visits[is_bounce] = TRUE)),
+        COUNTROWS(Visits), 0
     ),
-    USERELATIONSHIP(Sessions[session_date], DateTable[date])
+    USERELATIONSHIP(Visits[visit_date], DateTable[date])
 )
 
 
@@ -800,38 +863,38 @@ CALCULATE([Total Views], DATESYTD(DateTable[date]))
 
 Page Bounce Rate =
 VAR CurrentPage = SELECTEDVALUE(Pages[page_id])
-VAR EntrySessions =
+VAR EntryVisits =
     CALCULATE(
-        COUNTROWS(Sessions),
-        FILTER(Sessions, Sessions[entry_page_id] = CurrentPage),
-        USERELATIONSHIP(Sessions[session_date], DateTable[date])
+        COUNTROWS(Visits),
+        FILTER(Visits, Visits[entry_page_id] = CurrentPage),
+        USERELATIONSHIP(Visits[visit_date], DateTable[date])
     )
 VAR BounceEntries =
     CALCULATE(
-        COUNTROWS(Sessions),
-        FILTER(Sessions,
-            Sessions[entry_page_id] = CurrentPage
-            && Sessions[is_bounce] = TRUE),
-        USERELATIONSHIP(Sessions[session_date], DateTable[date])
+        COUNTROWS(Visits),
+        FILTER(Visits,
+            Visits[entry_page_id] = CurrentPage
+            && Visits[is_bounce] = TRUE),
+        USERELATIONSHIP(Visits[visit_date], DateTable[date])
     )
-RETURN DIVIDE(BounceEntries, EntrySessions, 0)
+RETURN DIVIDE(BounceEntries, EntryVisits, 0)
 
-Entry Page Sessions =
+Entry Page Visits =
 CALCULATE(
-    COUNTROWS(Sessions),
-    FILTER(Sessions,
-        Sessions[entry_page_id] = SELECTEDVALUE(Pages[page_id])
+    COUNTROWS(Visits),
+    FILTER(Visits,
+        Visits[entry_page_id] = SELECTEDVALUE(Pages[page_id])
     ),
-    USERELATIONSHIP(Sessions[session_date], DateTable[date])
+    USERELATIONSHIP(Visits[visit_date], DateTable[date])
 )
 
-Exit Page Sessions =
+Exit Page Visits =
 CALCULATE(
-    COUNTROWS(Sessions),
-    FILTER(Sessions,
-        Sessions[exit_page_id] = SELECTEDVALUE(Pages[page_id])
+    COUNTROWS(Visits),
+    FILTER(Visits,
+        Visits[exit_page_id] = SELECTEDVALUE(Pages[page_id])
     ),
-    USERELATIONSHIP(Sessions[session_date], DateTable[date])
+    USERELATIONSHIP(Visits[visit_date], DateTable[date])
 )
 
 

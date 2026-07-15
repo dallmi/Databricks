@@ -5,8 +5,15 @@ a CDM-based star schema.
 Reads CSV or XLSX files exported from Azure AppInsights, flattens the nested
 customDimensions JSON column, converts timestamps from UTC to CET, joins with
 HR snapshot data (hr_history.parquet) using temporal GPN matching, computes
-time-on-page and session-level engagement metrics, and persists everything in
-a DuckDB database with SHA-256-based delta loading and upsert semantics.
+time-on-page and engagement metrics, and persists everything in a DuckDB
+database with SHA-256-based delta loading and upsert semantics.
+
+Engagement metrics come at two grains: the OFFICIAL AppInsights session_id
+(reconciles with other company reports; kept for counts + QA) and the
+reconstructed visit (person via CustomProps.GPN + 30-min inactivity rule).
+Time metrics MUST use the visit grain: on the corp source the session_id is
+minted fresh on most navigations (92% single-view sessions), so session-based
+time-on-page/bounce/depth have almost no signal.
 
 Usage:
     # Process all files in input/ (default, no args needed)
@@ -24,8 +31,11 @@ Usage:
 
 Output (written to <input_dir>/output/ by default, override with -o):
     pageviews.duckdb          -- persistent DuckDB with all tables + manifest
-    fact_page_view.parquet    -- one row per page view
-    agg_session.parquet       -- one row per session
+    fact_page_view.parquet    -- one row per page view (incl. person_id,
+                                 visit_id, time_on_page_visit_sec)
+    agg_session.parquet       -- one row per OFFICIAL session (counts/QA)
+    agg_visit.parquet         -- one row per reconstructed visit (time and
+                                 engagement metrics read THIS table)
     dim_page.parquet          -- page dimension (deduplicated)
     dim_date.parquet          -- date dimension
     pageviews_cdm.xlsx        -- all sheets in one Excel file for review
@@ -526,6 +536,82 @@ def build_fact_page_view(flat: pd.DataFrame, source_file: str) -> pd.DataFrame:
     return fact
 
 
+# --- Person / visit derivation (shared; metrics only — source columns kept) --
+# The official AppInsights session_id is minted fresh on most navigations on
+# the corp source (92% of sessions span exactly ONE view — verified via
+# SiteOwnerDashboard/scripts/reconcile_visit_session.py on the real store), so
+# session-grouped metrics (time-on-page, bounce, depth) have almost no signal.
+# person_id (GPN, else anonymous device id) + visit_id (30-min inactivity rule,
+# calibrated to the source's own session timeout) are the usable grouping.
+# Consumers: SiteOwnerDashboard store (re-run on the FULL store) and the star
+# schema built here (re-run on the full fact before the agg rebuild).
+SESSION_GAP_MIN = 30
+
+
+def derive_person_visit(df: pd.DataFrame) -> pd.DataFrame:
+    if "timestamp" not in df.columns:
+        log("  Person/visit: no timestamp column — skipping derivation")
+        return df
+    df = df.copy()
+    n = len(df)
+
+    # 1. person_id: GPN, else anonymous device id (never collapse anon → 1)
+    if "gpn" in df.columns:
+        person = df["gpn"].astype("string")
+    else:
+        person = pd.Series(pd.NA, index=df.index, dtype="string")
+    gpn_present = int(person.notna().sum())
+    if "user_id" in df.columns:
+        person = person.fillna("anon:" + df["user_id"].astype("string").fillna(""))
+    else:
+        person = person.fillna("anon:unknown")
+    df["person_id"] = person
+
+    # 2. visit_id: new visit when the person changes or after an inactivity gap.
+    ts = pd.to_datetime(df["timestamp"], errors="coerce")
+    order = df[["person_id"]].assign(_ts=ts).sort_values(
+        ["person_id", "_ts"], kind="mergesort")
+    gap_min = order["_ts"].diff().dt.total_seconds().div(60)
+    new_visit = (order["person_id"] != order["person_id"].shift(1)) | (gap_min > SESSION_GAP_MIN) | gap_min.isna()
+    # pandas>=3 str columns yield arrow-backed booleans, which lack a cumsum
+    # kernel — cast to plain numpy bool first.
+    visit_no = new_visit.astype(bool).cumsum()
+    df["visit_id"] = (order["person_id"].astype(str) + "#" + visit_no.astype(str)).reindex(df.index)
+
+    # 3. time-on-page over the OFFICIAL session_id (kept for reconciliation/QA)
+    if "session_id" in df.columns:
+        order2 = df[["session_id"]].assign(_ts=ts).sort_values(
+            ["session_id", "_ts"], kind="mergesort")
+        nxt = order2.groupby("session_id", sort=False)["_ts"].shift(-1)
+        tos = (nxt - order2["_ts"]).dt.total_seconds()
+        tos = tos.where(tos <= TIME_ON_PAGE_CAP_SEC)  # cap runaway gaps, keep NaN
+        df["time_on_page_sec"] = tos.reindex(df.index)
+        df["is_last_in_session"] = nxt.isna().reindex(df.index)
+
+    # 4. time-on-page over the reconstructed visit_id — what Avg time /
+    #    Avg. Session metrics read (see block comment above). No cap needed:
+    #    consecutive views inside one visit are <= SESSION_GAP_MIN apart by
+    #    construction.
+    order3 = df[["visit_id"]].assign(_ts=ts).sort_values(
+        ["visit_id", "_ts"], kind="mergesort")
+    nxt3 = order3.groupby("visit_id", sort=False)["_ts"].shift(-1)
+    df["time_on_page_visit_sec"] = (nxt3 - order3["_ts"]).dt.total_seconds().reindex(df.index)
+
+    persons = df["person_id"].nunique()
+    off_visits = df["session_id"].nunique() if "session_id" in df.columns else -1
+    our_visits = df["visit_id"].nunique()
+    anon = n - gpn_present
+    log(f"  Derived: {persons:,} persons ({gpn_present:,}/{n:,} rows have GPN, "
+        f"{anon:,} anonymous)")
+    log(f"  Visits — OFFICIAL session_id: {off_visits:,} ({n/max(off_visits,1):.1f} "
+        f"views/visit)  |  our visit_id (gap {SESSION_GAP_MIN}m): {our_visits:,} "
+        f"({n/max(our_visits,1):.1f} views/visit)")
+    if anon / max(n, 1) > 0.3:
+        log(f"  WARNING: {anon/n:.0%} of views have no GPN — each anonymous view "
+            "counts as its own visitor. Check CustomProps.GPN coverage at the source.")
+    return df
+
+
 def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
     """Aggregate pageViews into sessions."""
     if "session_id" not in fact.columns or "timestamp" not in fact.columns:
@@ -533,23 +619,23 @@ def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
 
     sorted_df = fact.sort_values(["session_id", "timestamp"])
 
-    entry = sorted_df.groupby("session_id").first()
-    exit_ = sorted_df.groupby("session_id").last()
-
+    # Only aggregate the descriptive columns the fact actually carries —
+    # exports vary (e.g. no cp_Email -> no email column).
+    first_cols = {c: (c, "first")
+                  for c in ("user_id", "gpn", "email",
+                            "client_country", "client_os", "client_browser")
+                  if c in fact.columns}
+    count_col = "view_id" if "view_id" in fact.columns else "timestamp"
     agg = sorted_df.groupby("session_id").agg(
-        user_id=("user_id", "first"),
-        gpn=("gpn", "first"),
-        email=("email", "first"),
         session_start=("timestamp", "min"),
         session_end=("timestamp", "max"),
-        page_view_count=("view_id", "count"),
-        client_country=("client_country", "first"),
-        client_os=("client_os", "first"),
-        client_browser=("client_browser", "first"),
+        page_view_count=(count_col, "count"),
+        **first_cols,
     ).reset_index()
 
-    agg["entry_page_id"] = entry["page_id"].values
-    agg["exit_page_id"] = exit_["page_id"].values
+    if "page_id" in fact.columns:
+        agg["entry_page_id"] = sorted_df.groupby("session_id")["page_id"].first().values
+        agg["exit_page_id"] = sorted_df.groupby("session_id")["page_id"].last().values
     agg["duration_sec"] = (
         (agg["session_end"] - agg["session_start"]).dt.total_seconds().round(0)
     )
@@ -577,6 +663,68 @@ def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
     col_order = [
         "session_id", "user_id", "gpn", "email",
         "session_date", "session_start", "session_end", "duration_sec",
+        "engagement_time_sec", "avg_time_on_page_sec",
+        "page_view_count", "entry_page_id", "exit_page_id", "is_bounce",
+        "client_country", "client_os", "client_browser",
+    ] + hr_cols
+    return agg[[c for c in col_order if c in agg.columns]]
+
+
+def build_agg_visit(fact: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate pageViews into reconstructed visits — the visit-grain twin of
+    build_agg_session. On the corp source session_id resets on most navigations
+    (92% single-view sessions), so session-grain engagement metrics have almost
+    no signal; this table carries the usable ones. Requires derive_person_visit
+    to have run (visit_id / person_id / time_on_page_visit_sec present)."""
+    if "visit_id" not in fact.columns or "timestamp" not in fact.columns:
+        return pd.DataFrame()
+
+    sorted_df = fact.sort_values(["visit_id", "timestamp"])
+
+    # Only aggregate the descriptive columns the fact actually carries —
+    # exports vary (no email/client_* in some, no view_id in tests).
+    first_cols = {c: (c, "first")
+                  for c in ("person_id", "user_id", "gpn", "email",
+                            "client_country", "client_os", "client_browser")
+                  if c in fact.columns}
+    count_col = "view_id" if "view_id" in fact.columns else "timestamp"
+    agg = sorted_df.groupby("visit_id").agg(
+        visit_start=("timestamp", "min"),
+        visit_end=("timestamp", "max"),
+        page_view_count=(count_col, "count"),
+        **first_cols,
+    ).reset_index()
+
+    if "page_id" in fact.columns:
+        agg["entry_page_id"] = sorted_df.groupby("visit_id")["page_id"].first().values
+        agg["exit_page_id"] = sorted_df.groupby("visit_id")["page_id"].last().values
+    agg["duration_sec"] = (
+        (agg["visit_end"] - agg["visit_start"]).dt.total_seconds().round(0)
+    )
+
+    if "time_on_page_visit_sec" in sorted_df.columns:
+        eng = (sorted_df.groupby("visit_id")["time_on_page_visit_sec"]
+               .sum().reset_index()
+               .rename(columns={"time_on_page_visit_sec": "engagement_time_sec"}))
+        agg = agg.merge(eng, on="visit_id", how="left")
+
+        # mean() skips NaN, so the last view of each visit is excluded
+        avg_top = (sorted_df.groupby("visit_id")["time_on_page_visit_sec"]
+                   .mean().round(1).reset_index()
+                   .rename(columns={"time_on_page_visit_sec": "avg_time_on_page_sec"}))
+        agg = agg.merge(avg_top, on="visit_id", how="left")
+
+    agg["is_bounce"] = agg["page_view_count"] == 1
+    agg["visit_date"] = agg["visit_start"].dt.normalize()
+
+    hr_cols = [c for c in fact.columns if c.startswith("hr_")]
+    if hr_cols:
+        hr_first = sorted_df.groupby("visit_id")[hr_cols].first().reset_index()
+        agg = agg.merge(hr_first, on="visit_id", how="left")
+
+    col_order = [
+        "visit_id", "person_id", "user_id", "gpn", "email",
+        "visit_date", "visit_start", "visit_end", "duration_sec",
         "engagement_time_sec", "avg_time_on_page_sec",
         "page_view_count", "entry_page_id", "exit_page_id", "is_bounce",
         "client_country", "client_os", "client_browser",
@@ -646,8 +794,17 @@ def upsert_fact(con, fact: pd.DataFrame, source_filename: str):
         con.execute(f"DELETE FROM fact_page_view WHERE source_file = '{source_filename}'")
         log(f"  Upsert: removed {deleted:,} old rows from {source_filename}")
 
-    # Insert new rows
-    con.execute("INSERT INTO fact_page_view SELECT * FROM fact_df")
+    # Insert BY NAME: the stored table can carry columns a per-file fact does
+    # not have (store-level derived person_id/visit_id/time_on_page_visit_sec;
+    # HR columns can also vary per export) — align by column name, ALTER-add
+    # what the table is missing, and let absent table columns default to NULL.
+    table_cols = set(con.execute("DESCRIBE fact_page_view").df()["column_name"])
+    new_cols = [c for c in fact.columns if c not in table_cols]
+    if new_cols:
+        types = {r[0]: r[1] for r in con.execute("DESCRIBE SELECT * FROM fact_df").fetchall()}
+        for c in new_cols:
+            con.execute(f'ALTER TABLE fact_page_view ADD COLUMN "{c}" {types[c]}')
+    con.execute("INSERT INTO fact_page_view BY NAME SELECT * FROM fact_df")
     total = con.execute("SELECT COUNT(*) FROM fact_page_view").fetchone()[0]
     log(f"  fact_page_view: +{len(fact):,} rows ({total:,} total)")
 
@@ -671,23 +828,25 @@ def upsert_dims(con, dim_page: pd.DataFrame, dim_date: pd.DataFrame):
         """)
 
 
-def rebuild_agg_session(con):
-    """Rebuild agg_session from the full fact_page_view in DuckDB."""
-    log("Rebuilding agg_session from all data...")
+def rebuild_derived_and_aggs(con):
+    """Re-derive person/visit columns over the FULL fact (visits span export
+    files, so per-file derivation would break at file boundaries), rewrite
+    fact_page_view with them, then rebuild agg_session and agg_visit."""
+    log("Rebuilding derived columns + aggregates from all data...")
     full_fact = con.execute("SELECT * FROM fact_page_view").df()
     if full_fact.empty:
-        return pd.DataFrame()
+        return
 
-    agg = build_agg_session(full_fact)
-    agg = strip_tz(agg)
+    full_fact = strip_tz(derive_person_visit(full_fact))
+    con.register("full_fact_df", full_fact)
+    con.execute("CREATE OR REPLACE TABLE fact_page_view AS SELECT * FROM full_fact_df")
 
-    con.execute("DROP TABLE IF EXISTS agg_session")
-    con.register("full_agg_df", agg)
-    con.execute("CREATE TABLE agg_session AS SELECT * FROM full_agg_df")
-
-    count = con.execute("SELECT COUNT(*) FROM agg_session").fetchone()[0]
-    log(f"  agg_session: {count:,} sessions")
-    return agg
+    for name, builder in (("agg_session", build_agg_session),
+                          ("agg_visit", build_agg_visit)):
+        agg = strip_tz(builder(full_fact))
+        con.register("full_agg_df", agg)
+        con.execute(f"CREATE OR REPLACE TABLE {name} AS SELECT * FROM full_agg_df")
+        log(f"  {name}: {len(agg):,} rows")
 
 
 def print_summary(con):
@@ -698,7 +857,7 @@ def print_summary(con):
 
     tables = con.execute("SHOW TABLES").df()["name"].tolist()
 
-    for table in ["fact_page_view", "agg_session", "dim_page", "dim_date"]:
+    for table in ["fact_page_view", "agg_session", "agg_visit", "dim_page", "dim_date"]:
         if table in tables:
             count = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             log(f"  {table}: {count:,} rows")
@@ -715,27 +874,35 @@ def print_summary(con):
                     f"({row['processed_at']})")
 
     if "fact_page_view" in tables:
-        stats = con.execute("""
-            SELECT COUNT(*), COUNT(time_on_page_sec),
-                   ROUND(MEDIAN(time_on_page_sec), 0),
-                   ROUND(AVG(time_on_page_sec), 0)
-            FROM fact_page_view
-        """).fetchone()
-        if stats[0] > 0 and stats[1] > 0:
-            log(f"\n  Time-on-page: {stats[1]:,}/{stats[0]:,} measurable "
-                f"({stats[1]/stats[0]*100:.1f}%), "
-                f"median {stats[2]}s, mean {stats[3]}s")
+        fact_cols = con.execute("DESCRIBE fact_page_view").df()["column_name"].tolist()
+        # visit-based first (the reporting basis), session-based as QA — the
+        # official session_id resets on most navigations on the corp source.
+        for col, label in (("time_on_page_visit_sec", "Time-on-page (visit)"),
+                           ("time_on_page_sec", "Time-on-page (session, QA)")):
+            if col not in fact_cols:
+                continue
+            stats = con.execute(f"""
+                SELECT COUNT(*), COUNT({col}),
+                       ROUND(MEDIAN({col}), 0),
+                       ROUND(AVG({col}), 0)
+                FROM fact_page_view
+            """).fetchone()
+            if stats[0] > 0 and stats[1] > 0:
+                log(f"\n  {label}: {stats[1]:,}/{stats[0]:,} measurable "
+                    f"({stats[1]/stats[0]*100:.1f}%), "
+                    f"median {stats[2]}s, mean {stats[3]}s")
 
-    if "agg_session" in tables:
-        sess = con.execute("""
-            SELECT COUNT(*),
-                   SUM(CASE WHEN is_bounce THEN 1 ELSE 0 END),
-                   ROUND(AVG(page_view_count), 1)
-            FROM agg_session
-        """).fetchone()
-        if sess[0] > 0:
-            log(f"  Sessions: {sess[0]:,}, {sess[1]:,} bounces "
-                f"({sess[1]/sess[0]*100:.1f}%), avg {sess[2]} pages/session")
+    for table, unit in (("agg_visit", "Visits"), ("agg_session", "Sessions")):
+        if table in tables:
+            sess = con.execute(f"""
+                SELECT COUNT(*),
+                       SUM(CASE WHEN is_bounce THEN 1 ELSE 0 END),
+                       ROUND(AVG(page_view_count), 1)
+                FROM {table}
+            """).fetchone()
+            if sess[0] > 0:
+                log(f"  {unit}: {sess[0]:,}, {sess[1]:,} bounces "
+                    f"({sess[1]/sess[0]*100:.1f}%), avg {sess[2]} pages/{unit[:-1].lower()}")
 
     if "fact_page_view" in tables:
         fact_cols = con.execute("DESCRIBE fact_page_view").df()["column_name"].tolist()
@@ -918,15 +1085,15 @@ def main():
         upsert_dims(con, dim_page, dim_date)
         record_processed_file(con, filepath, file_hash, len(fact))
 
-    # Rebuild agg_session from full dataset
-    agg_sess = rebuild_agg_session(con)
+    # Re-derive person/visit columns and rebuild aggregates from full dataset
+    rebuild_derived_and_aggs(con)
 
     # Summary
     print_summary(con)
 
     # Export Parquet from DuckDB
     log(f"\nExporting Parquet to: {output_dir}/")
-    for table in ["fact_page_view", "agg_session", "dim_page", "dim_date"]:
+    for table in ["fact_page_view", "agg_session", "agg_visit", "dim_page", "dim_date"]:
         tables = con.execute("SHOW TABLES").df()["name"].tolist()
         if table in tables:
             con.execute(f"COPY {table} TO '{output_dir / f'{table}.parquet'}' (FORMAT PARQUET)")
@@ -936,7 +1103,7 @@ def main():
     xlsx_path = output_dir / "pageviews_cdm.xlsx"
     log(f"Writing Excel: {xlsx_path}")
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
-        for table in ["fact_page_view", "agg_session", "dim_page", "dim_date"]:
+        for table in ["fact_page_view", "agg_session", "agg_visit", "dim_page", "dim_date"]:
             tables = con.execute("SHOW TABLES").df()["name"].tolist()
             if table in tables:
                 df = strip_tz(con.execute(f"SELECT * FROM {table}").df())
