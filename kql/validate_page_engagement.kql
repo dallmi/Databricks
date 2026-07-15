@@ -1,0 +1,50 @@
+// validate_page_engagement.kql
+// ---------------------------------------------------------------------------
+// Phase-0 validation for the page_engagement beacon proposal
+// (docs/superpowers/specs/2026-07-15-page-engagement-heartbeat-design.md §4).
+// Run against the Application Insights resource (Logs blade). Each query is
+// independent — select one block and run it.
+// ---------------------------------------------------------------------------
+
+// === V1: operation_Id stability across SPA route changes ====================
+// Question: do click_events share the operation_Id of their logical page view?
+// Decides whether operation_Id is usable as a QA cross-check for the
+// View_Instance_Id correlation (it is NOT the primary key either way).
+// Expected outcome: match_rate close to 1.0 → usable as QA cross-check.
+//                   match_rate well below 1.0 → operation_Id is unstable under
+//                   SPA routing; rely on View_Instance_Id only.
+customEvents
+| where timestamp > ago(7d) and name == 'click_event'
+| extend CP = todynamic(tostring(todynamic(customDimensions).CustomProps))
+| project ev_op = operation_Id, ev_page = tostring(CP.PageId), session_Id
+| join kind=inner (
+    pageViews
+    | where timestamp > ago(7d)
+    | extend CP = todynamic(tostring(todynamic(customDimensions).CustomProps))
+    | project pv_op = operation_Id, pv_page = tostring(CP.PageId), session_Id
+  ) on session_Id
+| summarize op_match = countif(ev_op == pv_op and ev_page == pv_page),
+            total    = countif(ev_page == pv_page)
+| extend match_rate = todouble(op_match) / total
+
+// === V2: ingestion sampling check ===========================================
+// If sampling is active (itemCount > 1 on any rows), page_engagement must be
+// sampled at the SAME rate as pageViews, or engagement-per-view ratios are
+// systematically biased. Platform-team checklist item.
+// Expected outcome: sampled == 0 on both streams (no sampling), OR equal
+//                   effective rates — compare sum(itemCount)/count() per type.
+union pageViews, customEvents
+| where timestamp > ago(1d)
+| summarize sampled_rows = countif(itemCount > 1),
+            physical_rows = count(),
+            logical_rows = sum(itemCount) by itemType
+| extend effective_rate = todouble(logical_rows) / physical_rows
+
+// === V3: volume baseline for the flush estimate =============================
+// The spec (§7) estimates ~2 flushes/page view => up to +350M events/year.
+// This grounds the estimate in the platform team's own numbers before they
+// push back on it: daily pageViews vs daily customEvents, last 30 days.
+union pageViews, customEvents
+| where timestamp > ago(30d)
+| summarize daily_rows = count() by itemType, bin(timestamp, 1d)
+| summarize avg_daily = avg(daily_rows), max_daily = max(daily_rows) by itemType
