@@ -506,12 +506,8 @@
             <div class="bar-list" id="ixComponentBars"></div>
           </div>
           <div class="chart-card">
-            <div class="chart-title">Link destinations <span class="st">navigational clicks · internal vs external</span></div>
-            <div class="chart-container"><canvas id="chartIxDest"></canvas></div>
-          </div>
-          <div class="chart-card">
-            <div class="chart-title">Top external domains <span class="st">where outbound clicks go</span></div>
-            <div class="bar-list" id="ixExtDomainBars"></div>
+            <div class="chart-title">Top domains <span class="st">navigational clicks by destination host</span></div>
+            <div class="bar-list" id="ixDomainBars"></div>
           </div>
           <!-- Conditional cards — shown by their render fns only when the data exists. -->
           <div class="chart-card" id="cardIxFileTypes" style="display:none">
@@ -765,7 +761,6 @@ let ixExpandState=new Set(), ixExpandData=new Map();   // page_key -> {variants,
 let ixNoAction=false;                                  // interest×action: zero-click filter
 // Interactions explorer (configurable dims × metrics)
 let ixExpPicker=null, ixExpSort={col:'clicks', dir:'desc'}, lastIxExp=null, ixExpPreset='links';
-let pvHostSet=null;                                    // site-own hosts (from pv.page_url)
 
 // ==== Helpers ====
 function fmt(n){ return n==null ? '–' : Number(n).toLocaleString('en-US'); }
@@ -996,7 +991,7 @@ async function render(){
       renderPending = false;
       dirtyTabs = { overview:true, lifecycle:true, audience:true, interactions:true };
       lastArticles=[]; lastLifecycleKpis=[]; lastEntryPages=[]; lastAudienceKpis=[];
-      lastIxPages=[]; lastIxKpis=[]; lastTopDownloads=[]; lastIxExp=null; pvHostSet=null;
+      lastIxPages=[]; lastIxKpis=[]; lastTopDownloads=[]; lastIxExp=null;
       ixExpandState=new Set(); ixExpandData=new Map();
       await renderActiveTab();
     }
@@ -2171,7 +2166,7 @@ async function ixMetricsFor(a,b){
 
 async function renderInteractions(w){
   await Promise.all([ renderIxKpis(w), renderIxTraffic(w), renderIxMix(w),
-    renderIxComponents(w), renderIxDest(w), renderIxExtDomains(w),
+    renderIxComponents(w), renderIxDomains(w),
     renderIxFileTypes(w), renderIxVideoBlock(w),
     renderIxHourly(w), renderIxWeekday(w), renderIxHeatmap(w),
     renderIxExplorer(w), renderIxDivPageHeatmap(w),
@@ -2269,59 +2264,19 @@ async function renderIxComponents(w){
   renderBars('ixComponentBars', rows, (n,i)=>DIVISION_GRAYS_FALLBACK[i % DIVISION_GRAYS_FALLBACK.length], false, '');
 }
 
-// ==== Link destinations: internal vs external ====
-// The site's own hosts are whatever pv.page_url uses; navigational clicks whose
-// address points anywhere else via http(s) count as external. mailto:/tel: get
-// their own bucket; relative addresses are internal by construction.
-async function sitePvHosts(){
-  if (pvHostSet) return pvHostSet;
-  const rows = await query(`SELECT DISTINCT lower(regexp_extract(page_url,'^[a-z]+://([^/]+)',1)) h
-    FROM pv WHERE page_url LIKE 'http%'`);
-  pvHostSet = new Set(rows.map(r=>r.h).filter(Boolean));
-  return pvHostSet;
-}
+// ==== Top domains ====
 // Navigational clicks only — a download's "destination" is the file, a video's
-// the player; both would drown the in/out split in noise.
+// the player; both would drown the host breakdown in noise.
 function ixNavSql(){ return ixCols.has('interaction_class') ? `interaction_class='link'` : `NOT (${dlExpr()})`; }
-function ixDestCaseSql(hosts){
-  const inList = hosts.size ? [...hosts].map(h=>`'${escSql(h)}'`).join(',') : `''`;
-  // Hybrid: the tracker's own link_type='external' wins (real exports sometimes
-  // route external clicks through internal redirect hosts); otherwise a host not
-  // seen in pv.page_url means the click leaves the site.
-  const typedExt = ixCols.has('link_type') ? `WHEN lower(link_type)='external' THEN 'External'` : '';
-  return `CASE
-    WHEN lower(link_address) LIKE 'mailto:%' OR lower(link_address) LIKE 'tel:%' THEN 'Mail / Tel'
-    ${typedExt}
-    WHEN link_address IS NULL OR link_address='' THEN 'Internal'
-    WHEN lower(link_address) NOT LIKE 'http%' THEN 'Internal'
-    WHEN lower(regexp_extract(link_address,'^[a-z]+://([^/]+)',1)) IN (${inList}) THEN 'Internal'
-    ELSE 'External' END`;
-}
-async function renderIxDest(w){
-  if (!ixCols.has('link_address')){ chartEmpty('chartIxDest','No link_address in this export.'); return; }
-  const dest = ixDestCaseSql(await sitePvHosts());
-  const rows = await query(`SELECT ${dest} k, COUNT(*) v FROM ix
-    WHERE ${winIx(w.from,w.to)} AND ${ixNavSql()} GROUP BY 1 ORDER BY 2 DESC`);
-  if (!rows.length){ chartEmpty('chartIxDest','No navigational clicks in the selected window.'); return; }
-  const DEST_COLORS = { 'Internal':'#404040', 'External':'#B98E2C', 'Mail / Tel':'#CCCABC' };
-  destroy('ixDest');
-  charts.ixDest = new Chart(document.getElementById('chartIxDest'), {
-    type:'doughnut',
-    data:{ labels:rows.map(r=>r.k), datasets:[{ data:rows.map(r=>Number(r.v)),
-      backgroundColor:rows.map(r=>DEST_COLORS[r.k]||'#8E8D83'), borderWidth:1, borderColor:'#fff' }] },
-    options:{ responsive:true, maintainAspectRatio:false, cutout:'64%',
-      plugins:{ legend:{ position:'right', labels:{ font:{size:10} } } } }
-  });
-}
-async function renderIxExtDomains(w){
-  if (!ixCols.has('link_address')){ drillMissing('ixExtDomainBars','No link_address in this export.'); return; }
-  const dest = ixDestCaseSql(await sitePvHosts());
-  const rows = await query(`SELECT COALESCE(NULLIF(lower(regexp_extract(link_address,'^[a-z]+://([^/]+)',1)),''),'(no host)') AS name,
-      COUNT(*) AS v
-    FROM ix WHERE ${winIx(w.from,w.to)} AND ${ixNavSql()} AND ${dest}='External'
-    GROUP BY 1 ORDER BY v DESC LIMIT 12`);
-  if (!rows.length){ drillMissing('ixExtDomainBars','No external link clicks in the selected window.'); return; }
-  renderBars('ixExtDomainBars', rows, (n,i)=>DIVISION_GRAYS_FALLBACK[i % DIVISION_GRAYS_FALLBACK.length], false, '');
+// Host extracted straight from link_address, no internal/external judgment call —
+// relative links and mailto:/tel: have no host and are dropped (COALESCE-less filter).
+async function renderIxDomains(w){
+  if (!ixCols.has('link_address')){ drillMissing('ixDomainBars','No link_address in this export.'); return; }
+  const rows = await query(`SELECT lower(regexp_extract(link_address,'^[a-z]+://([^/]+)',1)) AS name, COUNT(*) AS v
+    FROM ix WHERE ${winIx(w.from,w.to)} AND ${ixNavSql()} AND lower(link_address) LIKE 'http%'
+    GROUP BY 1 HAVING name<>'' ORDER BY v DESC LIMIT 12`);
+  if (!rows.length){ drillMissing('ixDomainBars','No link clicks with a destination host in the selected window.'); return; }
+  renderBars('ixDomainBars', rows, (n,i)=>DIVISION_GRAYS_FALLBACK[i % DIVISION_GRAYS_FALLBACK.length], false, '');
 }
 
 // ==== Downloads by file type / video engagement (cards hidden without data) ====
