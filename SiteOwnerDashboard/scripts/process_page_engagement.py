@@ -114,7 +114,11 @@ def build_one(input_path: Path) -> pd.DataFrame | None:
         if col in clean.columns:
             clean[col] = pd.to_numeric(clean[col], errors="coerce")
 
-    dropped = int(clean["view_instance_id"].isna().sum()) if "view_instance_id" in clean.columns else len(clean)
+    if "view_instance_id" not in clean.columns:
+        print(f"    WARNING: no view_instance_id column — {len(clean):,} rows "
+              "dropped (cannot be correlated)")
+        return None
+    dropped = int(clean["view_instance_id"].isna().sum())
     if dropped:
         print(f"    WARNING: {dropped:,} rows without view_instance_id dropped "
               "(cannot be correlated)")
@@ -222,13 +226,24 @@ def main() -> None:
     new = strip_tz(new[keep].reset_index(drop=True))
 
     new = add_event_key(new, FLUSH_KEY_COLS)
-    new = new.drop_duplicates(subset=["event_key"], keep="last")
+    # Batch-level dedup enforces the declared PK (view_instance_id x flush_seq),
+    # not the wider event_key (which also carries a second-truncated timestamp —
+    # see add_event_key). event_key stays on the frame for upsert_store's
+    # overlap/eviction logic.
+    new = new.drop_duplicates(subset=FLUSH_KEY_COLS, keep="last")
 
     store = None
     if flush_path.exists() and not args.rebuild:
         store = pd.read_parquet(flush_path)
         print(f"  Existing flush store: {len(store):,} rows")
     flushes = upsert_store(store, new, [p.name for p, _, _ in to_process], FLUSH_KEY_COLS)
+    # Enforce the declared PK: event_key includes a timestamp component (shared
+    # helper), so a re-delivered flush straddling a second boundary would survive
+    # the upsert — dedup on the true grain, latest row wins.
+    before = len(flushes)
+    flushes = flushes.drop_duplicates(subset=FLUSH_KEY_COLS, keep="last")
+    if len(flushes) < before:
+        print(f"  PK dedup (view_instance_id x flush_seq): dropped {before - len(flushes):,} rows")
     flushes.to_parquet(flush_path, index=False)
 
     # Aggregate is rebuilt from the FULL flush store — deterministic under upsert.
