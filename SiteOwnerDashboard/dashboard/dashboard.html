@@ -2529,8 +2529,13 @@ async function renderIxExplorer(w){
 
 function ixExpCellHtml(c, r){
   if (c.kind==='dim'){
-    if (c.key==='link_label')
-      return `<td class="name" title="${escapeHtml(r._addr||'')}">${escapeHtml(r.link_label)}</td>`;
+    if (c.key==='link_label'){
+      // name cells truncate at 320px, so the tooltip carries the full label first and
+      // then the target URL (link_address) — the URL alone would cost the only place
+      // a cut-off label can still be read. Same pattern as the File column.
+      const tip = r._addr ? `${r.link_label}\n${r._addr}` : r.link_label;
+      return `<td class="name" title="${escapeHtml(tip)}">${escapeHtml(r.link_label)}</td>`;
+    }
     if (c.key==='interaction_class')
       return `<td><span class="cls-badge">${escapeHtml(r.interaction_class)}</span></td>`;
     if (c.key==='content_type')
