@@ -100,7 +100,10 @@ To refresh the vendored libraries after a version bump:
 ### Overview
 - **KPIs** — Page Views, Page Visits (sessions), Unique Visitors, Avg. Session,
   Engagement (unique ÷ visits), each with a month-over-month delta vs. the prior
-  equal-length period.
+  equal-length period. Time metrics (Avg. Session, Avg time on page) are measured
+  on reconstructed visits (`time_on_page_visit_sec`: person + 30-min inactivity
+  rule) — the raw telemetry session id resets on most navigations and would
+  leave almost no measurable time. Visits stay on the official session id.
 - **Traffic over time** — 12+ months of monthly bars; the selected timeframe is
   emphasised (dark grey), the rest is context (light grey). Visits / Unique toggle.
 - **Audience by Division** — visits by HR division as a click-to-drill bar list

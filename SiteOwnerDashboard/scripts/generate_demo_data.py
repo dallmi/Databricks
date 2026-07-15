@@ -448,6 +448,9 @@ def main():
     # these are direct maps — source columns stay untouched, as in the pipeline.
     df["person_id"] = df["gpn"].where(df["gpn"].notna(), "anon:" + df["user_id"])
     df["visit_id"] = df["session_id"]
+    # visit_id == session_id in the demo, so the visit-based time-on-page (what
+    # the dashboard's Avg time / Avg. Session read) equals the session-based one.
+    df["time_on_page_visit_sec"] = df["time_on_page_sec"]
 
     # page_key: language-agnostic page (strip the /xx segment) so the Pages
     # table groups language variants of one page into a single row — same rule

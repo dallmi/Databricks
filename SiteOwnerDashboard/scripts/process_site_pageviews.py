@@ -267,10 +267,13 @@ def upsert_store(store: pd.DataFrame | None, new: pd.DataFrame,
 #
 # Source columns user_id / session_id are kept AS-IS. AFTER the full store is
 # assembled we ADD:
-#   person_id  = GPN where present, else 'anon:<user_id>' (Unique Visitors).
-#   visit_id   = our 30-min-gap reconstruction per person (secondary/QA).
-# time_on_page_sec / is_last_in_session are computed over the OFFICIAL
-# session_id, so Avg. Session is consistent with the session_id-based visits.
+#   person_id              = GPN where present, else 'anon:<user_id>' (Unique Visitors).
+#   visit_id               = our 30-min-gap reconstruction per person.
+#   time_on_page_sec       = gap to next view in the OFFICIAL session_id (QA).
+#   time_on_page_visit_sec = gap to next view in the reconstructed visit_id —
+#     what the dashboard's Avg time / Avg. Session read. The official
+#     session_id resets on most navigations (92% single-view sessions on corp
+#     data), so session-based time-on-page has (almost) no measurable rows.
 #
 # This runs on the WHOLE store every run (deterministic, safe under the upsert).
 SESSION_GAP_MIN = 30
@@ -303,7 +306,9 @@ def derive_person_visit(df: pd.DataFrame) -> pd.DataFrame:
         ["person_id", "_ts"], kind="mergesort")
     gap_min = order["_ts"].diff().dt.total_seconds().div(60)
     new_visit = (order["person_id"] != order["person_id"].shift(1)) | (gap_min > SESSION_GAP_MIN) | gap_min.isna()
-    visit_no = new_visit.cumsum()
+    # pandas>=3 str columns yield arrow-backed booleans, which lack a cumsum
+    # kernel — cast to plain numpy bool first.
+    visit_no = new_visit.astype(bool).cumsum()
     df["visit_id"] = (order["person_id"].astype(str) + "#" + visit_no.astype(str)).reindex(df.index)
 
     # 3. time-on-page over the OFFICIAL session_id (the dashboard's visit unit)
@@ -315,6 +320,19 @@ def derive_person_visit(df: pd.DataFrame) -> pd.DataFrame:
         tos = tos.where(tos <= 30 * 60)  # cap runaway gaps (tab left open), keep NaN
         df["time_on_page_sec"] = tos.reindex(df.index)
         df["is_last_in_session"] = nxt.isna().reindex(df.index)
+
+    # 4. time-on-page over the reconstructed visit_id. Same gap-to-next-view,
+    #    but grouped by visit, so it survives the source's mid-sitting
+    #    session_id resets (corp data: 92% of session_ids have exactly ONE
+    #    view -> time_on_page_sec is NULL for most rows and its non-NULL rest
+    #    is dominated by same-instant double-fires, shown as "0s" Avg time).
+    #    The dashboard's Avg time / Avg. Session read THIS column; Visits stay
+    #    on the official session_id. No 30-min cap needed: consecutive views
+    #    inside one visit are <= SESSION_GAP_MIN apart by construction.
+    order3 = df[["visit_id"]].assign(_ts=ts).sort_values(
+        ["visit_id", "_ts"], kind="mergesort")
+    nxt3 = order3.groupby("visit_id", sort=False)["_ts"].shift(-1)
+    df["time_on_page_visit_sec"] = (nxt3 - order3["_ts"]).dt.total_seconds().reindex(df.index)
 
     persons = df["person_id"].nunique()
     off_visits = df["session_id"].nunique() if "session_id" in df.columns else -1

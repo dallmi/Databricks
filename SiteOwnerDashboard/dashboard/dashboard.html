@@ -945,11 +945,20 @@ async function loadData(){
 
   // Column inventory — real exports vary (no --hr => no hr_*; PublishingDate may be absent).
   pvCols = new Set((await query(`DESCRIBE SELECT * FROM pv`)).map(r=>r.column_name));
-  if (pvCols.has('publishing_date')){
-    // Normalise: some exports carry it as VARCHAR — make it a TIMESTAMP for date maths.
+  // View adjustments happen in ONE statement so they don't clobber each other:
+  // publishing_date arrives as VARCHAR in some exports (cast for date maths);
+  // stores built before the pipeline added time_on_page_visit_sec alias the
+  // legacy session-based column so Avg time / Avg. Session still render.
+  const pubCast = pvCols.has('publishing_date')
+    ? ' REPLACE (TRY_CAST(publishing_date AS TIMESTAMP) AS publishing_date)' : '';
+  const tosAlias = (!pvCols.has('time_on_page_visit_sec') && pvCols.has('time_on_page_sec'))
+    ? ', time_on_page_sec AS time_on_page_visit_sec' : '';
+  if (pubCast || tosAlias){
     await conn.query(`CREATE OR REPLACE VIEW pv AS
-      SELECT * REPLACE (TRY_CAST(publishing_date AS TIMESTAMP) AS publishing_date)
-      FROM read_parquet('site_pageviews.parquet')`);
+      SELECT *${pubCast}${tosAlias} FROM read_parquet('site_pageviews.parquet')`);
+    if (tosAlias) pvCols.add('time_on_page_visit_sec');
+  }
+  if (pvCols.has('publishing_date')){
     const pd = (await query(`SELECT COUNT(publishing_date) n FROM pv`))[0];
     hasPubDates = pd.n > 0;
   }
@@ -1016,7 +1025,7 @@ async function metricsFor(a,b){
   const base = (await query(`SELECT COUNT(*) AS n_views, COUNT(DISTINCT session_id) visits,
     COUNT(DISTINCT person_id) uniques FROM pv WHERE ${win(a,b)}`))[0];
   const avg = (await query(`SELECT AVG(t) a FROM
-    (SELECT session_id, SUM(time_on_page_sec) t FROM pv WHERE ${win(a,b)} GROUP BY session_id)`))[0];
+    (SELECT visit_id, SUM(time_on_page_visit_sec) t FROM pv WHERE ${win(a,b)} GROUP BY visit_id)`))[0];
   const views=base.n_views||0, visits=base.visits||0, uniques=base.uniques||0;
   return { views, visits, uniques, avgSession: avg.a, engagement: visits? uniques/visits : 0 };
 }
@@ -1254,7 +1263,7 @@ async function renderPages(w){
 async function computePages(w){
   const cur = await query(`SELECT page_key, any_value(page_name) AS pname, any_value(content_type) ct,
     COUNT(*) AS n_views, COUNT(DISTINCT session_id) visits, COUNT(DISTINCT person_id) uniques,
-    AVG(time_on_page_sec) avg_tos FROM pv WHERE ${win(w.from,w.to)} GROUP BY page_key`);
+    AVG(time_on_page_visit_sec) avg_tos FROM pv WHERE ${win(w.from,w.to)} GROUP BY page_key`);
   const prev = w.hasPrev ? await query(`SELECT page_key, COUNT(DISTINCT session_id) visits_prev
     FROM pv WHERE ${win(w.prevFrom,w.prevTo)} GROUP BY page_key`) : [];
   const trend = await query(`SELECT page_key, strftime(date_trunc('week', timestamp),'%Y-%m-%d') wk,
@@ -1495,7 +1504,7 @@ const PAGES_COLDEFS = [
   { key:'engagement', label:'Engmt', kind:'metric', num:true,
     selectSql:`CASE WHEN COUNT(DISTINCT session_id)>0 THEN COUNT(DISTINCT person_id)::DOUBLE/COUNT(DISTINCT session_id) ELSE 0 END`,
     cell:r=>`<td class="num">${(+r.engagement||0).toFixed(2)}</td>` },
-  { key:'avg_tos', label:'Avg time', kind:'metric', num:true, selectSql:`AVG(time_on_page_sec)`,
+  { key:'avg_tos', label:'Avg time', kind:'metric', num:true, selectSql:`AVG(time_on_page_visit_sec)`,
     cell:r=>`<td class="num">${fmtDur(r.avg_tos)}</td>` },
   // ---- Post metrics (secondary queries keyed by the visible dimensions) ----
   // clicks/ctr (ix:true) come from the interactions parquet — offered in the
@@ -1773,7 +1782,7 @@ async function togglePageExpand(pn){
     const rows = await query(`SELECT page_url, COALESCE(language,'Other') AS language,
       COUNT(*) AS views, COUNT(DISTINCT session_id) AS visits, COUNT(DISTINCT person_id) AS uniques,
       CASE WHEN COUNT(DISTINCT session_id)>0 THEN COUNT(DISTINCT person_id)::DOUBLE/COUNT(DISTINCT session_id) ELSE 0 END AS engagement,
-      AVG(time_on_page_sec) AS avg_tos
+      AVG(time_on_page_visit_sec) AS avg_tos
       FROM pv WHERE ${win(w.from,w.to)} AND page_name = '${escSql(pn)}'
       GROUP BY 1,2 ORDER BY visits DESC`);
     pagesVariantData.set(pn, rows);
@@ -2937,7 +2946,7 @@ async function pagesVariantExportMap(w){
   const rows = await query(`SELECT COALESCE(page_name,'(unknown)') AS page_name, COALESCE(language,'Other') AS language, page_url,
     COUNT(*) AS views, COUNT(DISTINCT session_id) AS visits, COUNT(DISTINCT person_id) AS uniques,
     CASE WHEN COUNT(DISTINCT session_id)>0 THEN COUNT(DISTINCT person_id)::DOUBLE/COUNT(DISTINCT session_id) ELSE 0 END AS engagement,
-    AVG(time_on_page_sec) AS avg_tos
+    AVG(time_on_page_visit_sec) AS avg_tos
     FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1,2,3 ORDER BY page_name, visits DESC`);
   const m = new Map();
   for (const r of rows){ if (!m.has(r.page_name)) m.set(r.page_name, []); m.get(r.page_name).push(r); }
