@@ -15,6 +15,10 @@ AppInsightSchema/*.png
 Bilder/
 10. März 2026/
 
+# Browser-automation scratch (screenshots of live dashboards + console logs).
+# Same sensitivity as the section above — the shots show real telemetry.
+.playwright-mcp/
+
 # macOS
 .DS_Store
 **/.DS_Store
