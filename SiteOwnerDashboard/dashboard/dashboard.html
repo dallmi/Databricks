@@ -661,6 +661,23 @@ Chart.register({ id:'barValueLabel',
     const slot = chartArea.width / Math.max(meta.data.length, 1);
     const labels = meta.data.map((_,i)=>{ const v=+ds.data[i]; if (v==null || isNaN(v)) return null;
       let t=fmtFn(v); if (opt.pct && total) t += `  ${(v/total*100).toFixed(0)}%`; return t; });
+    // peakOnly: dense single-series charts (e.g. the 24-hour profile) where per-bar
+    // labels would overlap — label only the tallest bar. That bar is the red accent;
+    // its value+% is the one number worth reading at a glance.
+    if (opt.peakOnly){
+      let peak=-1, pmax=-Infinity;
+      ds.data.forEach((v,i)=>{ const n=+v; if (isFinite(n) && n>pmax){ pmax=n; peak=i; } });
+      const bar = peak>=0 ? meta.data[peak] : null;
+      if (bar && labels[peak]!=null){
+        const t=labels[peak], half=ctx.measureText(t).width/2;
+        // Keep the label inside the plot when the peak sits at the left/right edge.
+        const x=Math.min(Math.max(bar.x, chartArea.left+half), chartArea.right-half);
+        ctx.textBaseline='bottom';
+        ctx.fillStyle = bar.y-14 < chartArea.top ? '#404040' : '#5A5D5C';
+        ctx.fillText(t, x, Math.max(bar.y-4, chartArea.top+9));
+      }
+      ctx.restore(); return;
+    }
     if (labels.some(t=>t!=null && ctx.measureText(t).width > slot-2)){ ctx.restore(); return; }
     ctx.textBaseline='bottom';
     meta.data.forEach((bar,i)=>{ if (labels[i]==null) return;
@@ -2127,13 +2144,13 @@ async function renderIxComponents(w){
 // Timestamps are already CET (pipeline converts UTC→CET at build time).
 const WEEKDAY_LABELS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 
-function ixTimeBar(key, canvasId, labels, vals, colors, unit){
+function ixTimeBar(key, canvasId, labels, vals, colors, unit, peakOnly){
   destroy(key);
   charts[key] = new Chart(document.getElementById(canvasId), {
     type:'bar',
     data:{ labels, datasets:[{ data:vals, backgroundColor:colors, borderRadius:0, maxBarThickness:30 }] },
     options:{ responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{display:false}, barValueLabel:{ pct:true }, tooltip:{ callbacks:{
+      plugins:{ legend:{display:false}, barValueLabel:{ pct:true, peakOnly:!!peakOnly }, tooltip:{ callbacks:{
         label:c=>{ const total=vals.reduce((a,b)=>a+b,0);
           return `${fmt(c.parsed.y)} ${unit} (${total?(c.parsed.y/total*100).toFixed(1):0}%)`; } } } },
       scales:{ x:{ grid:{display:false}, border:{color:'#000'}, ticks:{ font:{size:9}, maxRotation:0, autoSkip:true } },
@@ -2149,7 +2166,7 @@ async function renderIxHourly(w){
   const peak = vals.indexOf(Math.max(...vals));
   // Peak bar in red — a small accent, the rest carries in grey.
   const colors = vals.map((_,i)=> i===peak ? '#E60000' : '#5A5D5C');
-  ixTimeBar('ixHourly','chartIxHourly', Array.from({length:24},(_,h)=>h+':00'), vals, colors, 'clicks');
+  ixTimeBar('ixHourly','chartIxHourly', Array.from({length:24},(_,h)=>h+':00'), vals, colors, 'clicks', true);
 }
 
 async function renderIxWeekday(w){
