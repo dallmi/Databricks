@@ -73,6 +73,8 @@ FACT_COLUMNS = {
     "cp_PageId": "page_id",
     "cp_Email": "email",
     "cp_GPN": "gpn",
+    # correlation key for page_engagement joins (payload-only pageView change)
+    "cp_View_Instance_Id": "view_instance_id",
 }
 
 DIM_PAGE_COLUMNS = {
@@ -143,6 +145,14 @@ INTERACTION_FACT_COLUMNS = {
     "cp_Video_Id": "video_id",
     "cp_Video_Type": "video_type",
     "cp_Video_Duration": "video_duration",
+    # page_engagement family (spec 2026-07-15-page-engagement-heartbeat-design)
+    "cp_View_Instance_Id": "view_instance_id",
+    "cp_Engaged_Ms": "engaged_ms_delta",
+    "cp_Scroll_Max_Pct": "scroll_max_pct",
+    "cp_Page_Height_Px": "page_height_px",
+    "cp_Viewport_Height_Px": "viewport_height_px",
+    "cp_Flush_Reason": "flush_reason",
+    "cp_Flush_Seq": "flush_seq",
 }
 
 INTERACTION_DROP_COLUMNS = [
