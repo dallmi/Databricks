@@ -41,9 +41,9 @@ layer in Azure Application Insights → Logs.
 
 ### Validation queries
 
-- `validate_page_engagement.kql` — Phase-0 validation for the page_engagement
-  beacon proposal (operation_Id stability, sampling check, volume baseline).
-  See `docs/superpowers/specs/2026-07-15-page-engagement-heartbeat-design.md` §4.
+| File | Purpose |
+|---|---|
+| [`validate_page_engagement.kql`](validate_page_engagement.kql) | Phase-0 validation for the page_engagement beacon proposal (operation_Id stability, sampling check, volume baseline). See `docs/superpowers/specs/2026-07-15-page-engagement-heartbeat-design.md` §4. |
 
 For the full profiling suite (13 queries — daily trend, ContentType cross-tab,
 domain analysis etc.) see
