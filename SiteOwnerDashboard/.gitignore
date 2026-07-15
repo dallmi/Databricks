@@ -5,5 +5,7 @@ input/**/*.xlsx
 input/**/*.xls
 output/*.parquet
 output/*.manifest.json
+# Analysis workbooks are derived from the store — same sensitivity as the store.
+output/*.xlsx
 # Standalone build embeds the (potentially sensitive) data — keep out of git.
 output/*.html
