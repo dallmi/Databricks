@@ -771,6 +771,7 @@ function fmt(n){ return n==null ? '–' : Number(n).toLocaleString('en-US'); }
 function fmtDur(sec){ if (sec==null || isNaN(sec)) return '–'; sec=Math.round(sec);
   const m=Math.floor(sec/60), s=sec%60; return m>0 ? `${m}m ${s}s` : `${s}s`; }
 function iso(d){ return d.toISOString().slice(0,19).replace('T',' '); }
+function ymd(d){ return d.toISOString().slice(0,10); }
 function addDays(d,n){ const x=new Date(d); x.setUTCDate(x.getUTCDate()+n); return x; }
 function destroy(id){ if (charts[id]){ charts[id].destroy(); delete charts[id]; } }
 
@@ -967,8 +968,8 @@ async function loadData(){
     any_value(site_name) site FROM pv`))[0];
   dataMin = new Date(meta.mn.replace(' ','T')+'Z');
   dataMax = new Date(meta.mx.replace(' ','T')+'Z');
-  const ymd = d => d.toISOString().slice(0,10);
   ['dateFrom','dateTo'].forEach(id=>{ const el=document.getElementById(id); el.min=ymd(dataMin); el.max=ymd(dataMax); });
+  syncDatePickers();
   // Display-name override — set to '' to fall back to site_name from the data.
   const SITE_DISPLAY_NAME = 'Site Owner Dashboard';
   DEFAULT_SITE_TITLE = SITE_DISPLAY_NAME || meta.site || 'Site Owner Dashboard';
@@ -2887,15 +2888,26 @@ function drawTopDownloads(){
 }
 
 // ==== Controls ====
-function setTimeframe(tf){ timeframe=tf; customFrom=customTo=null;
-  document.getElementById('dateFrom').value=''; document.getElementById('dateTo').value='';
+// Presets mirror their resolved window into the pickers (programmatic .value
+// assignment fires no onchange, so this never re-triggers applyCustomDates).
+function syncDatePickers(){
+  if (timeframe==='custom' || !dataMax) return;
+  const w = windows();
+  document.getElementById('dateFrom').value = ymd(w.from);
+  document.getElementById('dateTo').value   = ymd(w.to);
+}
+function setTimeframe(tf){ timeframe=tf; customFrom=customTo=null; syncDatePickers();
   document.querySelectorAll('#timeframeSeg button').forEach(b=>b.classList.toggle('active', b.dataset.tf===tf)); render(); }
 function applyCustomDates(){
-  const f=document.getElementById('dateFrom').value, t=document.getElementById('dateTo').value;
+  let f=document.getElementById('dateFrom').value, t=document.getElementById('dateTo').value;
   if (!f && !t) return;
+  // Inverted range: swap the day strings BEFORE deriving the window bounds
+  // (swapping the Date objects would carry the 00:00/23:59 boundary times
+  // along) and mirror the swap back into the pickers.
+  if (f && t && f > t){ [f,t]=[t,f];
+    document.getElementById('dateFrom').value=f; document.getElementById('dateTo').value=t; }
   customFrom = f ? new Date(f+'T00:00:00Z') : dataMin;
   customTo   = t ? new Date(t+'T23:59:59Z') : dataMax;
-  if (customFrom > customTo){ const x=customFrom; customFrom=customTo; customTo=x; }
   timeframe='custom';
   document.querySelectorAll('#timeframeSeg button').forEach(b=>b.classList.remove('active'));
   render();
