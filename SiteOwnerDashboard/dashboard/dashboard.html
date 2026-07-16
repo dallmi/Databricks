@@ -117,6 +117,7 @@
   .kpi-row.derived .v { font-weight: 400; color: var(--grey-4); }
   .kpi-row .delta { font-size: 0.62rem; }
   .kpi-row .l { font-size: 0.72rem; color: var(--grey-4); text-align: right; margin-left: auto; }
+  .delta-note { font-size: 0.68rem; color: var(--grey-4); text-align: right; margin-bottom: 0.3rem; }
   .delta { font-weight: 600; } .delta.up { color: var(--success); } .delta.down { color: var(--bordeaux-1); } .delta.flat { color: var(--grey-4); }
 
   .charts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
@@ -334,6 +335,7 @@
 
     <div id="dashboard" style="display:none;">
       <div class="tab-content active" id="tab-overview">
+        <div class="delta-note" id="deltaNote"></div>
         <div class="kpi-groups" id="kpiGrid"></div>
         <div class="charts-grid">
           <div class="chart-card full-width">
@@ -397,7 +399,7 @@
         <div class="table-wrapper">
           <div class="table-header">
             <div><h3>Pages — performance &amp; trend</h3>
-              <div class="st" id="pagesSub">click a column to sort · MoM = vs. prior equal period</div></div>
+              <div class="st" id="pagesSub">click a column to sort</div></div>
             <div class="cp-table-actions">
               <div id="cp_pages" class="cp"></div>
               <button class="btn btn-sm" onclick="exportTableXlsx('pages', event)">Export XLSX</button>
@@ -749,6 +751,7 @@ Chart.register({ id:'barValueLabel',
 // ==== State ====
 let db=null, conn=null, hasInteractions=false;
 let dataMin=null, dataMax=null;
+let cmpNote=''; // human-readable comparison window, set by windows(), used in delta tooltips
 let pvCols=new Set(), hasPubDates=false;
 let ixCols=new Set();                 // column inventory of the ix view (Phase 2)
 let timeframe='90d', trafficMetric='visits', rankMetric='visits', langMetric='views';
@@ -773,6 +776,8 @@ function fmtDur(sec){ if (sec==null || isNaN(sec)) return '–'; sec=Math.round(
 function iso(d){ return d.toISOString().slice(0,19).replace('T',' '); }
 function ymd(d){ return d.toISOString().slice(0,10); }
 function addDays(d,n){ const x=new Date(d); x.setUTCDate(x.getUTCDate()+n); return x; }
+function yearBack(d){ return new Date(Date.UTC(d.getUTCFullYear()-1, d.getUTCMonth(), d.getUTCDate(),
+  d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds())); }
 function destroy(id){ if (charts[id]){ charts[id].destroy(); delete charts[id]; } }
 
 async function query(sql){
@@ -791,9 +796,16 @@ function windows(){
   else if (timeframe==='ytd') from = new Date(Date.UTC(to.getUTCFullYear(),0,1));
   else if (timeframe==='12mo') from = addDays(to,-365);
   else from = dataMin; // all
-  const len = to - from;
-  const prevTo = from, prevFrom = new Date(from.getTime()-len);
-  return { from, to, prevFrom, prevTo, hasPrev: timeframe!=='all' };
+  // Comparison window: the equal-length period immediately before — except YTD,
+  // where "the period before Jan 1" is the tail of last year; the honest
+  // reference there is the same period one year earlier.
+  let prevFrom, prevTo;
+  if (timeframe==='ytd'){ prevFrom = yearBack(from); prevTo = yearBack(to); }
+  else { prevTo = from; prevFrom = new Date(from.getTime()-(to-from)); }
+  const hasPrev = timeframe!=='all';
+  cmpNote = hasPrev
+    ? `vs. ${ymd(prevFrom)} – ${ymd(prevTo)}${timeframe==='ytd'?' (same period last year)':''}` : '';
+  return { from, to, prevFrom, prevTo, hasPrev };
 }
 // ==== Global multi-dimension filter ====
 // activeFilters: column -> Set(selected values). filterClause() ANDs every
@@ -847,23 +859,48 @@ function ixSkippedFilters(){
 }
 function winIx(a,b){ return `timestamp >= TIMESTAMP '${iso(a)}' AND timestamp <= TIMESTAMP '${iso(b)}'${ixFilterClause()}`; }
 
+// Trend-sparkline bins: fixed-width 7-day buckets anchored at the window END and
+// counted backward, so the LAST point always spans a full 7 days ending at w.to.
+// The old date_trunc('week', …) bucketed on Mondays; a window ending mid-week
+// left the final bucket with 1–2 days, so every sparkline hooked artificially
+// downward and contradicted the Δ Visits column. We also trim the span to a whole
+// number of bins so the FIRST point is a full bucket too. `binExpr` yields 0 for
+// the most recent bucket, higher indices for older ones → GROUP BY it and ORDER
+// the bin key DESC so the pushed series runs oldest → newest (left → right).
+function trendBins(w){
+  const spanDays = Math.round((w.to - w.from) / 86400000);
+  const binCount = Math.max(1, Math.floor(spanDays / 7));
+  const from0 = addDays(w.to, -(binCount * 7) + 1);
+  const from = from0 < w.from ? w.from : from0;   // never widen past the selected window
+  const binExpr = `CAST(FLOOR(date_diff('day', timestamp, TIMESTAMP '${iso(w.to)}') / 7) AS INT)`;
+  return { from, to: w.to, binExpr };
+}
+
 function sparkline(vals, w=104, h=22){
   if (!vals || vals.length===0) return '';
   const max=Math.max(...vals,1), min=Math.min(...vals,0), span=(max-min)||1;
   const n=vals.length, step = n>1 ? w/(n-1) : w;
   const pts = vals.map((v,i)=>`${(i*step).toFixed(1)},${(h-2 - (v-min)/span*(h-4)).toFixed(1)}`).join(' ');
-  // Neutral grey — the sparkline shows shape; direction is carried by the MoM column.
+  // Neutral grey — the sparkline shows shape; direction is carried by the Δ Visits column.
   return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="display:block">
     <polyline points="${pts}" fill="none" stroke="#5A5D5C" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }
 // invert: an increase is bad (e.g. bounce rate) — swap the colours, keep the arrow.
+// Colour only marks material change (≥ DELTA_MATERIAL %); smaller deltas stay grey
+// so a coloured arrow always means "worth a look". Tooltip names the comparison window.
+const DELTA_MATERIAL = 5;
 function deltaHtml(cur, prev, invert=false){
   if (prev==null || prev===0) return `<span class="delta flat">–</span>`;
   const d=(cur-prev)/prev*100;
-  let cls=d>0.05?'up':(d<-0.05?'down':'flat');
-  if (invert && cls!=='flat') cls = cls==='up'?'down':'up';
-  const arr=d>0.05?'▲':(d<-0.05?'▼':'–'); return `<span class="delta ${cls}">${arr} ${Math.abs(d).toFixed(1)}%</span>`;
+  let cls='flat';
+  if (Math.abs(d)>=DELTA_MATERIAL){ cls = d>0?'up':'down'; if (invert) cls = cls==='up'?'down':'up'; }
+  const arr=d>0.05?'▲':(d<-0.05?'▼':'–');
+  return `<span class="delta ${cls}" title="${cmpNote}">${arr} ${Math.abs(d).toFixed(1)}%</span>`;
 }
+// Tooltip-only delta for derived rates and window-sensitive counts, where a
+// visible arrow is more noise than signal.
+function deltaTip(c,p){ if (c==null || p==null || p===0) return '';
+  const d=(c-p)/p*100; return `Δ ${d>0?'+':''}${d.toFixed(1)}% ${cmpNote}`; }
 function chartEmpty(canvasId, msg){
   const el=document.getElementById(canvasId); if (!el) return;
   el.parentElement.innerHTML = `<div class="chart-empty">${msg}</div>`;
@@ -1024,11 +1061,15 @@ async function renderActiveTab(){
 
 async function metricsFor(a,b){
   const base = (await query(`SELECT COUNT(*) AS n_views, COUNT(DISTINCT session_id) visits,
-    COUNT(DISTINCT person_id) uniques FROM pv WHERE ${win(a,b)}`))[0];
+    COUNT(DISTINCT person_id) uniques,
+    COUNT(time_on_page_visit_sec) AS tos_measurable FROM pv WHERE ${win(a,b)}`))[0];
   const avg = (await query(`SELECT AVG(t) a FROM
     (SELECT visit_id, SUM(time_on_page_visit_sec) t FROM pv WHERE ${win(a,b)} GROUP BY visit_id)`))[0];
   const views=base.n_views||0, visits=base.visits||0, uniques=base.uniques||0;
-  return { views, visits, uniques, avgSession: avg.a, engagement: visits? uniques/visits : 0 };
+  // Share of views with a time signal: a page's time is the gap to the reader's
+  // next view, so single-page visits and the last page of each visit are NULL.
+  const tosCoverage = views ? (Number(base.tos_measurable)||0)/views : 0;
+  return { views, visits, uniques, avgSession: avg.a, engagement: visits? uniques/visits : 0, tosCoverage };
 }
 
 // Content pulse for the Overview groups: distinct pages / languages seen in the
@@ -1048,8 +1089,10 @@ async function contentMetricsFor(a,b){
 // Overview = grouped collection cards (CampaignWe pattern): one card per theme,
 // stacked value|delta|label rows. Detail tabs keep the large flat .kpi-card row.
 function kpiRowHtml(r){
-  const delta = r.c!==undefined ? deltaHtml(r.c, r.p==null?null:r.p, r.invert) : '';
-  return `<div class="kpi-row${r.derived?' derived':''}"${r.t?` title="${escapeHtml(r.t)}"`:''}>
+  const delta = (r.c!==undefined && !r.tipDelta) ? deltaHtml(r.c, r.p==null?null:r.p, r.invert) : '';
+  let tip = r.t||'';
+  if (r.tipDelta){ const dt=deltaTip(r.c, r.p); if (dt) tip += (tip?' · ':'')+dt; }
+  return `<div class="kpi-row${r.derived?' derived':''}"${tip?` title="${escapeHtml(tip)}"`:''}>
     <span class="v">${r.v}</span>${delta}<span class="l">${r.l}</span></div>`;
 }
 function kpiGroupHtml(title, cls, rows){
@@ -1066,41 +1109,47 @@ async function renderKpis(w){
   const ixP = hasInteractions && w.hasPrev ? await ixMetricsFor(w.prevFrom,w.prevTo) : null;
 
   const P = (o,k)=> o ? o[k] : null;
+  // Visible arrows only on volume KPIs (views/visits/uniques/session time/clicks/
+  // downloads). Derived rates and window-sensitive counts keep their delta as a
+  // tooltip (tipDelta) — a wall of coloured arrows carries no signal.
   const groups = [
     { title:'Reach', cls:'reach', rows:[
       { v:fmt(cur.views), l:'Page Views', c:cur.views, p:P(prev,'views') },
       { v:fmt(cur.visits), l:'Visits', c:cur.visits, p:P(prev,'visits') },
       { v:fmt(cur.uniques), l:'Unique Visitors', c:cur.uniques, p:P(prev,'uniques') },
-      { v: cur.visits ? (cur.views/cur.visits).toFixed(2) : '–', l:'Views / Visit', derived:true,
+      { v: cur.visits ? (cur.views/cur.visits).toFixed(2) : '–', l:'Views / Visit', derived:true, tipDelta:true,
         c: cur.visits ? cur.views/cur.visits : null, p: (prev&&prev.visits) ? prev.views/prev.visits : null },
     ]},
     { title:'Engagement', cls:'engagement', rows:[
-      { v:cur.engagement.toFixed(2), l:'Engagement', c:cur.engagement, p:P(prev,'engagement'), t:'unique visitors ÷ visits' },
-      { v:fmtDur(cur.avgSession), l:'Avg. Session', c:cur.avgSession, p:P(prev,'avgSession') },
-      { v:aud.depth.toFixed(2), l:'Pages / Session', c:aud.depth, p:P(audP,'depth') },
-      { v:(aud.bounce*100).toFixed(1)+'%', l:'Bounce Rate', c:aud.bounce, p:P(audP,'bounce'), invert:true, derived:true },
+      { v:cur.engagement.toFixed(2), l:'Engagement', c:cur.engagement, p:P(prev,'engagement'), tipDelta:true, t:'unique visitors ÷ visits' },
+      { v:fmtDur(cur.avgSession), l:'Avg. Session', c:cur.avgSession, p:P(prev,'avgSession'),
+        t:`Engaged time per visit. Measured on ${Math.round(cur.tosCoverage*100)}% of page views — a page's time is the gap to the reader's next view, so single-page visits and the last page of every visit have no next view and count as zero. The true figure is higher.` },
+      { v:aud.depth.toFixed(2), l:'Pages / Session', c:aud.depth, p:P(audP,'depth'), tipDelta:true },
+      { v:(aud.bounce*100).toFixed(1)+'%', l:'Bounce Rate', c:aud.bounce, p:P(audP,'bounce'), invert:true, derived:true, tipDelta:true },
     ]},
     { title:'Audience', cls:'audience', rows:[
-      { v:fmt(aud.newu), l:'New Visitors', c:aud.newu, p:P(audP,'newu'), t:'first ever visit in window' },
-      { v:(aud.retShare*100).toFixed(1)+'%', l:'Returning Share', c:aud.retShare, p:P(audP,'retShare'), derived:true },
-      { v:aud.perVisitor.toFixed(2), l:'Visits / Visitor', c:aud.perVisitor, p:P(audP,'perVisitor'), derived:true },
+      { v:fmt(aud.newu), l:'New Visitors', c:aud.newu, p:P(audP,'newu'), tipDelta:true, t:'first ever visit in window — depends on observation start' },
+      { v:(aud.retShare*100).toFixed(1)+'%', l:'Returning Share', c:aud.retShare, p:P(audP,'retShare'), derived:true, tipDelta:true },
+      { v:aud.perVisitor.toFixed(2), l:'Visits / Visitor', c:aud.perVisitor, p:P(audP,'perVisitor'), derived:true, tipDelta:true },
     ]},
   ];
   if (ix) groups.push({ title:'Actions', cls:'actions', rows:[
     { v:fmt(ix.clicks), l:'Clicks', c:ix.clicks, p:P(ixP,'clicks') },
     { v:fmt(ix.downloads), l:'Downloads', c:ix.downloads, p:P(ixP,'downloads') },
-    { v:fmtPct(ix.ctr), l:'CTR', c:ix.ctr, p:P(ixP,'ctr'), derived:true, t:'clicks ÷ page views' },
-    { v:fmtPct(ix.clickerRate), l:'Clicker Rate', c:ix.clickerRate, p:P(ixP,'clickerRate'), derived:true, t:'clickers ÷ unique visitors' },
+    { v:fmtPct(ix.ctr), l:'CTR', c:ix.ctr, p:P(ixP,'ctr'), derived:true, tipDelta:true, t:'clicks ÷ page views' },
+    { v:fmtPct(ix.clickerRate), l:'Clicker Rate', c:ix.clickerRate, p:P(ixP,'clickerRate'), derived:true, tipDelta:true, t:'clickers ÷ unique visitors' },
   ]});
   const contRows = [
-    { v:fmt(cont.pages), l:'Pages Viewed', c:cont.pages, p:P(contP,'pages'), t:'distinct pages with views in window' },
+    { v:fmt(cont.pages), l:'Pages Viewed', c:cont.pages, p:P(contP,'pages'), tipDelta:true, t:'distinct pages with views in window' },
   ];
   if (cont.langs!=null) contRows.push({ v:fmt(cont.langs), l:'Languages' });
-  if (cont.published!=null) contRows.push({ v:fmt(cont.published), l:'Pages Published', c:cont.published, p:contP?contP.published:null });
+  if (cont.published!=null) contRows.push({ v:fmt(cont.published), l:'Pages Published', c:cont.published, p:contP?contP.published:null, tipDelta:true });
   groups.push({ title:'Content', cls:'content', rows:contRows });
 
   document.getElementById('kpiGrid').innerHTML =
     groups.map(g=>kpiGroupHtml(g.title, g.cls, g.rows)).join('');
+  document.getElementById('deltaNote').textContent = w.hasPrev
+    ? `Δ ${cmpNote} · coloured when ≥ ±${DELTA_MATERIAL}% · rates: Δ on hover` : '';
   lastKpiRows = groups.flatMap(g=>g.rows.map(r=>[g.title, r.l, r.v,
     (r.c==null||r.p==null||r.p===0) ? '' : (((r.c-r.p)/r.p)*100).toFixed(1)+'%']));
 }
@@ -1267,8 +1316,9 @@ async function computePages(w){
     AVG(time_on_page_visit_sec) avg_tos FROM pv WHERE ${win(w.from,w.to)} GROUP BY page_key`);
   const prev = w.hasPrev ? await query(`SELECT page_key, COUNT(DISTINCT session_id) visits_prev
     FROM pv WHERE ${win(w.prevFrom,w.prevTo)} GROUP BY page_key`) : [];
-  const trend = await query(`SELECT page_key, strftime(date_trunc('week', timestamp),'%Y-%m-%d') wk,
-    COUNT(DISTINCT session_id) v FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1,2 ORDER BY 1,2`);
+  const tb = trendBins(w);
+  const trend = await query(`SELECT page_key, ${tb.binExpr} wkbin,
+    COUNT(DISTINCT session_id) v FROM pv WHERE ${win(tb.from,tb.to)} GROUP BY 1,2 ORDER BY 1, 2 DESC`);
   const prevMap = Object.fromEntries(prev.map(r=>[r.page_key, r.visits_prev]));
   const trendMap = {}; for (const t of trend){ (trendMap[t.page_key] ||= []).push(t.v); }
 
@@ -1480,6 +1530,63 @@ function buildSelectGroupBy(colDefs, visible){
   return { selectParts, groupIdx, includedKeys, dimParts, dimKeys };
 }
 
+// One-line "what am I looking at" descriptions for table column headers, keyed
+// by column key and shared across every table so the same metric reads the same
+// everywhere. Rendered as the <th> title — hover a header to see it. colTitle()
+// returns the ready-to-inline title attribute (empty when a key has no entry).
+const COL_DESC = {
+  // dimensions
+  page_name:'Page title. Hover a row for its URL; ▸ expands language / URL variants.',
+  pname:'Page title.', nm:'Page title.',
+  page_key:'Canonical page — the same page across languages counts once.',
+  page_url:'Full page URL.',
+  content_type:'Content category (news, event, PDF, video, …).',
+  ct:'Content category (news, event, PDF, video, …).',
+  language:'Content language from the URL segment (/de/ /fr/ …); no segment = English.',
+  link_label:'Link text as shown to users.',
+  link_type:'Link classification (internal, external, download, …).',
+  interaction_class:'Interaction type (link, search, video, …).',
+  component_name:'Page component the click came from.',
+  file_type_label:'File type (PDF, XLSX, …).', ftype:'File type (PDF, XLSX, …).',
+  file:'File name. Hover a row for the full URL.',
+  theme:'Editorial theme (from the tracking taxonomy).',
+  topic:'Editorial topic (from the tracking taxonomy).',
+  content_owner:'Team or person responsible for the content.',
+  hr_division:'Visitor division (from HR data).',
+  hr_region:'Visitor region (from HR data).',
+  pd:'Publishing date.',
+  last_clicked:'Date of the most recent click.',
+  last:'Date of the most recent download.',
+  // volume metrics
+  views:'Page views — every load counts, including repeats by the same person.',
+  visits:'Distinct sessions with ≥1 view. One person can have many.',
+  winv:'Visits within the selected window.',
+  uniques:'Distinct people (device-based id) — an upper bound on employees.',
+  clicks:'Clicks on links / CTAs (from interaction data).',
+  clickers:'Distinct people who clicked.',
+  downloads:'Clicks classified as file downloads.',
+  downloaders:'Distinct people who downloaded.',
+  pages:'Distinct pages this appears on.',
+  entries:'Visits that started on this page.',
+  f7:'Visits in the first 7 days after publishing.',
+  // rates & derived
+  engagement:'Unique visitors ÷ visits. 1.0 = all different people; low = few visiting often.',
+  avg_tos:'Average time on the page before the reader moves on — the gap to their next page view. Single-page visits and the last page of each visit have no next view, so they are not counted; this under-reports real reading time.',
+  ctr:'Clicks ÷ page views.',
+  clicker_rate:'Unique clickers ÷ unique visitors.',
+  per_clicker:'Clicks ÷ unique clickers — repeat clicking.',
+  share:"This page's share of all entry visits.",
+  bounce:'Share of these entries that were single-page sessions.',
+  avgd:'Average pages viewed in visits that started here.',
+  age:'Days since publishing.',
+  share7:"First-7-day visits as a share of the page's total.",
+  // trend / deltas
+  trend:'Weekly visits over the window — shape only; direction is the Δ column.',
+  mom:'Change in visits vs. the prior equal-length period.',
+  delta:'Change in clicks vs. the prior equal-length period.',
+};
+function colTitle(key){ const d=COL_DESC[key]; return d?` title="${escapeHtml(d)}"`:''; }
+
 const PAGES_COLDEFS = [
   // ---- Dimensions (Group By) ----
   { key:'page_name', label:'Page Name', kind:'dim', num:false, selectSql:`COALESCE(page_name, '(unknown)')`,
@@ -1515,10 +1622,12 @@ const PAGES_COLDEFS = [
   { key:'ctr', label:'CTR', kind:'post', num:true, ix:true,
     cell:r=>`<td class="num">${r.ctr==null?'–':(r.ctr*100).toFixed(1)+'%'}</td>` },
   { key:'trend', label:'Trend', kind:'post', num:false, cell:r=>`<td>${sparkline(r.trend||[])}</td>` },
-  { key:'mom', label:'MoM', kind:'post', num:true,
+  { key:'mom', label:'Δ Visits', kind:'post', num:true,
     cell:r=>`<td class="num">${r.mom==null?'<span class="delta flat">–</span>':deltaHtml(1+r.mom/100,1)}</td>` },
 ];
-const PAGES_DEFAULT_VISIBLE = ['page_name','views','visits','uniques','engagement','avg_tos','trend','mom'];
+// 'mom' (Δ Visits) is toggleable via Columns but off by default — the trend
+// sparkline already carries per-row direction.
+const PAGES_DEFAULT_VISIBLE = ['page_name','views','visits','uniques','engagement','avg_tos','trend'];
 const SEP = '';
 let pagesSort = { col:'visits', dir:'desc' };
 let lastPagesTable = null;
@@ -1656,11 +1765,12 @@ async function renderPagesTable(w){
     for (const r of rows){ const vp=pmap.get(rowKey(r)); r.mom = (vp!=null && vp>0) ? (Number(r.visits)-vp)/vp*100 : null; }
   }
   if (visible.has('trend')){
-    const n = dimKeys.length;
+    const n = dimKeys.length, tb = trendBins(w);
+    const grp = Array.from({length:n+1},(_,i)=>i+1).join(', ');
+    const ord = `${Array.from({length:n},(_,i)=>i+1).join(', ')}${n?', ':''}${n+1} DESC`;
     const tr = await query(
-      `SELECT ${dimSel}strftime(date_trunc('week', timestamp),'%Y-%m-%d') AS wk, COUNT(DISTINCT session_id) AS v
-       FROM pv WHERE ${win(w.from,w.to)} GROUP BY ${Array.from({length:n+1},(_,i)=>i+1).join(', ')}
-       ORDER BY ${Array.from({length:n+1},(_,i)=>i+1).join(', ')}`);
+      `SELECT ${dimSel}${tb.binExpr} AS wkbin, COUNT(DISTINCT session_id) AS v
+       FROM pv WHERE ${win(tb.from,tb.to)} GROUP BY ${grp} ORDER BY ${ord}`);
     const tmap = new Map();
     for (const t of tr){ const k=rowKey(t); if (!tmap.has(k)) tmap.set(k,[]); tmap.get(k).push(Number(t.v)); }
     for (const r of rows){ r.trend = tmap.get(rowKey(r)) || []; }
@@ -1728,7 +1838,7 @@ function drawPagesTableUI(){
     return sd==='asc'? x-y : y-x;
   });
 
-  document.getElementById('pagesHead').innerHTML = visibleDefs.map(c=>`<th class="${c.num?'num':''}" onclick="sortPagesTable('${c.key}')">${escapeHtml(c.label)}${
+  document.getElementById('pagesHead').innerHTML = visibleDefs.map(c=>`<th class="${c.num?'num':''}"${colTitle(c.key)} onclick="sortPagesTable('${c.key}')">${escapeHtml(c.label)}${
     pagesSort.col===c.key?`<span class="arr">${pagesSort.dir==='asc'?'▲':'▼'}</span>`:''}</th>`).join('');
   const bodyRows = [];
   for (const r of sorted){
@@ -1758,8 +1868,9 @@ function drawPagesTableUI(){
   }
   document.getElementById('pagesFoot').innerHTML = footHtml;
 
+  const momOn = (pagesPicker ? pagesPicker.getVisibleSet() : new Set(PAGES_DEFAULT_VISIBLE)).has('mom');
   document.getElementById('pagesSub').textContent =
-    `${sorted.length} rows · toggle Columns to group by dimensions · MoM = vs. prior equal period`;
+    `${sorted.length} rows · toggle Columns to group by dimensions${momOn ? ` · Δ Visits ${cmpNote}` : ''}`;
 }
 
 // Child-row cell for a single URL/language variant of an expanded page.
@@ -1848,12 +1959,14 @@ function renderRankChart(which, rows){
 
 // ==== Shared: KPI cards + sortable tables ====
 function drawKpiCards(containerId, cards){
-  document.getElementById(containerId).innerHTML = cards.map(k=>`
-    <div class="kpi-card ${k.cls||''}">
+  document.getElementById(containerId).innerHTML = cards.map(k=>{
+    const delta = k.delta!==undefined ? k.delta : (k.tipDelta ? '' : deltaHtml(k.c,k.p,k.invert));
+    const tip = k.tipDelta ? deltaTip(k.c,k.p) : '';
+    return `<div class="kpi-card ${k.cls||''}"${tip?` title="${escapeHtml(tip)}"`:''}>
       <div class="kpi-label">${k.label}</div>
       <div class="kpi-value">${k.value}</div>
-      <div class="kpi-sub">${k.delta!==undefined?k.delta:deltaHtml(k.c,k.p,k.invert)} <span>${k.sub}</span></div>
-    </div>`).join('');
+      <div class="kpi-sub">${delta} <span>${k.sub}</span></div>
+    </div>`;}).join('');
 }
 function sortByState(rows, state){
   return [...rows].sort((a,b)=>{ let x=a[state.col], y=b[state.col];
@@ -1865,7 +1978,7 @@ function sortByState(rows, state){
 }
 function drawSortableTable(headId, bodyId, cols, rows, state, redraw){
   const head=document.getElementById(headId);
-  head.innerHTML = cols.map(c=>`<th class="${c.num?'num':''}" data-k="${c.key}">${c.label}${
+  head.innerHTML = cols.map(c=>`<th class="${c.num?'num':''}"${colTitle(c.key)} data-k="${c.key}">${c.label}${
     state.col===c.key?`<span class="arr">${state.dir==='asc'?'▲':'▼'}</span>`:''}</th>`).join('');
   head.querySelectorAll('th').forEach(th=>th.onclick=()=>{
     const k=th.dataset.k;
@@ -2090,17 +2203,18 @@ async function computeAudience(w){
     share: totalSess ? r.entries/totalSess : 0,
     bounce: r.entries ? r.bounced/r.entries : 0, avgd:r.avgd }));
 
+  // All rates / window-sensitive counts — deltas as tooltip only (see renderKpis).
   lastAudienceKpis = [
     { cls:'highlight', label:'New Visitors', value:fmt(cur.newu), c:cur.newu, p:prev?prev.newu:null,
-      sub:'first ever visit in window' },
+      tipDelta:true, sub:'first ever visit in window' },
     { cls:'', label:'Returning Share', value:(cur.retShare*100).toFixed(1)+'%',
-      c:cur.retShare, p:prev?prev.retShare:null, sub:'seen before window' },
+      c:cur.retShare, p:prev?prev.retShare:null, tipDelta:true, sub:'seen before window' },
     { cls:'info', label:'Bounce Rate', value:(cur.bounce*100).toFixed(1)+'%',
-      c:cur.bounce, p:prev?prev.bounce:null, invert:true, sub:'single-page sessions' },
+      c:cur.bounce, p:prev?prev.bounce:null, invert:true, tipDelta:true, sub:'single-page sessions' },
     { cls:'', label:'Pages / Session', value:cur.depth.toFixed(2),
-      c:cur.depth, p:prev?prev.depth:null, sub:'avg. session depth' },
+      c:cur.depth, p:prev?prev.depth:null, tipDelta:true, sub:'avg. session depth' },
     { cls:'success', label:'Visits / Visitor', value:cur.perVisitor.toFixed(2),
-      c:cur.perVisitor, p:prev?prev.perVisitor:null, sub:'sessions per unique visitor' },
+      c:cur.perVisitor, p:prev?prev.perVisitor:null, tipDelta:true, sub:'sessions per unique visitor' },
   ];
   audienceCharts = { monthly, freq, depth };
 }
@@ -2198,9 +2312,9 @@ async function renderIxKpis(w){
     { cls:'info', label:'Downloads', value:fmt(cur.downloads), c:cur.downloads, p:prev?prev.downloads:null,
       sub:'file downloads' },
     { cls:'', label:'CTR', value:fmtPct(cur.ctr), c:cur.ctr, p:prev?prev.ctr:null,
-      sub:'clicks ÷ page views' },
+      tipDelta:true, sub:'clicks ÷ page views' },
     { cls:'success', label:'Clicker Rate', value:fmtPct(cur.clickerRate), c:cur.clickerRate,
-      p:prev?prev.clickerRate:null, sub:'clickers ÷ unique visitors' },
+      p:prev?prev.clickerRate:null, tipDelta:true, sub:'clickers ÷ unique visitors' },
   ];
   drawKpiCards('interactionsKpis', lastIxKpis);
 }
@@ -2539,11 +2653,12 @@ async function renderIxExplorer(w){
       r.delta = (cp!=null && cp>0) ? (Number(r.clicks)-cp)/cp*100 : null; }
   }
   if (visible.has('trend')){
-    const n = dimKeys.length;
+    const n = dimKeys.length, tb = trendBins(w);
+    const grp = Array.from({length:n+1},(_,i)=>i+1).join(', ');
+    const ord = `${Array.from({length:n},(_,i)=>i+1).join(', ')}${n?', ':''}${n+1} DESC`;
     const tr = await query(
-      `SELECT ${dimSel}strftime(date_trunc('week', timestamp),'%Y-%m-%d') AS wk, COUNT(*) AS v
-       FROM ix WHERE ${winIx(w.from,w.to)} GROUP BY ${Array.from({length:n+1},(_,i)=>i+1).join(', ')}
-       ORDER BY ${Array.from({length:n+1},(_,i)=>i+1).join(', ')}`);
+      `SELECT ${dimSel}${tb.binExpr} AS wkbin, COUNT(*) AS v
+       FROM ix WHERE ${winIx(tb.from,tb.to)} GROUP BY ${grp} ORDER BY ${ord}`);
     const tmap = new Map();
     for (const t of tr){ const k=rowKey(t); if (!tmap.has(k)) tmap.set(k,[]); tmap.get(k).push(Number(t.v)); }
     for (const r of rows){ r.trend = tmap.get(rowKey(r)) || []; }
@@ -2613,7 +2728,7 @@ function drawIxExpTable(){
     if (typeof x==='string' && typeof y==='string') return sd==='asc'?x.localeCompare(y):y.localeCompare(x);
     return sd==='asc'?x-y:y-x; });
   document.getElementById('ixExpHead').innerHTML = visibleDefs.map(c=>
-    `<th class="${c.num?'num':''}" onclick="sortIxExpTable('${c.key}')">${escapeHtml(c.label)}${
+    `<th class="${c.num?'num':''}"${colTitle(c.key)} onclick="sortIxExpTable('${c.key}')">${escapeHtml(c.label)}${
       sc===c.key?`<span class="arr">${sd==='asc'?'▲':'▼'}</span>`:''}</th>`).join('');
   document.getElementById('ixExpBody').innerHTML =
     sorted.map(r=>`<tr>${visibleDefs.map(c=>ixExpCellHtml(c,r)).join('')}</tr>`).join('')
@@ -2746,7 +2861,7 @@ function drawIxPagesTable(){
     if (typeof x==='string' && typeof y==='string') return sd==='asc'?x.localeCompare(y):y.localeCompare(x);
     return sd==='asc'?x-y:y-x; }));
   document.getElementById('ixPagesHead').innerHTML = IX_PAGES_COLS.map(c=>
-    `<th class="${c.num?'num':''}" onclick="sortIxPages('${c.key}')">${c.label}${
+    `<th class="${c.num?'num':''}"${colTitle(c.key)} onclick="sortIxPages('${c.key}')">${c.label}${
       sc===c.key?`<span class="arr">${sd==='asc'?'▲':'▼'}</span>`:''}</th>`).join('');
   const body=[];
   for (const r of sorted){
@@ -3125,11 +3240,11 @@ async function exportXlsx(evt){
     if (hasPubDates && !lastLifecycleKpis.length) await computeLifecycle(w);
     const wb=new ExcelJS.Workbook(); wb.creator='Site Owner Dashboard'; wb.created=new Date();
     const wsK=wb.addWorksheet('KPIs');
-    sheetTable(wsK,1,['Group','Metric','Value','MoM'], lastKpiRows,[false,false,true,true]);
+    sheetTable(wsK,1,['Group','Metric','Value','Δ %'], lastKpiRows,[false,false,true,true]);
     const wsP=wb.addWorksheet('Pages');
     const pRows=[...lastPages].sort((a,b)=>b.visits-a.visits).map(r=>[r.name,r.ct,r.views,r.visits,r.uniques,
       +r.engagement.toFixed(2), r.avg_tos==null?'':Math.round(r.avg_tos), r.mom==null?'':(r.mom.toFixed(1)+'%')]);
-    sheetTable(wsP,1,['Page','Type','Views','Visits','Unique','Engmt','Avg time (s)','MoM'],pRows,[false,false,true,true,true,true,true,true]);
+    sheetTable(wsP,1,['Page','Type','Views','Visits','Unique','Engmt','Avg time (s)','Δ Visits'],pRows,[false,false,true,true,true,true,true,true]);
     if (lastAudienceKpis.length){
       const wsA=wb.addWorksheet('Audience');
       const aKpi=lastAudienceKpis.map(k=>[k.label,k.value, k.p==null?'':(((k.c-k.p)/k.p)*100).toFixed(1)+'%']);

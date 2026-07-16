@@ -187,7 +187,19 @@
         content carries the traffic?</li>
       </ul>
       <div class="shot"><img src="img/guide/shot-kpis.png" alt="Overview KPI groups: Reach, Engagement, Audience, Actions, Content"></div>
-      <div class="cap">Greyed values are derived rates; each delta compares against the prior equal-length period.</div>
+      <div class="cap">Greyed values are derived rates. Arrows appear only on volume KPIs and compare against the
+      <a class="term" href="#g-prior-period">prior equal-length period</a> (YTD: same period last year); they stay grey
+      below ±5% so colour always means a material move. Derived rates show their delta as a tooltip on hover.</div>
+
+      <p style="margin-top:1.4rem"><b>Read the two time metrics as a floor, not the full picture.</b>
+      <a class="term" href="#g-avg-session">Avg. Session</a> and <a class="term" href="#g-avg-time">Avg time on page</a>
+      measure a page's time as the gap to the reader's <b>next</b> page view. A single-page visit, and the last page of
+      every visit, have no next view — so that reading time is never captured, and both figures under-report. Hover the
+      Avg. Session KPI to see what share of views the number is actually based on.</p>
+      <div class="shot"><img src="img/guide/shot-avgtime-coverage.png" alt="How Avg. time is measured — the gap to the next page view — and its blind spot: single-page visits and the last page of each visit have no next view, so only about one in four views carries a time signal."></div>
+      <div class="cap">Time on a page is the gap to the next view, so roughly three in four views — every single-page visit and
+      the last page of each visit — carry no time signal. A proper engagement beacon is the planned fix; until then, treat
+      Avg. time as a floor on real reading time.</div>
     </div>
   </div>
 
@@ -208,16 +220,18 @@
     <div class="step-num">4</div>
     <div class="step-body">
       <h2>Know your audience mix</h2>
-      <p><b>Audience by Division</b> splits visits by the reader's HR division — it answers whether your
-      site reaches the whole organisation or one silo. It needs the optional HR enrichment at build time;
-      without it the card explains what is missing instead of guessing.</p>
-      <div class="shot"><img src="img/guide/shot-division.png" alt="Audience by division donut"></div>
-      <div class="cap">Share of visits by division — each division keeps the same grey across all dashboards.</div>
-      <p><b>Content Type</b> shows what kind of content carries the traffic — articles, videos,
-      downloads. A download-heavy mix means your site is used as a reference archive; an article-heavy
-      mix means it is read as news.</p>
-      <div class="shot"><img src="img/guide/shot-contenttype.png" alt="Content type donut"></div>
-      <div class="cap">Share of page views by content type.</div>
+      <p><b>Audience by Division</b> and <b>Audience by Region</b> split visits by the reader's HR division
+      and work location. Each is a ranked bar list you can <b>click to drill down</b> — Division into
+      Unit → Area → Sector, Region into Country — with a breadcrumb to climb back. Together they answer
+      whether your site reaches the whole organisation or one silo. Both need the optional HR enrichment at
+      build time; without it the card explains what is missing instead of guessing.</p>
+      <p><b>Content Type</b> shows what kind of content carries the traffic — articles, videos, downloads;
+      a download-heavy mix means your site is used as a reference archive, an article-heavy mix that it is
+      read as news. <b>Language distribution</b> breaks the same traffic down by content language, toggled
+      between Views, Visits and Unique Visitors.</p>
+      <div class="shot"><img src="img/guide/shot-audience-mix.png" alt="Audience mix: Audience by Division and Audience by Region as click-to-drill bar lists, plus Content Type and Language distribution donuts"></div>
+      <div class="cap">The audience mix at a glance — Division and Region drill down on click (each entity keeps
+      the same grey across dashboards); Content Type and Language show the split by share.</div>
     </div>
   </div>
 
@@ -231,10 +245,11 @@
       <div class="shot"><img src="img/guide/shot-ranking.png" alt="Top 5 and bottom 5 pages by the selected metric"></div>
       <div class="cap">Top / Bottom 5 — same metric, both ends of the ranking. The dropdown changes the metric.</div>
       <p>The <b>Pages table</b> lists every page with views, visits, unique visitors, engagement, avg
-      time, a weekly trend sparkline and the <a class="term" href="#g-mom">MoM</a> delta. Click any column
-      header to sort — sorting by MoM surfaces the risers and fallers instantly.</p>
-      <div class="shot"><img src="img/guide/shot-pagestable.png" alt="Pages performance table with sparklines and MoM deltas"></div>
-      <div class="cap">Every page on the site — the sparkline shows the weekly shape, the MoM column the direction.</div>
+      time and a weekly trend sparkline. The <a class="term" href="#g-mom">Δ Visits</a> column (off by
+      default — enable it via <b>Columns</b>) adds the change vs. the prior period. Click any column
+      header to sort — sorting by Δ Visits surfaces the risers and fallers instantly.</p>
+      <div class="shot"><img src="img/guide/shot-pagestable.png" alt="Pages performance table with sparklines"></div>
+      <div class="cap">Every page on the site — the sparkline shows the weekly shape; Δ Visits (optional column) the direction.</div>
     </div>
   </div>
 
@@ -277,8 +292,8 @@
       <h2>Understand loyalty…</h2>
       <p>The <b>Audience &amp; Sessions</b> tab answers "do people come back?". Its KPIs:
       <a class="term" href="#g-new-visitor">New Visitors</a>, <a class="term" href="#g-returning">Returning
-      Share</a>, <a class="term" href="#g-bounce">Bounce Rate</a> (note: its delta colours are inverted —
-      a falling bounce rate is shown green), Pages / Session and Visits / Visitor.</p>
+      Share</a>, <a class="term" href="#g-bounce">Bounce Rate</a> (its month-over-month delta, shown on
+      hover, is inverted — a falling bounce rate reads as good), Pages / Session and Visits / Visitor.</p>
       <div class="shot"><img src="img/guide/shot-audience-kpis.png" alt="Audience KPIs: new visitors, returning share, bounce rate, pages per session, visits per visitor"></div>
       <div class="cap">Audience KPIs — loyalty on the left, session behaviour on the right.</div>
       <p><b>New vs. returning visitors</b> stacks both groups per month over the full history. A healthy
@@ -325,11 +340,11 @@
     <div id="g-page-views"><dt>Page Views</dt><dd>Total page loads in the window. One person re-opening a page counts each time.</dd></div>
     <div id="g-visits"><dt>Page Visits (Sessions)</dt><dd>Distinct browsing sessions with at least one page view. One visitor can have many sessions.</dd></div>
     <div id="g-unique-visitors"><dt>Unique Visitors</dt><dd>Distinct people in the window, counted via the telemetry user identifier. This is a device-based identifier — one person on two devices counts twice, so treat it as an upper bound on distinct employees.</dd></div>
-    <div id="g-avg-session"><dt>Avg. Session</dt><dd>Mean engaged time per visit, from the per-page time-on-page. Time is measured on reconstructed visits — all page views of the same person until a 30-minute inactivity gap — not on the raw telemetry session identifier, which resets on most navigations and would leave almost no measurable time. <span class="f">AVG(Σ time-on-page per visit)</span></dd></div>
-    <div id="g-avg-time"><dt>Avg time on page</dt><dd>Mean time readers spend on a page before moving on: the gap to the same person's next page view within one visit (30-minute inactivity rule). The last page of a visit has no next view, so it is excluded — the average covers views with a known next step. <span class="f">AVG(time-on-page)</span></dd></div>
+    <div id="g-avg-session"><dt>Avg. Session</dt><dd>Mean engaged time per visit, from the per-page time-on-page. Time is measured on reconstructed visits — all page views of the same person until a 30-minute inactivity gap — not on the raw telemetry session identifier, which resets on most navigations and would leave almost no measurable time. <b>Single-page visits carry no time at all</b> (there is no next view to measure against), so on an intranet — where most visits are one page — this reflects only multi-page visits and <b>under-reports</b> true engagement. The KPI's tooltip shows the share of views behind the figure. <span class="f">AVG(Σ time-on-page per visit)</span></dd></div>
+    <div id="g-avg-time"><dt>Avg time on page</dt><dd>Mean time readers spend on a page before moving on: the gap to the same person's next page view within one visit (30-minute inactivity rule). Single-page visits and the last page of every visit have no next view, so they are not counted — typically only about <b>one in four</b> views has a time signal, and the average covers just those. Read it as a <b>floor</b> on real reading time. <span class="f">AVG(time-on-page)</span></dd></div>
     <div id="g-engagement"><dt>Engagement</dt><dd>Breadth of the audience relative to activity: 1.0 means every visit came from a different person; low values mean few people visiting often. <span class="f">Unique Visitors ÷ Visits</span></dd></div>
-    <div id="g-mom"><dt>MoM</dt><dd>Change vs. the <a class="term" href="#g-prior-period">prior equal-length period</a>, as a percentage. Shown per page in the Pages table and under every KPI.</dd></div>
-    <div id="g-prior-period"><dt>Prior equal-length period</dt><dd>The window immediately before the selected one, with the same length (e.g. 90d selected → compared against the 90d before it). "All" has no prior period, so deltas show "–".</dd></div>
+    <div id="g-mom"><dt>Δ (delta)</dt><dd>Change vs. the <a class="term" href="#g-prior-period">prior equal-length period</a>, as a percentage. Shown under volume KPIs and — as the optional "Δ Visits" column — per page in the Pages table. Deltas smaller than ±5% render grey (no colour signal); derived rates carry their delta as a tooltip instead of an arrow. Hovering any delta names the exact comparison window.</dd></div>
+    <div id="g-prior-period"><dt>Prior equal-length period</dt><dd>The window immediately before the selected one, with the same length (e.g. 90d selected → compared against the 90d before it). Exception YTD: compared against the same period one year earlier, not the tail of last year. "All" has no prior period, so deltas show "–".</dd></div>
     <div id="g-language"><dt>Language</dt><dd>Content language derived from the page URL segment (/en/ /de/ /fr/ /it/ → EN/DE/FR/IT, anything else → Other). The filter applies to every number on every tab.</dd></div>
   </dl>
 
