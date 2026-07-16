@@ -109,7 +109,8 @@ IX_COLUMNS = [
     "client_os", "client_browser", "client_country", "referrer_url",
     "component_name", "link_type", "link_label", "link_address", "link_ancestors",
     "file_type_label", "file_name_label",
-    "video_action", "video_id", "video_type", "video_duration",
+    "video_action", "video_id", "video_title", "video_type", "video_duration",
+    "video_played_time", "video_address",
     "interaction_class", "source_file",
 ]
 

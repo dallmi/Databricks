@@ -143,8 +143,11 @@ INTERACTION_FACT_COLUMNS = {
     # Video sub-domain
     "cp_Video_Action": "video_action",
     "cp_Video_Id": "video_id",
+    "cp_Video_Title": "video_title",
     "cp_Video_Type": "video_type",
     "cp_Video_Duration": "video_duration",
+    "cp_Video_PlayedTime": "video_played_time",
+    "cp_Video_Address": "video_address",
     # page_engagement family (spec 2026-07-15-page-engagement-heartbeat-design)
     "cp_View_Instance_Id": "view_instance_id",
     "cp_Engaged_Ms": "engaged_ms_delta",

@@ -241,9 +241,12 @@ def build_link_catalogs():
             })
         if ct == "Video":
             links.append({
+                # Embedded players emit no Link_label — the human-readable name
+                # arrives only as Video_Title. Mirrored here so the demo shows the
+                # same label resolution as the real export instead of a nicer one.
                 "component_name": "VideoPlayer",
                 "link_type": "video",
-                "link_label": name,
+                "link_label": None,
                 "link_address": f"https://video.corp/watch/{slug(name)}",
                 "weight": 3.0,
                 "active_before": None,
@@ -261,7 +264,9 @@ def build_interactions(df, page_ids):
     # (the "unused potential" quadrant the dashboard should surface).
     ctr = {i: float(np.clip(CTR_BASE[PAGES[i][1]] * RNG.lognormal(0.0, 0.5), 0.01, 0.6))
            for i in range(len(PAGES))}
-    video_ids = {i: f"v-{1000 + i}" for i in range(len(PAGES))}
+    # Opaque asset ids, as the real player emits them — never a readable name.
+    video_ids = {i: f"ASSETID-550417190-{2600 + i}" for i in range(len(PAGES))}
+    video_titles = {i: PAGES[i][0] for i in range(len(PAGES))}
 
     rows = []
     hr_cols = ["hr_division", "hr_unit", "hr_area", "hr_sector", "hr_region", "hr_country"]
@@ -314,6 +319,7 @@ def build_interactions(df, page_ids):
                 "video_action": (["Play", "Play", "Play", "Pause", "Complete"]
                                  [int(RNG.integers(0, 5))] if is_video else None),
                 "video_id": video_ids[i] if is_video else None,
+                "video_title": video_titles[i] if is_video else None,
                 "video_type": "OnDemand" if is_video else None,
                 "video_duration": str(int(RNG.integers(60, 2400))) if is_video else None,
                 "interaction_class": ("download" if link["file_name_label"]

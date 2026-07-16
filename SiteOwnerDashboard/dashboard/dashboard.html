@@ -262,7 +262,12 @@
   .bar-row-track { background: var(--surface); height: 16px; border-radius: var(--radius); position: relative; overflow: hidden; }
   .bar-row-fill { height: 100%; border-radius: var(--radius); transition: width 0.2s; }
   .bar-row-count { font-variant-numeric: tabular-nums; text-align: right; color: var(--grey-6); font-weight: 500; }
-  @media (max-width: 900px){ .bar-row { grid-template-columns: 120px 1fr 60px; } }
+  /* Rows carrying a second metric (e.g. video completion) get their own column —
+     names stay readable instead of being truncated by an appended suffix. */
+  .bar-list.has-meta .bar-row { grid-template-columns: 240px 1fr 60px 52px; }
+  .bar-row-meta { font-variant-numeric: tabular-nums; text-align: right; color: var(--grey-4); }
+  @media (max-width: 900px){ .bar-row { grid-template-columns: 120px 1fr 60px; }
+    .bar-list.has-meta .bar-row { grid-template-columns: 120px 1fr 60px 52px; } }
 
   /* Page -> URL/Language expandable rows */
   .pg-exp { cursor: pointer; color: var(--grey-4); font-size: 0.7rem; display: inline-block;
@@ -511,17 +516,13 @@
             <div class="chart-title">Top components <span class="st">page components driving clicks</span></div>
             <div class="bar-list" id="ixComponentBars"></div>
           </div>
-          <div class="chart-card">
-            <div class="chart-title">Top domains <span class="st">navigational clicks by destination host</span></div>
-            <div class="bar-list" id="ixDomainBars"></div>
-          </div>
           <!-- Conditional cards — shown by their render fns only when the data exists. -->
           <div class="chart-card" id="cardIxFileTypes" style="display:none">
             <div class="chart-title">Downloads by file type <span class="st">share of downloads</span></div>
             <div class="chart-container"><canvas id="chartIxFileTypes"></canvas></div>
           </div>
           <div class="chart-card" id="cardIxVideos" style="display:none">
-            <div class="chart-title">Top videos <span class="st">plays · completion = Complete ÷ Play</span></div>
+            <div class="chart-title">Top videos <span class="st">plays · % completed = Complete ÷ Play</span></div>
             <div class="bar-list" id="ixVideoBars"></div>
           </div>
           <div class="chart-card" id="cardIxVideoActions" style="display:none">
@@ -1253,14 +1254,17 @@ function renderBars(targetId, rows, getColor, drillable, drillFn){
   const el = document.getElementById(targetId);
   if (!rows.length){ el.innerHTML = '<div class="chart-empty" style="padding:1.5rem">No data.</div>'; return; }
   const max = Math.max(...rows.map(r=>Number(r.v)||0)) || 1;
+  // r.meta — optional second metric, rendered in its own column (see .has-meta).
+  el.classList.toggle('has-meta', rows.some(r=>r.meta));
   el.innerHTML = rows.map((r,i)=>{
     const v = Number(r.v)||0, pct=(v/max)*100, color=getColor(r.name, i);
     const cls = drillable ? 'bar-row' : 'bar-row no-drill';
     const onclick = drillable ? `onclick="${drillFn}('${String(r.name).replace(/'/g,"\\'").replace(/"/g,'&quot;')}')"` : '';
+    const meta = r.meta ? `<div class="bar-row-meta">${escapeHtml(r.meta)}</div>` : '';
     return `<div class="${cls}" ${onclick} title="${escapeHtml(r.name)}">
       <div class="bar-row-label">${escapeHtml(r.name)}</div>
       <div class="bar-row-track"><div class="bar-row-fill" style="width:${pct.toFixed(1)}%;background:${color}"></div></div>
-      <div class="bar-row-count">${fmt(v)}</div></div>`;
+      <div class="bar-row-count">${fmt(v)}</div>${meta}</div>`;
   }).join('');
 }
 
@@ -1599,7 +1603,8 @@ const COL_DESC = {
   content_type:'Content category (news, event, PDF, video, …).',
   ct:'Content category (news, event, PDF, video, …).',
   language:'Content language from the URL segment (/de/ /fr/ …); no segment = English.',
-  link_label:'Link text as shown to users.',
+  link_label:'Link text as shown to users. Video players carry no link text — the video name stands in.',
+  video_title:'Video name as shown in the player. Empty for some embeds — falls back to the asset id.',
   link_type:'Link classification (internal, external, download, …).',
   interaction_class:'Interaction type (link, search, video, …).',
   component_name:'Page component the click came from.',
@@ -2351,7 +2356,7 @@ async function ixMetricsFor(a,b){
 
 async function renderInteractions(w){
   await Promise.all([ renderIxKpis(w), renderIxTraffic(w), renderIxMix(w),
-    renderIxComponents(w), renderIxDomains(w),
+    renderIxComponents(w),
     renderIxFileTypes(w), renderIxVideoBlock(w),
     renderIxHourly(w), renderIxWeekday(w), renderIxHeatmap(w),
     renderIxExplorer(w), renderIxDivPageHeatmap(w),
@@ -2452,21 +2457,6 @@ async function renderIxComponents(w){
   renderBars('ixComponentBars', rows, (n,i)=>DIVISION_GRAYS_FALLBACK[i % DIVISION_GRAYS_FALLBACK.length], false, '');
 }
 
-// ==== Top domains ====
-// Navigational clicks only — a download's "destination" is the file, a video's
-// the player; both would drown the host breakdown in noise.
-function ixNavSql(){ return ixCols.has('interaction_class') ? `interaction_class='link'` : `NOT (${dlExpr()})`; }
-// Host extracted straight from link_address, no internal/external judgment call —
-// relative links and mailto:/tel: have no host and are dropped (COALESCE-less filter).
-async function renderIxDomains(w){
-  if (!ixCols.has('link_address')){ drillMissing('ixDomainBars','No link_address in this export.'); return; }
-  const rows = await query(`SELECT lower(regexp_extract(link_address,'^[a-z]+://([^/]+)',1)) AS name, COUNT(*) AS v
-    FROM ix WHERE ${winIx(w.from,w.to)} AND ${ixNavSql()} AND lower(link_address) LIKE 'http%'
-    GROUP BY 1 HAVING name<>'' ORDER BY v DESC LIMIT 12`);
-  if (!rows.length){ drillMissing('ixDomainBars','No link clicks with a destination host in the selected window.'); return; }
-  renderBars('ixDomainBars', rows, (n,i)=>DIVISION_GRAYS_FALLBACK[i % DIVISION_GRAYS_FALLBACK.length], false, '');
-}
-
 // ==== Downloads by file type / video engagement (cards hidden without data) ====
 async function renderIxFileTypes(w){
   const card = document.getElementById('cardIxFileTypes');
@@ -2500,9 +2490,12 @@ async function renderIxVideoBlock(w){
     options:{ responsive:true, maintainAspectRatio:false, cutout:'64%',
       plugins:{ legend:{ position:'right', labels:{ font:{size:10} } } } }
   });
-  const nameExpr = ixCols.has('video_id')
-    ? `COALESCE(NULLIF(link_label,''), NULLIF(video_id,''), '(unknown video)')`
-    : `COALESCE(NULLIF(link_label,''), '(unknown video)')`;
+  // Title first — video_id is an opaque asset id (ASSETID-…), useless as a label.
+  // link_label sits between the two: filled for in-page player clicks, empty for
+  // some embeds. Degrades to the asset id rather than dropping the row.
+  const nameExpr = 'COALESCE(' +
+    ['video_title','link_label','video_id'].filter(c=>ixCols.has(c))
+      .map(c=>`NULLIF(${c},'')`).concat(`'(unknown video)'`).join(', ') + ')';
   const vids = await query(`SELECT ${nameExpr} AS name,
       COUNT(*) FILTER (WHERE lower(video_action)='play') AS plays,
       COUNT(*) FILTER (WHERE lower(video_action)='complete') AS completes,
@@ -2510,9 +2503,9 @@ async function renderIxVideoBlock(w){
     FROM ix WHERE ${winIx(w.from,w.to)} AND video_action IS NOT NULL AND video_action <> ''
     GROUP BY 1 ORDER BY plays DESC, v DESC LIMIT 10`);
   cardV.style.display='';
-  const rows = vids.map(r=>({ v: Number(r.plays) || Number(r.v),
-    name: r.name + (Number(r.plays)>0 && Number(r.completes)>0
-      ? ` · ${Math.round(Number(r.completes)/Number(r.plays)*100)}% completed` : '') }));
+  const rows = vids.map(r=>({ v: Number(r.plays) || Number(r.v), name: r.name,
+    meta: (Number(r.plays)>0 && Number(r.completes)>0)
+      ? `${Math.round(Number(r.completes)/Number(r.plays)*100)}%` : '' }));
   renderBars('ixVideoBars', rows, (n,i)=>DIVISION_GRAYS_FALLBACK[i % DIVISION_GRAYS_FALLBACK.length], false, '');
 }
 
@@ -2607,10 +2600,18 @@ const IX_EXP_PRESETS = [
   { id:'filetypes',  label:'File Types', need:'file_type_label', sort:'downloads',
     cols:['file_type_label','downloads','clickers','pages','last_clicked'] },
 ];
+// What the user interacted with. Embedded video players emit no Link_label —
+// their readable name arrives as Video_Title, so it fills the gap here instead
+// of letting every video play collapse into one "(no label)" bucket.
+function ixWhatSql(alias){
+  const parts = ['link_label'].concat(ixCols.has('video_title') ? ['video_title'] : []);
+  const expr = `COALESCE(${parts.map(c=>`NULLIF(${c},'')`).join(', ')}, '(no label)')`;
+  return alias ? `${expr} AS ${alias}` : expr;
+}
 function buildIxExpColdefs(){
   const defs = [
     // ---- Dimensions (Group By) — offered only when the column exists on ix ----
-    { key:'link_label',        label:'Link',          kind:'dim', selectSql:`COALESCE(link_label,'(no label)')` },
+    { key:'link_label',        label:'Link',          kind:'dim', selectSql:ixWhatSql() },
     { key:'_addr', kind:'attr', hidden:true, always:true, selectSql:`MAX(COALESCE(link_address,''))` },
     { key:'link_type',         label:'Link Type',     kind:'dim', selectSql:`COALESCE(link_type,'(none)')` },
     { key:'interaction_class', label:'Class',         kind:'dim', selectSql:`COALESCE(interaction_class,'link')` },
@@ -3014,7 +3015,7 @@ async function toggleIxExpand(pk){
         COALESCE(c.clicks,0) clicks, COALESCE(c.clickers,0) clickers, COALESCE(c.downloads,0) downloads
       FROM v LEFT JOIN c USING (page_id) ORDER BY v.n_views DESC`);
     // (b) link detail — what is actually clicked on this page
-    const links = await query(`SELECT COALESCE(link_label,'(no label)') AS "label",
+    const links = await query(`SELECT ${ixWhatSql('"label"')},
         COALESCE(link_address,'') addr, any_value(link_type) ltype,
         ${ixCols.has('interaction_class')?'any_value(interaction_class)':`'link'`} cls,
         COUNT(*) clicks, COUNT(DISTINCT person_id) clickers,
@@ -3193,7 +3194,7 @@ async function ixLinkExportMap(w){
   const cls = ixCols.has('interaction_class') ? `any_value(interaction_class)` : `'link'`;
   const ltype = ixCols.has('link_type') ? `any_value(link_type)` : `''`;
   const rows = await query(`SELECT * FROM (
-      SELECT page_key, COALESCE(link_label,'(no label)') AS lbl, COALESCE(link_address,'') addr,
+      SELECT page_key, ${ixWhatSql('lbl')}, COALESCE(link_address,'') addr,
         ${ltype} ltype, ${cls} cls, COUNT(*) clicks, COUNT(DISTINCT person_id) clickers,
         strftime(MAX(timestamp),'%Y-%m-%d') lastc,
         row_number() OVER (PARTITION BY page_key ORDER BY COUNT(*) DESC) rn
