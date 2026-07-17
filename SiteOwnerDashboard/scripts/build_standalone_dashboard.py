@@ -103,7 +103,7 @@ def _make_surrogate_map(con, col: str, sources: list[tuple[Path, str]], salt: st
     DENSE_RANK is 1:1 on distinct values, so COUNT(DISTINCT) is preserved
     exactly — unlike a truncated hash, which could collide.
     """
-    parts = [f"SELECT DISTINCT {col} AS orig FROM read_parquet('{p.as_posix()}') {w}"
+    parts = [f"SELECT DISTINCT {col} AS orig FROM read_parquet('{p.as_posix()}') s {w}"
              for p, w in sources]
     union = " UNION ".join(parts)
     con.execute(f"""
@@ -178,7 +178,7 @@ def build_payloads(parquet_dir: Path, *, site: str | None = None,
                 f"SELECT COUNT(*) FROM read_parquet('{src.as_posix()}') s {where[view]}"
             ).fetchone()[0]
 
-    stats = _collect_stats(con, present, where, rows)
+    stats = _collect_stats(con, present, where, rows, cols)
     con.close()
     return payloads, stats
 
@@ -189,7 +189,7 @@ def _build_where(con, present, cols, *, site=None, since=None, months=None) -> d
     return {v: "" for v, _, _ in present}
 
 
-def _collect_stats(con, present, where, rows) -> dict:
+def _collect_stats(con, present, where, rows, cols) -> dict:
     src = {v: s for v, s, _ in present}
     pv = src["pv"].as_posix()
     mn, mx = con.execute(
@@ -197,9 +197,16 @@ def _collect_stats(con, present, where, rows) -> dict:
         f"FROM read_parquet('{pv}') s {where['pv']}").fetchone()
     sites = [r[0] for r in con.execute(
         f"SELECT DISTINCT site_name FROM read_parquet('{pv}') s {where['pv']} "
-        f"ORDER BY 1").fetchall()] if "site_name" in _columns(con, src["pv"]) else []
+        f"ORDER BY 1").fetchall()] if "site_name" in cols["pv"] else []
+    # Same UNION-of-DISTINCT the surrogate map is built from, so an ix-only
+    # person (clicked but their pageviews fell outside the slice) is still
+    # counted — persons must span pv ∪ ix, not just pv.
+    person_parts = [
+        f"SELECT DISTINCT person_id FROM read_parquet('{s.as_posix()}') s {where[v]}"
+        for v, s, _ in present if "person_id" in cols[v]]
     persons = con.execute(
-        f"SELECT COUNT(DISTINCT person_id) FROM read_parquet('{pv}') s {where['pv']}").fetchone()[0]
+        f"SELECT COUNT(*) FROM ({' UNION '.join(person_parts)})"
+    ).fetchone()[0] if person_parts else 0
     return {"rows": rows, "sites": sites, "window": (mn, mx), "persons": persons}
 
 
@@ -242,7 +249,8 @@ def inline_libs(html: str, libs=LIBS) -> str:
 
 
 def build(template_path: Path, parquet_dir: Path, output_path: Path, *,
-         site=None, since=None, months=None, keep_ids=False) -> Path:
+          site: str | None = None, since: str | None = None,
+          months: int | None = None, keep_ids: bool = False) -> Path:
     template_path = Path(template_path)
     parquet_dir = Path(parquet_dir)
     output_path = Path(output_path)
