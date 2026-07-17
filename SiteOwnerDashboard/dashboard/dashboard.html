@@ -357,12 +357,30 @@
             <div class="chart-container tall"><canvas id="chartTraffic"></canvas></div>
           </div>
           <div class="chart-card">
-            <div class="chart-title">Audience by Division <span class="st" id="divDrillMeta">click a bar to drill Unit › Area › Sector</span></div>
+            <div class="chart-title">Audience by Division
+              <span style="display:flex;gap:0.75rem;align-items:center;">
+                <span class="st" id="divDrillMeta">click a bar to drill Unit › Area › Sector</span>
+                <span class="seg">
+                  <button id="dmViews" onclick="setDivMetric('views')">Views</button>
+                  <button id="dmVisits" onclick="setDivMetric('visits')">Visits</button>
+                  <button id="dmUniques" class="active" onclick="setDivMetric('uniques')">UV</button>
+                </span>
+              </span>
+            </div>
             <div class="breadcrumb" id="divDrillBreadcrumb"></div>
             <div class="bar-list" id="divDrillBars"></div>
           </div>
           <div class="chart-card">
-            <div class="chart-title">Audience by Region <span class="st" id="regDrillMeta">click a region to drill into Country</span></div>
+            <div class="chart-title">Audience by Region
+              <span style="display:flex;gap:0.75rem;align-items:center;">
+                <span class="st" id="regDrillMeta">click a region to drill into Country</span>
+                <span class="seg">
+                  <button id="rmViews" onclick="setRegMetric('views')">Views</button>
+                  <button id="rmVisits" onclick="setRegMetric('visits')">Visits</button>
+                  <button id="rmUniques" class="active" onclick="setRegMetric('uniques')">UV</button>
+                </span>
+              </span>
+            </div>
             <div class="breadcrumb" id="regionDrillBreadcrumb"></div>
             <div class="bar-list" id="regionDrillBars"></div>
           </div>
@@ -808,6 +826,7 @@ let cmpNote=''; // human-readable comparison window, set by windows(), used in d
 let pvCols=new Set(), hasPubDates=false;
 let ixCols=new Set();                 // column inventory of the ix view (Phase 2)
 let timeframe='90d', trafficMetric='visits', rankMetric='visits', langMetric='views';
+let divMetric='uniques', regMetric='uniques';   // Audience charts: people, not sessions
 let customFrom=null, customTo=null;
 let articleSort={col:'pd', dir:'desc'}, entrySort={col:'entries', dir:'desc'};
 let charts={};
@@ -1236,6 +1255,33 @@ async function renderTraffic(w){
 function drillMissing(elId, msg){ document.getElementById(elId).innerHTML =
   `<div class="chart-empty" style="padding:1.5rem">${escapeHtml(msg)}</div>`; }
 
+// The three additive traffic metrics, shared by every chart that offers a
+// Views/Visits/UV switch. Only additive metrics belong here — a "share of" a
+// ratio (engagement, avg time) is meaningless.
+const METRIC_SQL = { views:'COUNT(*)', visits:'COUNT(DISTINCT session_id)', uniques:'COUNT(DISTINCT person_id)' };
+const METRIC_LABEL = { views:'page views', visits:'visits', uniques:'unique visitors' };
+const METRIC_SHORT = { views:'Views', visits:'Visits', uniques:'UV' };
+
+// Share of the selected metric at the current drill scope. Denominator is the
+// sum over all groups of the scope, so the bars sum to 100% — rows beyond LIMIT
+// stay in the denominator, so the visible shares can sum to <100%. HR dimensions
+// are person attributes, so groups are disjoint; a mover between two HR
+// snapshots can count in both (negligible, and share-of-sum stays the honest
+// answer to "how much comes from Division A").
+function pctLabel(p){ if (p==null) return ''; const v=Number(p);
+  return v>0 && v<0.1 ? '<0.1%' : `${v.toFixed(1)}%`; }
+
+function drillQuery(col, w, drillWhere, metric){
+  const expr = METRIC_SQL[metric] || METRIC_SQL.uniques;
+  return query(`WITH b AS (
+      SELECT COALESCE(${col},'(unknown)') AS name, ${expr} AS v
+      FROM pv WHERE ${win(w.from,w.to)} AND ${col} IS NOT NULL${drillWhere}
+      GROUP BY 1)
+    SELECT name, v, v * 100.0 / NULLIF(SUM(v) OVER (), 0) AS pct
+    FROM b ORDER BY v DESC LIMIT 25`)
+    .then(rows => rows.map(r => ({ ...r, meta: pctLabel(r.pct) })));
+}
+
 function buildDrillBreadcrumb(elId, level, labels, filters, navigateFn){
   const el = document.getElementById(elId);
   const parts = [`<span class="breadcrumb-item" onclick="${navigateFn}(-1)">All ${labels[0]}s</span>`];
@@ -1276,9 +1322,7 @@ async function renderDivDrill(w){
   if (!pvCols.has(col)){ drillMissing('divDrillBars',`No ${DIV_LABELS[level]} data (${col}) in this export.`); return; }
   let drillWhere='';
   for (const f of divDrill.filters){ drillWhere += ` AND ${DIV_LEVELS[f.level]} = '${escSql(f.value)}'`; }
-  const rows = await query(`SELECT COALESCE(${col},'(unknown)') AS name, COUNT(DISTINCT session_id) AS v
-    FROM pv WHERE ${win(w.from,w.to)} AND ${col} IS NOT NULL${drillWhere}
-    GROUP BY 1 ORDER BY v DESC LIMIT 25`);
+  const rows = await drillQuery(col, w, drillWhere, divMetric);
   buildDrillBreadcrumb('divDrillBreadcrumb', level, DIV_LABELS, divDrill.filters, 'divNavigateTo');
   document.getElementById('divDrillMeta').textContent =
     `${DIV_LABELS[level]} • ${rows.length}` + (level < DIV_LEVELS.length-1 ? ' • click to drill' : '');
@@ -1308,9 +1352,7 @@ async function renderRegionDrill(w){
   if (!pvCols.has(col)){ drillMissing('regionDrillBars',`No ${REG_LABELS[level]} data (${col}) in this export.`); return; }
   let drillWhere='';
   if (regDrill.filter) drillWhere = ` AND hr_region = '${escSql(regDrill.filter)}'`;
-  const rows = await query(`SELECT COALESCE(${col},'(unknown)') AS name, COUNT(DISTINCT session_id) AS v
-    FROM pv WHERE ${win(w.from,w.to)} AND ${col} IS NOT NULL${drillWhere}
-    GROUP BY 1 ORDER BY v DESC LIMIT 25`);
+  const rows = await drillQuery(col, w, drillWhere, regMetric);
   const bc = document.getElementById('regionDrillBreadcrumb');
   if (level===0) bc.innerHTML = `<span class="breadcrumb-current">All Regions</span>`;
   else bc.innerHTML = `<span class="breadcrumb-item" onclick="regionNavigateTo(-1)">All Regions</span>`
@@ -1346,11 +1388,9 @@ async function renderContentType(w){
 // Language distribution — share of the selected additive metric (Views / Visits /
 // Unique Visitors) across the whole (filtered) site. Ratios (engagement, avg
 // time) are deliberately excluded: a "share" donut of a ratio is meaningless.
-const LANG_METRIC_SQL = { views:'COUNT(*)', visits:'COUNT(DISTINCT session_id)', uniques:'COUNT(DISTINCT person_id)' };
-const LANG_METRIC_LABEL = { views:'page views', visits:'visits', uniques:'unique visitors' };
 async function renderLanguage(w){
   if (!pvCols.has('language')){ chartEmpty('chartLanguage','No language column in this export.'); return; }
-  const expr = LANG_METRIC_SQL[langMetric] || LANG_METRIC_SQL.views;
+  const expr = METRIC_SQL[langMetric] || METRIC_SQL.views;
   const rows = await query(`SELECT COALESCE(language,'Other') l, ${expr} v
     FROM pv WHERE ${win(w.from,w.to)} GROUP BY 1 ORDER BY 2 DESC`);
   const labels=rows.map(r=>r.l), vals=rows.map(r=>r.v);
@@ -1361,7 +1401,7 @@ async function renderLanguage(w){
     data:{ labels, datasets:[{ data:vals, backgroundColor:colors, borderWidth:1, borderColor:'#fff' }] },
     options:{ responsive:true, maintainAspectRatio:false, cutout:'64%',
       plugins:{ legend:{ position:'right', labels:{ font:{size:10} } },
-        tooltip:{ callbacks:{ label:c=>`${c.label}: ${c.parsed.toLocaleString()} ${LANG_METRIC_LABEL[langMetric]}` } } } }
+        tooltip:{ callbacks:{ label:c=>`${c.label}: ${c.parsed.toLocaleString()} ${METRIC_LABEL[langMetric]}` } } } }
   });
 }
 
@@ -3098,6 +3138,10 @@ function setLanguageMetric(m){ langMetric=m;
   document.getElementById('lmVisits').classList.toggle('active', m==='visits');
   document.getElementById('lmUniques').classList.toggle('active', m==='uniques');
   renderLanguage(windows()); }
+function segActive(prefix, m){ for (const [k,id] of [['views','Views'],['visits','Visits'],['uniques','Uniques']])
+  document.getElementById(prefix+id).classList.toggle('active', m===k); }
+function setDivMetric(m){ divMetric=m; segActive('dm', m); renderDivDrill(windows()); }
+function setRegMetric(m){ regMetric=m; segActive('rm', m); renderRegionDrill(windows()); }
 function switchTab(id){
   activeTab = id;
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===id));
