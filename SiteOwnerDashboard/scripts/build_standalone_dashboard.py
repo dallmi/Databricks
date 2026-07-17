@@ -184,29 +184,60 @@ def build_payloads(parquet_dir: Path, *, site: str | None = None,
     return payloads, stats
 
 
+def _validate_since(value: str) -> str:
+    """Validate --since is a strict YYYY-MM-DD date.
+
+    This is not just format-checking: it is also what makes the later string
+    interpolation into SQL (`TIMESTAMP '{floor}'`) safe. A value that passes
+    strptime with this format can contain only digits and dashes, so it can
+    never carry a quote or break out of the literal.
+    """
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as e:
+        raise ValueError(
+            f"--since {value!r} is not a valid date — expected YYYY-MM-DD") from e
+    return value
+
+
 def _build_where(con, present, cols, *, site=None, since=None, months=None) -> dict[str, str]:
-    """Per-view WHERE clause. The time cutoff is computed ONCE from pv and
-    applied to every view: a per-file cutoff would give the sparser ix a
-    different stichtag and clicks would stop matching views."""
-    if since and months:
+    """Per-view WHERE clause. The time cutoff is computed ONCE (from pv, or
+    from pv restricted to --site when --site is given) and applied to every
+    view: a per-file cutoff would give the sparser ix a different stichtag
+    and clicks would stop matching views."""
+    if since is not None and months is not None:
         raise ValueError("--since and --months are mutually exclusive")
+    if since is not None:
+        since = _validate_since(since)
 
     src = {v: s for v, s, _ in present}
-    floor = since
-    if months:
-        pv_max = con.execute(
-            f"SELECT MAX(timestamp) FROM read_parquet('{src['pv'].as_posix()}')").fetchone()[0]
-        floor = con.execute(
-            "SELECT (?::TIMESTAMP - INTERVAL (?) MONTH)::VARCHAR", [pv_max, months]).fetchone()[0]
 
-    if site:
+    available = []
+    if "site_name" in cols["pv"]:
         available = [r[0] for r in con.execute(
             f"SELECT DISTINCT site_name FROM read_parquet('{src['pv'].as_posix()}') "
             f"ORDER BY 1").fetchall()]
+
+    site_clause = ""
+    if site:
         if not any(a is not None and a.casefold() == site.casefold() for a in available):
             raise ValueError(
                 f"--site {site!r} not found. Sites in this parquet: "
                 + ", ".join(repr(a) for a in available))
+        site_clause = f" WHERE lower(s.site_name) = lower('{site.replace(chr(39), chr(39) * 2)}')"
+
+    floor = since
+    if months is not None:
+        if months < 1:
+            raise ValueError(f"--months must be >= 1, got {months}")
+        # Anchored to --site's own last data point when a site is given, not
+        # pv's global max: a site that stopped publishing long ago must not
+        # be starved by a more recently active site's timestamps.
+        pv_max = con.execute(
+            f"SELECT MAX(timestamp) FROM read_parquet('{src['pv'].as_posix()}') s"
+            f"{site_clause}").fetchone()[0]
+        floor = con.execute(
+            "SELECT (?::TIMESTAMP - INTERVAL (?) MONTH)::VARCHAR", [pv_max, months]).fetchone()[0]
 
     where = {}
     for view, _, _ in present:
@@ -217,19 +248,29 @@ def _build_where(con, present, cols, *, site=None, since=None, months=None) -> d
             parts.append(f"s.timestamp >= TIMESTAMP '{floor}'")
         where[view] = ("WHERE " + " AND ".join(parts)) if parts else ""
 
-    for view, _, _ in present:
-        n = con.execute(f"SELECT COUNT(*) FROM read_parquet('{src[view].as_posix()}') s "
-                        f"{where[view]}").fetchone()[0]
-        if n == 0 and view == "pv":
-            raise ValueError("0 rows after the filter — refusing to build an empty dashboard")
+    # pv is the only view whose emptiness is fatal — an empty ix is a
+    # legitimate build (Phase 2 data is optional).
+    n = con.execute(f"SELECT COUNT(*) FROM read_parquet('{src['pv'].as_posix()}') s "
+                    f"{where['pv']}").fetchone()[0]
+    if n == 0:
+        raise ValueError(
+            "0 rows after the filter — refusing to build an empty dashboard. "
+            "Sites in this parquet: " + ", ".join(repr(a) for a in available))
     return where
 
 
 def _collect_stats(con, present, where, rows, cols) -> dict:
     src = {v: s for v, s, _ in present}
     pv = src["pv"].as_posix()
-    mn, mx = con.execute(
-        f"SELECT MIN(timestamp)::VARCHAR, MAX(timestamp)::VARCHAR "
+    # span_days computed in SQL, not via datetime.fromisoformat(mx) -
+    # datetime.fromisoformat(mn): DuckDB trims trailing zeros from fractional
+    # seconds ('.100' -> '.1'), and Python 3.9's fromisoformat only accepts
+    # 3- or 6-digit fractions, so that combination crashes on ~5% of real
+    # timestamps. An all-NULL timestamp column (mn/mx both NULL) yields a
+    # NULL span_days here instead of a TypeError.
+    mn, mx, span_days = con.execute(
+        f"SELECT MIN(timestamp)::VARCHAR, MAX(timestamp)::VARCHAR, "
+        f"date_diff('day', MIN(timestamp), MAX(timestamp)) "
         f"FROM read_parquet('{pv}') s {where['pv']}").fetchone()
     sites = [r[0] for r in con.execute(
         f"SELECT DISTINCT site_name FROM read_parquet('{pv}') s {where['pv']} "
@@ -243,7 +284,8 @@ def _collect_stats(con, present, where, rows, cols) -> dict:
     persons = con.execute(
         f"SELECT COUNT(*) FROM ({' UNION '.join(person_parts)})"
     ).fetchone()[0] if person_parts else 0
-    return {"rows": rows, "sites": sites, "window": (mn, mx), "persons": persons}
+    return {"rows": rows, "sites": sites, "window": (mn, mx), "persons": persons,
+            "span_days": span_days}
 
 
 def inline_parquet(html: str, parquet_bytes: bytes, island_id: str) -> str:
@@ -299,9 +341,8 @@ def build(template_path: Path, parquet_dir: Path, output_path: Path, *,
     # (a vendored lib could contain a literal "</head>" substring).
     payloads, stats = build_payloads(parquet_dir, site=site, since=since,
                                      months=months, keep_ids=keep_ids)
-    mn, mx = stats["window"]
-    span_days = (datetime.fromisoformat(mx) - datetime.fromisoformat(mn)).days
-    if span_days < 180:
+    span_days = stats["span_days"]
+    if span_days is not None and span_days < 180:
         print(f"WARNING: the slice spans {span_days} days. The dashboard compares each "
               f"KPI against the equal-length preceding period and defaults to a 90d "
               f"window, so under 180 days every delta silently disappears (reads as "
@@ -385,7 +426,7 @@ def main(argv=None) -> int:
                              "parquet (NOT to today — exports lag reality)")
     args = parser.parse_args(argv)
     out = build(args.template, args.parquet_dir, args.output, site=args.site,
-               since=args.since, months=args.months, keep_ids=args.keep_ids)
+                since=args.since, months=args.months, keep_ids=args.keep_ids)
     size_mb = out.stat().st_size / 1_048_576
     print(f"Wrote {out} ({size_mb:.1f} MB)")
     if not args.no_guide:

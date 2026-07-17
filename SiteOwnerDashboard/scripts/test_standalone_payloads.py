@@ -56,6 +56,12 @@ def write_fixture(d: Path) -> None:
     ix = pd.DataFrame([
         (GPN_A, GPN_A, "s-1", "2026-01-15 10:00:30", "News and events", "u01"),
         (GPN_C, GPN_C, "s-9", "2026-06-21 09:00:00", "News and events", "u03"),
+        # Pins the pv-cutoff-applies-to-ix property (see test_slice's --months
+        # block): lands strictly between pv's global-max-derived floor
+        # (2026-05-20 11:05) and what a per-file (ix-own-max-derived) floor
+        # would be (2026-05-21 09:00). Only the correct (pv-anchored) floor
+        # keeps this row.
+        (GPN_A, GPN_A, "s-4", "2026-05-20 20:00:00", "News and events", "u01"),
     ], columns=["gpn", "person_id", "session_id", "timestamp", "site_name", "user_id"])
     ix["timestamp"] = pd.to_datetime(ix["timestamp"])
     ix["event_id"] = [f"e{i}" for i in range(len(ix))]
@@ -119,6 +125,7 @@ def main() -> None:
 
         test_prune(d, con)
         test_slice(d, con)
+        test_site_anchored_months(con)
         test_salt_orders_the_map(con)
 
 
@@ -168,10 +175,15 @@ def test_slice(d: Path, con: duckdb.DuckDBPyConnection) -> None:
         f"SELECT COUNT(*) FROM read_parquet('{p.as_posix()}')").fetchone()[0], 3)
 
     print("--months is relative to MAX(timestamp) in pv, not to today")
-    # pv max is 2026-06-20; 1 month back = 2026-05-20 -> the January rows drop,
-    # and ix (max 2026-06-21) must use PV's cutoff, keeping only its June row.
+    # pv max is 2026-06-20 11:05; 1 month back = 2026-05-20 11:05 -> the
+    # January rows drop, and ix (own max 2026-06-21 09:00) must use PV's
+    # cutoff, not its own. This is exactly what the extra ix row at
+    # 2026-05-20 20:00 pins: it sits after the pv-anchored floor
+    # (2026-05-20 11:05) but before what an ix-own-max floor would be
+    # (2026-05-21 09:00), so a per-file-cutoff regression drops it while the
+    # correct pv-anchored cutoff keeps it -> ix rows == 2, not 1.
     payloads, _ = build_payloads(d, months=1)
-    for view, expected in (("pv", 3), ("ix", 1)):
+    for view, expected in (("pv", 3), ("ix", 2)):
         p = d / f"months_{view}.parquet"
         p.write_bytes(payloads[view])
         check(f"months {view} rows", con.execute(
@@ -191,6 +203,87 @@ def test_slice(d: Path, con: duckdb.DuckDBPyConnection) -> None:
         sys.exit(1)
     except ValueError:
         print("  ok  --since with --months rejected")
+
+    try:
+        build_payloads(d, since="2026-06-20' OR '1'='1")
+        print("FAIL: malformed --since did not raise")
+        sys.exit(1)
+    except ValueError as e:
+        check("malformed --since names the expected format", "YYYY-MM-DD" in str(e), True)
+
+    try:
+        build_payloads(d, since="20/06/2026")
+        print("FAIL: --since in the wrong date order did not raise")
+        sys.exit(1)
+    except ValueError as e:
+        check("wrong-order --since names the expected format", "YYYY-MM-DD" in str(e), True)
+
+    try:
+        build_payloads(d, months=0)
+        print("FAIL: --months 0 did not raise")
+        sys.exit(1)
+    except ValueError as e:
+        check("--months 0 rejected", "must be >= 1" in str(e), True)
+
+    try:
+        build_payloads(d, months=-3)
+        print("FAIL: --months -3 did not raise")
+        sys.exit(1)
+    except ValueError as e:
+        check("--months -3 rejected", "must be >= 1" in str(e), True)
+
+    try:
+        build_payloads(d, since="2026-06-01", months=0)
+        print("FAIL: --since with --months 0 did not raise (mutual exclusion "
+              "must fire even though 0 is falsy)")
+        sys.exit(1)
+    except ValueError:
+        print("  ok  --since with --months 0 rejected (mutual exclusion)")
+
+    try:
+        build_payloads(d, since="2030-01-01")
+        print("FAIL: --since beyond all data did not raise")
+        sys.exit(1)
+    except ValueError as e:
+        check("zero-rows error names the available sites",
+              "News and events" in str(e), True)
+
+
+def test_site_anchored_months(con: duckdb.DuckDBPyConnection) -> None:
+    """--site X --months N must anchor the cutoff to X's own last data point,
+    not to pv's global max (finding 6) — otherwise a site that stopped
+    publishing long before other sites would starve to an empty build.
+
+    Isolated fixture, not the shared one: the shared fixture's 'Other site'
+    row happens to BE pv's global max (it is the single latest row in the
+    whole file), so per-site vs. global anchoring compute the identical
+    floor there and the property would not be pinned. This fixture gives
+    each site a distinct, well-separated max so the two anchorings diverge.
+    """
+    print("--site + --months anchors to that site's own max, not pv's global max")
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        pv = pd.DataFrame([
+            ("Alpha", "2026-01-01 08:00:00"),
+            ("Alpha", "2026-01-15 09:00:00"),
+            ("Beta", "2026-06-01 08:00:00"),
+            ("Beta", "2026-06-20 09:00:00"),
+        ], columns=["site_name", "timestamp"])
+        pv["timestamp"] = pd.to_datetime(pv["timestamp"])
+        pv.to_parquet(d / "site_pageviews.parquet", index=False)
+
+        # Correct (site-anchored): floor = Alpha's own max (2026-01-15 09:00)
+        # minus 1 month = 2025-12-15 09:00 -> both Alpha rows qualify -> 2.
+        # Bug (pv-global-anchored): floor = Beta's max (2026-06-20 09:00)
+        # minus 1 month = 2026-05-20 09:00 -> BOTH Alpha rows (Jan 1, Jan 15)
+        # are before that floor -> 0 rows -> "0 rows after the filter" would
+        # fire for a site that is very much still present in the data. That
+        # crash-vs-2-rows gap is what makes the fixture sharp.
+        payloads, _ = build_payloads(d, site="Alpha", months=1)
+        p = d / "alpha.parquet"
+        p.write_bytes(payloads["pv"])
+        check("site-anchored months rows", con.execute(
+            f"SELECT COUNT(*) FROM read_parquet('{p.as_posix()}')").fetchone()[0], 2)
 
 
 def test_salt_orders_the_map(con: duckdb.DuckDBPyConnection) -> None:
