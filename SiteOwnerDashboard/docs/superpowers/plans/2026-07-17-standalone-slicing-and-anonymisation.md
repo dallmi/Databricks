@@ -155,19 +155,44 @@ def main() -> None:
         a_ix = con.execute(f"SELECT DISTINCT person_id FROM {ix} WHERE session_id = 's-1'").fetchone()[0]
         check("person A same surrogate in pv and ix", a_pv, a_ix)
 
-        print("salt is random per build")
-        payloads2, _ = build_payloads(d)
-        p2 = d / "pv2.parquet"
-        p2.write_bytes(payloads2["pv"])
-        runs = set()
-        for rel in (pv, f"read_parquet('{p2.as_posix()}')"):
-            runs.add(tuple(r[0] for r in con.execute(
-                f"SELECT person_id FROM {rel} ORDER BY session_id, timestamp").fetchall()))
-        if len(runs) != 2:
-            print("NOTE: both builds produced identical surrogate sequences — "
-                  "possible with 2 persons (50% chance). Not a failure.")
-        check("second build still preserves persons",
-              con.execute(f"SELECT COUNT(DISTINCT person_id) FROM read_parquet('{p2.as_posix()}')").fetchone()[0], 2)
+        print("surrogates are a dense 1..N permutation (no gaps, no collisions)")
+        check("pv person surrogates dense", sorted(r[0] for r in con.execute(
+            f"SELECT DISTINCT person_id FROM {pv}").fetchall()), [1, 2])
+        check("pv visit surrogates dense", sorted(r[0] for r in con.execute(
+            f"SELECT DISTINCT visit_id FROM {pv}").fetchall()), [1, 2, 3])
+
+        test_salt_orders_the_map(con)
+
+
+def test_salt_orders_the_map(con: duckdb.DuckDBPyConnection) -> None:
+    """The salt must drive the ORDER of the dense rank, not just exist.
+
+    Asserted on _make_surrogate_map with two fixed salts over 50 persons: if the
+    salt were ignored (or the rank ordered by the raw value), both salts would
+    produce identical mappings. With 50 persons an accidental match has
+    probability 1/50! — this assertion is not a coin flip, unlike comparing two
+    random-salt builds over a 2-person fixture.
+    """
+    from build_standalone_dashboard import _make_surrogate_map
+    print("the salt orders the map")
+    with tempfile.TemporaryDirectory() as t:
+        src = Path(t) / "persons.parquet"
+        pd.DataFrame({"person_id": [f"0{i:07d}" for i in range(50)]}).to_parquet(src, index=False)
+
+        orders = []
+        for salt in ("saltA" * 6, "saltB" * 6):
+            _make_surrogate_map(con, "person_id", [(src, "")], salt)
+            orders.append(tuple(r[0] for r in con.execute(
+                "SELECT orig FROM person_id_map ORDER BY surrogate").fetchall()))
+
+        if orders[0] == orders[1]:
+            print("FAIL the salt orders the map: both salts produced the same order — "
+                  "the salt is being ignored")
+            sys.exit(1)
+        print("  ok  different salts -> different order")
+        check("map is 1:1 over all persons", len(set(orders[0])), 50)
+        check("surrogates are dense 1..50", sorted(r[0] for r in con.execute(
+            "SELECT surrogate FROM person_id_map").fetchall()), list(range(1, 51)))
 
     print("\nAll assertions passed.")
 
