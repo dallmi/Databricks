@@ -118,6 +118,7 @@ def main() -> None:
             f"SELECT DISTINCT visit_id FROM {pv}").fetchall()), [1, 2, 3])
 
         test_prune(d, con)
+        test_slice(d, con)
         test_salt_orders_the_map(con)
 
 
@@ -148,6 +149,48 @@ def test_prune(d: Path, con: duckdb.DuckDBPyConnection) -> None:
     check("keep_ids leaves person_id as the GPN",
           con.execute(f"SELECT COUNT(*) FROM read_parquet('{p.as_posix()}') "
                       f"WHERE person_id = gpn").fetchone()[0], 5)
+
+
+def test_slice(d: Path, con: duckdb.DuckDBPyConnection) -> None:
+    print("--site keeps only that site's rows")
+    payloads, stats = build_payloads(d, site="news and events")   # case-insensitive
+    p = d / "slice_pv.parquet"
+    p.write_bytes(payloads["pv"])
+    check("site slice rows", con.execute(
+        f"SELECT COUNT(*) FROM read_parquet('{p.as_posix()}')").fetchone()[0], 4)
+    check("site slice sites", stats["sites"], ["News and events"])
+
+    print("--since cuts by absolute date")
+    payloads, _ = build_payloads(d, since="2026-06-01")
+    p = d / "since_pv.parquet"
+    p.write_bytes(payloads["pv"])
+    check("since rows", con.execute(
+        f"SELECT COUNT(*) FROM read_parquet('{p.as_posix()}')").fetchone()[0], 3)
+
+    print("--months is relative to MAX(timestamp) in pv, not to today")
+    # pv max is 2026-06-20; 1 month back = 2026-05-20 -> the January rows drop,
+    # and ix (max 2026-06-21) must use PV's cutoff, keeping only its June row.
+    payloads, _ = build_payloads(d, months=1)
+    for view, expected in (("pv", 3), ("ix", 1)):
+        p = d / f"months_{view}.parquet"
+        p.write_bytes(payloads[view])
+        check(f"months {view} rows", con.execute(
+            f"SELECT COUNT(*) FROM read_parquet('{p.as_posix()}')").fetchone()[0], expected)
+
+    print("guards")
+    try:
+        build_payloads(d, site="Does Not Exist")
+        print("FAIL: unknown site did not raise")
+        sys.exit(1)
+    except ValueError as e:
+        check("unknown site names the available sites", "News and events" in str(e), True)
+
+    try:
+        build_payloads(d, since="2026-06-01", months=3)
+        print("FAIL: --since with --months did not raise")
+        sys.exit(1)
+    except ValueError:
+        print("  ok  --since with --months rejected")
 
 
 def test_salt_orders_the_map(con: duckdb.DuckDBPyConnection) -> None:

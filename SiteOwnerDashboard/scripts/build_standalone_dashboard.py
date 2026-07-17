@@ -32,6 +32,7 @@ import re
 import secrets
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import duckdb
@@ -184,9 +185,44 @@ def build_payloads(parquet_dir: Path, *, site: str | None = None,
 
 
 def _build_where(con, present, cols, *, site=None, since=None, months=None) -> dict[str, str]:
-    """Per-view WHERE clause (empty string when unfiltered). Task 3 implements
-    site/time slicing; until then every view is unfiltered."""
-    return {v: "" for v, _, _ in present}
+    """Per-view WHERE clause. The time cutoff is computed ONCE from pv and
+    applied to every view: a per-file cutoff would give the sparser ix a
+    different stichtag and clicks would stop matching views."""
+    if since and months:
+        raise ValueError("--since and --months are mutually exclusive")
+
+    src = {v: s for v, s, _ in present}
+    floor = since
+    if months:
+        pv_max = con.execute(
+            f"SELECT MAX(timestamp) FROM read_parquet('{src['pv'].as_posix()}')").fetchone()[0]
+        floor = con.execute(
+            "SELECT (?::TIMESTAMP - INTERVAL (?) MONTH)::VARCHAR", [pv_max, months]).fetchone()[0]
+
+    if site:
+        available = [r[0] for r in con.execute(
+            f"SELECT DISTINCT site_name FROM read_parquet('{src['pv'].as_posix()}') "
+            f"ORDER BY 1").fetchall()]
+        if not any(a is not None and a.casefold() == site.casefold() for a in available):
+            raise ValueError(
+                f"--site {site!r} not found. Sites in this parquet: "
+                + ", ".join(repr(a) for a in available))
+
+    where = {}
+    for view, _, _ in present:
+        parts = []
+        if site and "site_name" in cols[view]:
+            parts.append(f"lower(s.site_name) = lower('{site.replace(chr(39), chr(39) * 2)}')")
+        if floor and "timestamp" in cols[view]:
+            parts.append(f"s.timestamp >= TIMESTAMP '{floor}'")
+        where[view] = ("WHERE " + " AND ".join(parts)) if parts else ""
+
+    for view, _, _ in present:
+        n = con.execute(f"SELECT COUNT(*) FROM read_parquet('{src[view].as_posix()}') s "
+                        f"{where[view]}").fetchone()[0]
+        if n == 0 and view == "pv":
+            raise ValueError("0 rows after the filter — refusing to build an empty dashboard")
+    return where
 
 
 def _collect_stats(con, present, where, rows, cols) -> dict:
@@ -263,6 +299,13 @@ def build(template_path: Path, parquet_dir: Path, output_path: Path, *,
     # (a vendored lib could contain a literal "</head>" substring).
     payloads, stats = build_payloads(parquet_dir, site=site, since=since,
                                      months=months, keep_ids=keep_ids)
+    mn, mx = stats["window"]
+    span_days = (datetime.fromisoformat(mx) - datetime.fromisoformat(mn)).days
+    if span_days < 180:
+        print(f"WARNING: the slice spans {span_days} days. The dashboard compares each "
+              f"KPI against the equal-length preceding period and defaults to a 90d "
+              f"window, so under 180 days every delta silently disappears (reads as "
+              f"'no change', not 'no baseline').")
     total = 0
     for view, _, _ in VIEWS:
         if view not in payloads:
@@ -334,8 +377,15 @@ def main(argv=None) -> int:
                         help="keep gpn/user_id/view_id and the plaintext GPN-derived "
                              "person_id/visit_id (full-fidelity local build; NEVER "
                              "distribute the result — it contains personal data)")
+    parser.add_argument("--site", help="SiteName to keep (case-insensitive exact match; "
+                                       "same semantics as process_site_pageviews.py --site)")
+    parser.add_argument("--since", help="Keep rows from this date on (YYYY-MM-DD)")
+    parser.add_argument("--months", type=int,
+                        help="Keep the last N months relative to MAX(timestamp) in the "
+                             "parquet (NOT to today — exports lag reality)")
     args = parser.parse_args(argv)
-    out = build(args.template, args.parquet_dir, args.output, keep_ids=args.keep_ids)
+    out = build(args.template, args.parquet_dir, args.output, site=args.site,
+               since=args.since, months=args.months, keep_ids=args.keep_ids)
     size_mb = out.stat().st_size / 1_048_576
     print(f"Wrote {out} ({size_mb:.1f} MB)")
     if not args.no_guide:
