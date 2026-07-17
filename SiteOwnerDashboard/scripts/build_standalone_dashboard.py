@@ -473,10 +473,12 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     dash_out, guide_out = args.output, args.guide_output
-    if args.site and args.output == DEFAULT_OUTPUT:
+    if args.site:
         slug = slugify(args.site)
-        dash_out = args.output.parent / f"{slug}_dashboard_standalone.html"
-        guide_out = args.guide_output.parent / f"{slug}_guide_standalone.html"
+        if args.output == DEFAULT_OUTPUT:
+            dash_out = args.output.parent / f"{slug}_dashboard_standalone.html"
+        if args.guide_output == DEFAULT_GUIDE_OUTPUT:
+            guide_out = args.guide_output.parent / f"{slug}_guide_standalone.html"
 
     out = build(args.template, args.parquet_dir, dash_out, site=args.site,
                 since=args.since, months=args.months, keep_ids=args.keep_ids,
