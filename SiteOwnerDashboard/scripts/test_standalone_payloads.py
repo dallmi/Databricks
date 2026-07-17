@@ -127,6 +127,7 @@ def main() -> None:
         test_slice(d, con)
         test_site_anchored_months(con)
         test_empty_ix_still_builds(con)
+        test_slugify()
         test_salt_orders_the_map(con)
 
 
@@ -346,6 +347,15 @@ def test_empty_ix_still_builds(con: duckdb.DuckDBPyConnection) -> None:
               "site_name" in cols, True)
         check("empty ix payload is readable and zero-row",
               con.execute(f"SELECT COUNT(*) FROM {rel}").fetchone()[0], 0)
+
+
+def test_slugify() -> None:
+    from build_standalone_dashboard import slugify
+    print("slugify")
+    check("spaces", slugify("News and events"), "news_and_events")
+    check("punctuation", slugify("Group Functions & IT"), "group_functions_it")
+    check("collapses runs", slugify("A  --  B"), "a_b")
+    check("trims edges", slugify(" News! "), "news")
 
 
 def test_salt_orders_the_map(con: duckdb.DuckDBPyConnection) -> None:

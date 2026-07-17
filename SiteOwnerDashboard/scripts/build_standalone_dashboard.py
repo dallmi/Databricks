@@ -3,11 +3,12 @@
 Transforms dashboard/dashboard.html into a single file that runs from file://
 (same mechanism as the SearchAnalytics / CampaignWe standalone builds):
 
-- output/site_pageviews.parquet is recompressed with ZSTD and inlined as a
-  base64 data island (<script type="text/plain" id="pv-parquet-b64">). The
-  dashboard's reg() loader reads the island, registers it as a DuckDB file
-  buffer and builds the view. output/site_interactions.parquet (Phase 2) is
-  embedded the same way when present — otherwise skipped.
+- output/site_pageviews.parquet (and output/site_interactions.parquet, Phase 2,
+  when present) is sliced, pruned and anonymised at embed time — see
+  "Data handling" below — then compressed with ZSTD and inlined as a base64
+  data island (<script type="text/plain" id="pv-parquet-b64"> /
+  "ix-parquet-b64">). The dashboard's reg() loader reads the island,
+  registers it as a DuckDB file buffer and builds the view.
 - Chart.js, the date adapter and ExcelJS are inlined from local vendored
   copies in dashboard/vendor/ so the build needs NO network for those —
   important behind a corporate proxy.
@@ -18,8 +19,37 @@ It also builds output/site_guide_standalone.html — the guide with every
 screenshot inlined as base64 — and points the dashboard's Guide button at it.
 The two files cross-link by relative name, so ship them together.
 
+Data handling (default, no flags needed):
+- The embedded payload is ANONYMISED and PRUNED by default. GPN-derived
+  columns (person_id, and visit_id which carries the GPN as a prefix) are
+  replaced with dense integer surrogates, salted with a random per-build
+  value. The salt is generated fresh for every run and never written to
+  disk or logged — it cannot be recovered afterwards, so the mapping is
+  one-way. Ballast columns that are per-row-unique or high-cardinality
+  (gpn, user_id, view_id/event_id) are dropped outright; they are never
+  referenced by the dashboard and dominate the file size.
+- `--keep-ids` disables all of the above and embeds the source data
+  verbatim, GPNs included. The resulting file contains personal data and
+  MUST NOT be distributed — it exists only for local full-fidelity
+  debugging.
+
+Slicing flags (embed a subset instead of the whole parquet):
+- `--site NAME`      keep only rows for one site (case-insensitive exact
+                      match against site_name).
+- `--since YYYY-MM-DD` keep rows from this date on.
+- `--months N`       keep the last N months, anchored to MAX(timestamp) —
+                      of the given --site when one is passed, otherwise of
+                      the whole parquet. Mutually exclusive with --since.
+- With `--site` given and `--output` left at its default, the dashboard and
+  guide filenames are automatically prefixed with the slugified site name
+  (e.g. "News and events" -> news_and_events_dashboard_standalone.html /
+  news_and_events_guide_standalone.html) and the dashboard is retitled
+  "Site Owner Dashboard – <site>". An explicit `--output` always wins over
+  this derivation. Without `--site`, filenames are unchanged from before.
+
 Run (from the SiteOwnerDashboard project root):
     python scripts/build_standalone_dashboard.py
+    python scripts/build_standalone_dashboard.py --site "News and events" --months 6
 
 To refresh the vendored libraries (rare — only on a version bump), run
 scripts/vendor_libs.py on a machine with internet access.
@@ -328,9 +358,15 @@ def inline_libs(html: str, libs=LIBS) -> str:
     return html
 
 
+def slugify(name: str) -> str:
+    """'News and events' -> 'news_and_events' — for per-site output filenames."""
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
 def build(template_path: Path, parquet_dir: Path, output_path: Path, *,
           site: str | None = None, since: str | None = None,
-          months: int | None = None, keep_ids: bool = False) -> Path:
+          months: int | None = None, keep_ids: bool = False,
+          guide_name: str = GUIDE_STANDALONE_NAME) -> Path:
     template_path = Path(template_path)
     parquet_dir = Path(parquet_dir)
     output_path = Path(output_path)
@@ -365,9 +401,15 @@ def build(template_path: Path, parquet_dir: Path, output_path: Path, *,
     # Point the Guide button at the self-contained guide standalone (built by
     # build_guide, shipped alongside this file), not the dev-server guide.html.
     html, n = re.subn(r'(<a class="btn" id="guideLink"[^>]*\bhref=")guide\.html(")',
-                      rf"\g<1>{GUIDE_STANDALONE_NAME}\g<2>", html, count=1)
+                      rf"\g<1>{guide_name}\g<2>", html, count=1)
     if n == 0:
         raise ValueError("guideLink anchor with href=\"guide.html\" not found in template")
+
+    if site:
+        html, n = re.subn(r"(const SITE_DISPLAY_NAME = ')[^']*(';)",
+                          rf"\g<1>Site Owner Dashboard – {site}\g<2>", html, count=1)
+        if n == 0:
+            raise ValueError("SITE_DISPLAY_NAME constant not found in template")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")
@@ -429,13 +471,21 @@ def main(argv=None) -> int:
                              "when --site is given, not the whole parquet's "
                              "(NOT to today — exports lag reality)")
     args = parser.parse_args(argv)
-    out = build(args.template, args.parquet_dir, args.output, site=args.site,
-                since=args.since, months=args.months, keep_ids=args.keep_ids)
+
+    dash_out, guide_out = args.output, args.guide_output
+    if args.site and args.output == DEFAULT_OUTPUT:
+        slug = slugify(args.site)
+        dash_out = args.output.parent / f"{slug}_dashboard_standalone.html"
+        guide_out = args.guide_output.parent / f"{slug}_guide_standalone.html"
+
+    out = build(args.template, args.parquet_dir, dash_out, site=args.site,
+                since=args.since, months=args.months, keep_ids=args.keep_ids,
+                guide_name=guide_out.name)
     size_mb = out.stat().st_size / 1_048_576
     print(f"Wrote {out} ({size_mb:.1f} MB)")
     if not args.no_guide:
-        guide = build_guide(args.guide_template, GUIDE_IMG_DIR, args.guide_output,
-                            dashboard_name=Path(args.output).name)
+        guide = build_guide(args.guide_template, GUIDE_IMG_DIR, guide_out,
+                            dashboard_name=dash_out.name)
         print(f"Wrote {guide} ({guide.stat().st_size / 1_048_576:.1f} MB)")
     return 0
 
