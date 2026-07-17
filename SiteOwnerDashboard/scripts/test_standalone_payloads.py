@@ -1,0 +1,148 @@
+"""
+Tests for build_payloads() in build_standalone_dashboard.py — the embed-time
+slice/prune/anonymise seam.
+
+Background (2026-07-17): the distributed standalone reached 236 MB and shipped
+plaintext GPNs — person_id IS the GPN, and in production visit_id is
+"person_id#n", so it carries the GPN as a prefix. (The demo generator fabricates
+session-like visit_ids, so the demo parquet hides this — the fixture below
+deliberately uses the production shape.)
+
+Plain-assert script (no test framework in this repo):
+    python scripts/test_standalone_payloads.py
+Exits non-zero on the first failing assertion.
+"""
+
+from __future__ import annotations
+
+import sys
+import tempfile
+from pathlib import Path
+
+import duckdb
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_standalone_dashboard import build_payloads  # noqa: E402
+
+GPN_A, GPN_B, GPN_C = "06297360", "01892018", "07001234"
+
+
+def check(label: str, actual, expected) -> None:
+    if actual != expected:
+        print(f"FAIL {label}: got {actual!r}, expected {expected!r}")
+        sys.exit(1)
+    print(f"  ok  {label}")
+
+
+def write_fixture(d: Path) -> None:
+    """pv + ix in the PRODUCTION shape: person_id == gpn, visit_id == 'gpn#n'.
+
+    Person C appears in ix only; person A and B appear in both files — that is
+    what pins the cross-file surrogate consistency.
+    """
+    pv = pd.DataFrame([
+        # gpn,   person_id, visit_id,      session_id, timestamp,             site_name
+        (GPN_A, GPN_A, f"{GPN_A}#1", "s-1", "2026-01-15 10:00:00", "News and events", "u01"),
+        (GPN_A, GPN_A, f"{GPN_A}#1", "s-1", "2026-01-15 10:01:00", "News and events", "u01"),
+        (GPN_A, GPN_A, f"{GPN_A}#2", "s-2", "2026-06-20 10:00:00", "News and events", "u01"),
+        (GPN_B, GPN_B, f"{GPN_B}#1", "s-3", "2026-06-20 11:00:00", "News and events", "u02"),
+        (GPN_B, GPN_B, f"{GPN_B}#1", "s-3", "2026-06-20 11:05:00", "Other site",      "u02"),
+    ], columns=["gpn", "person_id", "visit_id", "session_id", "timestamp", "site_name", "user_id"])
+    pv["timestamp"] = pd.to_datetime(pv["timestamp"])
+    pv["view_id"] = [f"v{i}" for i in range(len(pv))]
+    pv["page_key"] = "/news/x"
+
+    ix = pd.DataFrame([
+        (GPN_A, GPN_A, "s-1", "2026-01-15 10:00:30", "News and events", "u01"),
+        (GPN_C, GPN_C, "s-9", "2026-06-21 09:00:00", "News and events", "u03"),
+    ], columns=["gpn", "person_id", "session_id", "timestamp", "site_name", "user_id"])
+    ix["timestamp"] = pd.to_datetime(ix["timestamp"])
+    ix["event_id"] = [f"e{i}" for i in range(len(ix))]
+
+    pv.to_parquet(d / "site_pageviews.parquet", index=False)
+    ix.to_parquet(d / "site_interactions.parquet", index=False)
+
+
+def load(payloads: dict, view: str, con: duckdb.DuckDBPyConnection, tmp: Path):
+    """Materialise a payload's bytes so DuckDB can query them."""
+    p = tmp / f"{view}.parquet"
+    p.write_bytes(payloads[view])
+    return f"read_parquet('{p.as_posix()}')"
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        write_fixture(d)
+        payloads, stats = build_payloads(d)
+        con = duckdb.connect()
+        pv, ix = load(payloads, "pv", con, d), load(payloads, "ix", con, d)
+
+        print("distinct counts survive")
+        check("pv persons", con.execute(f"SELECT COUNT(DISTINCT person_id) FROM {pv}").fetchone()[0], 2)
+        check("pv visits", con.execute(f"SELECT COUNT(DISTINCT visit_id) FROM {pv}").fetchone()[0], 3)
+        check("pv views", con.execute(f"SELECT COUNT(*) FROM {pv}").fetchone()[0], 5)
+        check("ix persons", con.execute(f"SELECT COUNT(DISTINCT person_id) FROM {ix}").fetchone()[0], 2)
+
+        print("no GPN survives anywhere")
+        for gpn in (GPN_A, GPN_B, GPN_C):
+            for name, rel in (("pv", pv), ("ix", ix)):
+                cols = [r[0] for r in con.execute(f"DESCRIBE SELECT * FROM {rel}").fetchall()]
+                hits = 0
+                for c in cols:
+                    hits += con.execute(
+                        f"SELECT COUNT(*) FROM {rel} WHERE CAST({c} AS VARCHAR) LIKE '%{gpn}%'"
+                    ).fetchone()[0]
+                check(f"{name} leaks {gpn}", hits, 0)
+
+        print("surrogates agree across pv and ix")
+        # Person A is in both files; their surrogate must be the same integer.
+        a_pv = con.execute(f"SELECT DISTINCT person_id FROM {pv} WHERE session_id = 's-1'").fetchone()[0]
+        a_ix = con.execute(f"SELECT DISTINCT person_id FROM {ix} WHERE session_id = 's-1'").fetchone()[0]
+        check("person A same surrogate in pv and ix", a_pv, a_ix)
+
+        print("surrogates are a dense 1..N permutation (no gaps, no collisions)")
+        check("pv person surrogates dense", sorted(r[0] for r in con.execute(
+            f"SELECT DISTINCT person_id FROM {pv}").fetchall()), [1, 2])
+        check("pv visit surrogates dense", sorted(r[0] for r in con.execute(
+            f"SELECT DISTINCT visit_id FROM {pv}").fetchall()), [1, 2, 3])
+
+        test_salt_orders_the_map(con)
+
+
+def test_salt_orders_the_map(con: duckdb.DuckDBPyConnection) -> None:
+    """The salt must drive the ORDER of the dense rank, not just exist.
+
+    Asserted on _make_surrogate_map with two fixed salts over 50 persons: if the
+    salt were ignored (or the rank ordered by the raw value), both salts would
+    produce identical mappings. With 50 persons an accidental match has
+    probability 1/50! — this assertion is not a coin flip, unlike comparing two
+    random-salt builds over a 2-person fixture.
+    """
+    from build_standalone_dashboard import _make_surrogate_map
+    print("the salt orders the map")
+    with tempfile.TemporaryDirectory() as t:
+        src = Path(t) / "persons.parquet"
+        pd.DataFrame({"person_id": [f"0{i:07d}" for i in range(50)]}).to_parquet(src, index=False)
+
+        orders = []
+        for salt in ("saltA" * 6, "saltB" * 6):
+            _make_surrogate_map(con, "person_id", [(src, "")], salt)
+            orders.append(tuple(r[0] for r in con.execute(
+                "SELECT orig FROM person_id_map ORDER BY surrogate").fetchall()))
+
+        if orders[0] == orders[1]:
+            print("FAIL the salt orders the map: both salts produced the same order — "
+                  "the salt is being ignored")
+            sys.exit(1)
+        print("  ok  different salts -> different order")
+        check("map is 1:1 over all persons", len(set(orders[0])), 50)
+        check("surrogates are dense 1..50", sorted(r[0] for r in con.execute(
+            "SELECT surrogate FROM person_id_map").fetchall()), list(range(1, 51)))
+
+    print("\nAll assertions passed.")
+
+
+if __name__ == "__main__":
+    main()
