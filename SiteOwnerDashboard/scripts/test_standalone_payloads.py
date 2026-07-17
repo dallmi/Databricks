@@ -126,6 +126,7 @@ def main() -> None:
         test_prune(d, con)
         test_slice(d, con)
         test_site_anchored_months(con)
+        test_empty_ix_still_builds(con)
         test_salt_orders_the_map(con)
 
 
@@ -248,6 +249,21 @@ def test_slice(d: Path, con: duckdb.DuckDBPyConnection) -> None:
         check("zero-rows error names the available sites",
               "News and events" in str(e), True)
 
+    try:
+        build_payloads(d, site="")
+        print("FAIL: --site '' did not raise (falsy-empty-string trap)")
+        sys.exit(1)
+    except ValueError as e:
+        check("empty --site rejected", "must not be empty" in str(e), True)
+
+    try:
+        build_payloads(d, site="   ")
+        print("FAIL: whitespace-only --site did not raise")
+        sys.exit(1)
+    except ValueError as e:
+        check("whitespace-only --site rejected",
+              "must not be empty" in str(e), True)
+
 
 def test_site_anchored_months(con: duckdb.DuckDBPyConnection) -> None:
     """--site X --months N must anchor the cutoff to X's own last data point,
@@ -284,6 +300,52 @@ def test_site_anchored_months(con: duckdb.DuckDBPyConnection) -> None:
         p.write_bytes(payloads["pv"])
         check("site-anchored months rows", con.execute(
             f"SELECT COUNT(*) FROM read_parquet('{p.as_posix()}')").fetchone()[0], 2)
+
+
+def test_empty_ix_still_builds(con: duckdb.DuckDBPyConnection) -> None:
+    """An empty ix (a site with no recorded clicks) is a legitimate build — only
+    an empty pv is fatal (see the comment above the guard in _build_where).
+
+    Isolated fixture, not the shared one: every slice exercised against the
+    shared fixture (default, --site, --since, --months) always leaves ix with
+    at least one row, so this constraint was previously unpinned — a guard
+    mutated to raise on ANY empty view (not just pv) passed the whole suite.
+
+    This fixture gives ix rows for a site the --site filter excludes, so
+    slicing to that site empties ix while pv still has rows.
+    """
+    print("--site slice that empties ix must still build "
+          "(only pv emptiness is fatal)")
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        pv = pd.DataFrame([
+            ("Alpha", "2026-01-01 08:00:00"),
+            ("Alpha", "2026-01-15 09:00:00"),
+        ], columns=["site_name", "timestamp"])
+        pv["timestamp"] = pd.to_datetime(pv["timestamp"])
+        pv.to_parquet(d / "site_pageviews.parquet", index=False)
+
+        # Clicks only on Beta, never Alpha -> filtering to Alpha empties ix
+        # while pv still has 2 rows.
+        ix = pd.DataFrame([
+            ("Beta", "2026-01-10 08:00:00"),
+        ], columns=["site_name", "timestamp"])
+        ix["timestamp"] = pd.to_datetime(ix["timestamp"])
+        ix.to_parquet(d / "site_interactions.parquet", index=False)
+
+        payloads, stats = build_payloads(d, site="Alpha")
+        check("pv rows survive the slice", stats["rows"]["pv"], 2)
+        check("ix rows are empty but present", stats["rows"]["ix"], 0)
+
+        p = d / "empty_ix.parquet"
+        p.write_bytes(payloads["ix"])
+        rel = f"read_parquet('{p.as_posix()}')"
+        cols = [r[0] for r in con.execute(
+            f"DESCRIBE SELECT * FROM {rel}").fetchall()]
+        check("empty ix payload kept site_name column",
+              "site_name" in cols, True)
+        check("empty ix payload is readable and zero-row",
+              con.execute(f"SELECT COUNT(*) FROM {rel}").fetchone()[0], 0)
 
 
 def test_salt_orders_the_map(con: duckdb.DuckDBPyConnection) -> None:

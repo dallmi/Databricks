@@ -203,12 +203,14 @@ def _validate_since(value: str) -> str:
 def _build_where(con, present, cols, *, site=None, since=None, months=None) -> dict[str, str]:
     """Per-view WHERE clause. The time cutoff is computed ONCE (from pv, or
     from pv restricted to --site when --site is given) and applied to every
-    view: a per-file cutoff would give the sparser ix a different stichtag
+    view: a per-file cutoff would give the sparser ix a different cutoff
     and clicks would stop matching views."""
     if since is not None and months is not None:
         raise ValueError("--since and --months are mutually exclusive")
     if since is not None:
         since = _validate_since(since)
+    if site is not None and not site.strip():
+        raise ValueError(f"--site {site!r} must not be empty")
 
     src = {v: s for v, s, _ in present}
 
@@ -219,7 +221,7 @@ def _build_where(con, present, cols, *, site=None, since=None, months=None) -> d
             f"ORDER BY 1").fetchall()]
 
     site_clause = ""
-    if site:
+    if site is not None:
         if not any(a is not None and a.casefold() == site.casefold() for a in available):
             raise ValueError(
                 f"--site {site!r} not found. Sites in this parquet: "
@@ -242,7 +244,7 @@ def _build_where(con, present, cols, *, site=None, since=None, months=None) -> d
     where = {}
     for view, _, _ in present:
         parts = []
-        if site and "site_name" in cols[view]:
+        if site is not None and "site_name" in cols[view]:
             parts.append(f"lower(s.site_name) = lower('{site.replace(chr(39), chr(39) * 2)}')")
         if floor and "timestamp" in cols[view]:
             parts.append(f"s.timestamp >= TIMESTAMP '{floor}'")
@@ -422,8 +424,10 @@ def main(argv=None) -> int:
                                        "same semantics as process_site_pageviews.py --site)")
     parser.add_argument("--since", help="Keep rows from this date on (YYYY-MM-DD)")
     parser.add_argument("--months", type=int,
-                        help="Keep the last N months relative to MAX(timestamp) in the "
-                             "parquet (NOT to today — exports lag reality)")
+                        help="Keep the last N months relative to MAX(timestamp) "
+                             "in the parquet — anchored to --site's own max "
+                             "when --site is given, not the whole parquet's "
+                             "(NOT to today — exports lag reality)")
     args = parser.parse_args(argv)
     out = build(args.template, args.parquet_dir, args.output, site=args.site,
                 since=args.since, months=args.months, keep_ids=args.keep_ids)
