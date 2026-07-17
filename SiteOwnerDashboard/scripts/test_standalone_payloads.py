@@ -15,6 +15,9 @@ Exits non-zero on the first failing assertion.
 
 from __future__ import annotations
 
+import json
+import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -23,7 +26,7 @@ import duckdb
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from build_standalone_dashboard import build_payloads  # noqa: E402
+from build_standalone_dashboard import build, build_payloads, DEFAULT_TEMPLATE  # noqa: E402
 
 GPN_A, GPN_B, GPN_C = "06297360", "01892018", "07001234"
 
@@ -129,6 +132,8 @@ def main() -> None:
         test_empty_ix_still_builds(con)
         test_slugify()
         test_salt_orders_the_map(con)
+        test_site_display_name_escaping()
+        test_missing_filter_column_raises()
 
 
 def test_prune(d: Path, con: duckdb.DuckDBPyConnection) -> None:
@@ -389,6 +394,119 @@ def test_salt_orders_the_map(con: duckdb.DuckDBPyConnection) -> None:
             "SELECT surrogate FROM person_id_map").fetchall()), list(range(1, 51)))
 
     print("\nAll assertions passed.")
+
+
+def test_site_display_name_escaping() -> None:
+    """The SITE_DISPLAY_NAME rewrite must survive a site name that would break
+    a naive single-quoted JS literal or a naive re.sub replacement template.
+
+    Regression for the pre-merge blocker: `build_standalone_dashboard.py`
+    used to interpolate `site` raw into both a JS string literal and a
+    `re.sub` replacement string. An apostrophe in the site name closed the
+    JS string early (SyntaxError, dashboard fails to load); a backslash
+    sequence like '\\1' in the site name would have been consumed by
+    re.sub's own backslash processing of the replacement text.
+
+    Isolated fixture, not the shared one (per the isolation note above
+    test_site_anchored_months): this only needs one row for one oddly-named
+    site, and must not perturb the shared fixture's row counts.
+
+    Verification is not eyeballing the emitted line: it is piped through
+    `node --check` so a real JS parser is the judge.
+    """
+    print("SITE_DISPLAY_NAME rewrite survives an apostrophe (and other JS-hostile "
+          "characters) in the site name")
+    site = "Group CEO's Office \\1 </script> Straße"
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        pv = pd.DataFrame([
+            (site, "2026-01-01 08:00:00"),
+            (site, "2026-01-15 09:00:00"),
+        ], columns=["site_name", "timestamp"])
+        pv["timestamp"] = pd.to_datetime(pv["timestamp"])
+        pv.to_parquet(d / "site_pageviews.parquet", index=False)
+
+        out_path = d / "out_dashboard_standalone.html"
+        out = build(DEFAULT_TEMPLATE, d, out_path, site=site)
+        html = out.read_text(encoding="utf-8")
+
+        m = re.search(r"const SITE_DISPLAY_NAME = .*?;", html)
+        check("SITE_DISPLAY_NAME line present", m is not None, True)
+        line = m.group(0)
+
+        js_path = d / "check.js"
+        js_path.write_text(line, encoding="utf-8")
+        result = subprocess.run(["node", "--check", str(js_path)],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"FAIL emitted SITE_DISPLAY_NAME is not valid JS: {line}\n{result.stderr}")
+            sys.exit(1)
+        print("  ok  node --check accepts the emitted line")
+
+        # Decode the string literal (json.dumps output is valid JSON) and
+        # confirm it carries the exact, unmangled site name.
+        literal = line[len("const SITE_DISPLAY_NAME = "):-1]
+        decoded = json.loads(literal)
+        check("emitted literal carries the exact site name",
+              decoded, f"Site Owner Dashboard – {site}")
+
+
+def test_missing_filter_column_raises() -> None:
+    """A filter that silently degrades to 'unfiltered' is worse than a crash:
+    if a view lacks the column a requested filter needs, build_payloads must
+    raise, not ship that view's rows unfiltered under a filtered dashboard's
+    label.
+
+    Isolated fixtures: pv always carries the column the filter needs (site
+    discovery / floor computation depend on it), only ix is missing it —
+    that is the actual gap this closes.
+    """
+    print("--site with a view missing site_name raises instead of shipping it unfiltered")
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        pv = pd.DataFrame([
+            ("Alpha", "2026-01-01 08:00:00"),
+        ], columns=["site_name", "timestamp"])
+        pv["timestamp"] = pd.to_datetime(pv["timestamp"])
+        pv.to_parquet(d / "site_pageviews.parquet", index=False)
+
+        # ix has no site_name column at all.
+        ix = pd.DataFrame([
+            ("2026-01-01 08:00:00",),
+        ], columns=["timestamp"])
+        ix["timestamp"] = pd.to_datetime(ix["timestamp"])
+        ix.to_parquet(d / "site_interactions.parquet", index=False)
+
+        try:
+            build_payloads(d, site="Alpha")
+            print("FAIL: --site with ix missing site_name did not raise")
+            sys.exit(1)
+        except ValueError as e:
+            check("names the offending view", "ix" in str(e), True)
+            check("names the missing column", "site_name" in str(e), True)
+
+    print("--since with a view missing timestamp raises instead of shipping it unfiltered")
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        pv = pd.DataFrame([
+            ("Alpha", "2026-01-01 08:00:00"),
+        ], columns=["site_name", "timestamp"])
+        pv["timestamp"] = pd.to_datetime(pv["timestamp"])
+        pv.to_parquet(d / "site_pageviews.parquet", index=False)
+
+        # ix has no timestamp column at all.
+        ix = pd.DataFrame([
+            ("Alpha",),
+        ], columns=["site_name"])
+        ix.to_parquet(d / "site_interactions.parquet", index=False)
+
+        try:
+            build_payloads(d, since="2026-01-01")
+            print("FAIL: --since with ix missing timestamp did not raise")
+            sys.exit(1)
+        except ValueError as e:
+            check("names the offending view", "ix" in str(e), True)
+            check("names the missing column", "timestamp" in str(e), True)
 
 
 if __name__ == "__main__":

@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import re
 import secrets
 import sys
@@ -274,9 +275,18 @@ def _build_where(con, present, cols, *, site=None, since=None, months=None) -> d
     where = {}
     for view, _, _ in present:
         parts = []
-        if site is not None and "site_name" in cols[view]:
+        if site is not None:
+            if "site_name" not in cols[view]:
+                raise ValueError(
+                    f"--site was requested but view {view!r} has no site_name "
+                    "column — refusing to silently ship that view unfiltered")
             parts.append(f"lower(s.site_name) = lower('{site.replace(chr(39), chr(39) * 2)}')")
-        if floor and "timestamp" in cols[view]:
+        if floor:
+            if "timestamp" not in cols[view]:
+                raise ValueError(
+                    f"a time filter (--since/--months) was requested but view "
+                    f"{view!r} has no timestamp column — refusing to silently "
+                    "ship that view unfiltered")
             parts.append(f"s.timestamp >= TIMESTAMP '{floor}'")
         where[view] = ("WHERE " + " AND ".join(parts)) if parts else ""
 
@@ -380,6 +390,9 @@ def build(template_path: Path, parquet_dir: Path, output_path: Path, *,
     payloads, stats = build_payloads(parquet_dir, site=site, since=since,
                                      months=months, keep_ids=keep_ids)
     span_days = stats["span_days"]
+    mn, mx = stats["window"]
+    window_str = f"{mn[:10]} .. {mx[:10]}" if mn and mx else "n/a"
+    print(f"Payload: {stats['persons']:,} persons, window {window_str}")
     if span_days is not None and span_days < 180:
         print(f"WARNING: the slice spans {span_days} days. The dashboard compares each "
               f"KPI against the equal-length preceding period and defaults to a 90d "
@@ -406,8 +419,14 @@ def build(template_path: Path, parquet_dir: Path, output_path: Path, *,
         raise ValueError("guideLink anchor with href=\"guide.html\" not found in template")
 
     if site:
-        html, n = re.subn(r"(const SITE_DISPLAY_NAME = ')[^']*(';)",
-                          rf"\g<1>Site Owner Dashboard – {site}\g<2>", html, count=1)
+        # json.dumps does the JS string escaping (quotes, backslashes, control
+        # chars); the "</" guard stops a site name from closing the enclosing
+        # <script> tag early. The lambda replacement sidesteps re.sub's own
+        # backslash processing of the replacement string (a site name
+        # containing e.g. '\1' would otherwise mangle the substitution).
+        lit = json.dumps(f"Site Owner Dashboard – {site}").replace("</", "<\\/")
+        html, n = re.subn(r"const SITE_DISPLAY_NAME = '[^']*';",
+                          lambda m: f"const SITE_DISPLAY_NAME = {lit};", html, count=1)
         if n == 0:
             raise ValueError("SITE_DISPLAY_NAME constant not found in template")
 
