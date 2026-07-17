@@ -117,7 +117,37 @@ def main() -> None:
         check("pv visit surrogates dense", sorted(r[0] for r in con.execute(
             f"SELECT DISTINCT visit_id FROM {pv}").fetchall()), [1, 2, 3])
 
+        test_prune(d, con)
         test_salt_orders_the_map(con)
+
+
+def test_prune(d: Path, con: duckdb.DuckDBPyConnection) -> None:
+    print("prune drops exactly the ballast columns")
+    payloads, _ = build_payloads(d)
+    for view, dropped in (("pv", ("gpn", "user_id", "view_id")),
+                          ("ix", ("gpn", "user_id", "event_id"))):
+        p = d / f"prune_{view}.parquet"
+        p.write_bytes(payloads[view])
+        cols = {r[0] for r in con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{p.as_posix()}')").fetchall()}
+        for c in dropped:
+            check(f"{view} dropped {c}", c in cols, False)
+        for c in ("session_id", "timestamp", "site_name", "person_id"):
+            check(f"{view} kept {c}", c in cols, True)
+    check("pv kept page_key", "page_key" in {r[0] for r in con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{(d / 'prune_pv.parquet').as_posix()}')").fetchall()}, True)
+
+    print("--keep-ids restores full fidelity")
+    payloads, _ = build_payloads(d, keep_ids=True)
+    p = d / "keep_pv.parquet"
+    p.write_bytes(payloads["pv"])
+    cols = {r[0] for r in con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{p.as_posix()}')").fetchall()}
+    for c in ("gpn", "user_id", "view_id"):
+        check(f"keep_ids kept {c}", c in cols, True)
+    check("keep_ids leaves person_id as the GPN",
+          con.execute(f"SELECT COUNT(*) FROM read_parquet('{p.as_posix()}') "
+                      f"WHERE person_id = gpn").fetchone()[0], 5)
 
 
 def test_salt_orders_the_map(con: duckdb.DuckDBPyConnection) -> None:

@@ -330,8 +330,12 @@ def main(argv=None) -> int:
     parser.add_argument("--guide-output", type=Path, default=DEFAULT_GUIDE_OUTPUT)
     parser.add_argument("--no-guide", action="store_true",
                         help="skip building the self-contained guide standalone")
+    parser.add_argument("--keep-ids", action="store_true",
+                        help="keep gpn/user_id/view_id and the plaintext GPN-derived "
+                             "person_id/visit_id (full-fidelity local build; NEVER "
+                             "distribute the result — it contains personal data)")
     args = parser.parse_args(argv)
-    out = build(args.template, args.parquet_dir, args.output)
+    out = build(args.template, args.parquet_dir, args.output, keep_ids=args.keep_ids)
     size_mb = out.stat().st_size / 1_048_576
     print(f"Wrote {out} ({size_mb:.1f} MB)")
     if not args.no_guide:
