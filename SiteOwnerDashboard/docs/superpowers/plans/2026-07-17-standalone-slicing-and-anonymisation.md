@@ -155,9 +155,18 @@ def main() -> None:
         a_ix = con.execute(f"SELECT DISTINCT person_id FROM {ix} WHERE session_id = 's-1'").fetchone()[0]
         check("person A same surrogate in pv and ix", a_pv, a_ix)
 
-        print("surrogates are a dense 1..N permutation (no gaps, no collisions)")
-        check("pv person surrogates dense", sorted(r[0] for r in con.execute(
-            f"SELECT DISTINCT person_id FROM {pv}").fetchall()), [1, 2])
+        print("surrogates are dense across the shared map, not per file")
+        # The person map spans pv UNION ix = 3 people (A, B in both; C in ix only),
+        # so it is the UNION of the two files that covers 1..3. pv holds 2 of those
+        # 3 and WHICH two depends on the salt — asserting pv == [1,2] would be a
+        # coin flip. The per-file property is the count; the dense-range property
+        # belongs to the map (asserted in test_salt_orders_the_map).
+        pv_p = {r[0] for r in con.execute(f"SELECT DISTINCT person_id FROM {pv}").fetchall()}
+        ix_p = {r[0] for r in con.execute(f"SELECT DISTINCT person_id FROM {ix}").fetchall()}
+        check("pv person surrogate count", len(pv_p), 2)
+        check("ix person surrogate count", len(ix_p), 2)
+        check("union of both files covers the whole map", sorted(pv_p | ix_p), [1, 2, 3])
+        # visit_id lives only in pv, so its map is dense within pv.
         check("pv visit surrogates dense", sorted(r[0] for r in con.execute(
             f"SELECT DISTINCT visit_id FROM {pv}").fetchall()), [1, 2, 3])
 
