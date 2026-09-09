@@ -183,7 +183,7 @@ Hypothesis A: GPN is a string transformation of the T-Number (`t001108` → `000
 
 ### Q15b — TrackingID coverage in `sharepoint_bronze.pageviews` **(follow-up)**
 
-> **Architecture note**: `sharepoint_bronze.pageviews` is the live interactions table (views/visits) and itself has a column `GICTrackingID` (without `UBS` prefix — inconsistent with the inventory's `UBSGICTrackingID`). `sharepoint_bronze.pages` is the inventory.
+> **Architecture note**: `sharepoint_bronze.pageviews` is the live interactions table (views/visits) and itself has a column `GICTrackingID` (without the three-letter prefix — inconsistent with the inventory's `UBSGICTrackingID`). `sharepoint_bronze.pages` is the inventory.
 
 > *In `sharepoint_bronze.pageviews`: join to `sharepoint_bronze.pages` via `page_id` (or similar FK). For the last 12 months, per month, show:*
 > - *Total page views*
