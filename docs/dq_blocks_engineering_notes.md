@@ -421,6 +421,37 @@ to three figures turns three tiles red at once. That is the blanket-banner
 problem from BRD §8.0 reappearing one level down, so the mapping in
 `dq_check_affects` has to stay narrow and honest.
 
+**Explaining something nobody has described yet.** The obvious trap is to write
+the grouping and the narrative by hand, which works beautifully for the incident
+you just spent a day understanding and produces nothing at all for the next one.
+Three jobs have to be separated, and only the last needs a person.
+
+| Job | How | Needs knowledge |
+|---|---|---|
+| Grouping | Checks that started failing on the same day are almost always one cause. `dq_onset` computes the first day each check left its corridor. | No |
+| Description | A template filled with measurements: what moved, from what to what, since when, which published figures it touches, which control figures did **not** move, and which slice of the estate deviates (`dq_scope`). | No |
+| Cause | Somebody works it out once and records it in `dq_known_causes`. | Yes, once |
+
+The third is the one that cannot be automated. No computation gets from
+"identifiers stopped repeating" to "the hosting layer re-initialises the SDK".
+What matters is that the cause lives in **data rather than code**, so recording
+one costs a row, and a cluster with nothing recorded renders as *cause not yet
+identified* instead of fragmenting into unrelated-looking findings.
+
+The description is deliberately a template rather than generated prose, because a
+filled template cannot be wrong. A language model could rephrase it more fluently
+and that is a fair use. It must not be asked to supply a cause: an invented
+explanation in a data-quality tool is worse than no explanation, because people
+act on it.
+
+Two limitations worth stating. Onset detection only covers checks driven by the
+corridor engine, since those are evaluated for every day in the window; the
+explicit checks judge a single day and have no history here. The persistent
+edition does not share that limitation, because it stores a row per day and per
+check, which is one of the concrete things the read-only edition cannot do. And
+`dq_scope` currently derives the site from the URL path, which avoids rebuilding
+the slice but depends on the path convention holding.
+
 **Several checks usually mean one problem.** The first production run produced
 twelve findings that traced back to four causes, and eight of the twelve were the
 one incident already under investigation. Twelve red rows read as twelve

@@ -637,6 +637,123 @@ UNION ALL SELECT * FROM g1 UNION ALL SELECT * FROM g2 UNION ALL SELECT * FROM g3
 
 
 -- ----------------------------------------------------------------------------
+-- CELL 9b — ONSET. The first day each check left its corridor.
+--
+-- This is what makes grouping automatic. Checks that started failing on the same
+-- day are almost always one cause, and that is a computation rather than
+-- knowledge. Nobody has to know what the cause is to see that eight things broke
+-- together on a Tuesday.
+--
+-- Limitation, stated plainly: only checks driven by the corridor engine have a
+-- per-day history here, because dq_r_corridor evaluates every day in the window.
+-- The explicit checks in cell 9 judge one day only, so they have no onset in this
+-- edition. The persistent edition does not have that limitation: it stores a row
+-- per day and per check, so every check gets an onset from its own history. That
+-- is one of the concrete things the read-only edition cannot do.
+-- ----------------------------------------------------------------------------
+%sql
+CREATE OR REPLACE TEMPORARY VIEW dq_onset AS
+WITH failing AS (
+  SELECT check_id, check_date
+  FROM   dq_r_corridor
+  WHERE  status IN ('warning', 'critical')
+),
+still_ok_after AS (          -- the last day the check was fine
+  SELECT check_id, MAX(check_date) AS last_ok
+  FROM   dq_r_corridor WHERE status = 'ok' GROUP BY check_id
+)
+SELECT f.check_id,
+       MIN(f.check_date)                                   AS first_seen_failing,
+       MIN(CASE WHEN o.last_ok IS NULL OR f.check_date > o.last_ok
+                THEN f.check_date END)                     AS failing_since,
+       MAX(o.last_ok)                                      AS last_healthy_day,
+       COUNT(*)                                            AS days_failing
+FROM   failing f LEFT JOIN still_ok_after o ON o.check_id = f.check_id
+GROUP  BY f.check_id;
+
+
+-- ----------------------------------------------------------------------------
+-- CELL 9c — SCOPE. Which slice of the estate does a problem actually cover?
+--
+-- Block 0e answered this by hand for one incident. Generalised, it is the single
+-- most useful automatic step: it turns "something broke" into "something broke,
+-- and only on these sites", which is usually most of the diagnosis and is exactly
+-- what an upstream team asks for first.
+--
+-- The site is derived from the URL path rather than from a SiteName column, so
+-- this needs no change to the slice in cell 1 and no re-run of it.
+-- ----------------------------------------------------------------------------
+%sql
+CREATE OR REPLACE TEMPORARY VIEW dq_scope AS
+WITH p AS (SELECT date_sub(current_date(), 1) AS d),
+base AS (
+  SELECT w.view_date, w.session_id, w.browser_id, w.gpn,
+         COALESCE(NULLIF(regexp_extract(w.page_url, '/sites/([^/?#]+)', 1), ''), '(no site in url)') AS site,
+         COALESCE(w.client_browser, '(null)') AS browser,
+         COALESCE(w.client_os,      '(null)') AS os,
+         COALESCE(w.client_type,    '(null)') AS device,
+         COALESCE(w.sdk_version,    '(null)') AS sdk
+  FROM dq_pv_window w CROSS JOIN p
+  WHERE w.view_date BETWEEN date_sub(p.d, 28) AND p.d
+),
+long AS (
+            SELECT view_date, session_id, browser_id, gpn, 'site'        AS dim, site    AS val FROM base
+  UNION ALL SELECT view_date, session_id, browser_id, gpn, 'browser',            browser       FROM base
+  UNION ALL SELECT view_date, session_id, browser_id, gpn, 'os',                 os            FROM base
+  UNION ALL SELECT view_date, session_id, browser_id, gpn, 'device',             device        FROM base
+  UNION ALL SELECT view_date, session_id, browser_id, gpn, 'sdk version',        sdk           FROM base
+)
+SELECT
+  l.dim, l.val,
+  COUNT(CASE WHEN l.view_date = p.d THEN 1 END)                                   AS views_today,
+  ROUND(COUNT(CASE WHEN l.view_date = p.d THEN 1 END)
+      / NULLIF(COUNT(DISTINCT CASE WHEN l.view_date = p.d THEN l.session_id END), 0), 3) AS views_per_session_today,
+  ROUND(COUNT(DISTINCT CASE WHEN l.view_date = p.d THEN l.browser_id END)
+      / NULLIF(COUNT(DISTINCT CASE WHEN l.view_date = p.d THEN l.gpn END), 0), 2)        AS browsers_per_person_today,
+  ROUND(COUNT(CASE WHEN l.view_date < p.d THEN 1 END)
+      / NULLIF(COUNT(DISTINCT CASE WHEN l.view_date < p.d THEN l.session_id END), 0), 3) AS views_per_session_prior,
+  ROUND(COUNT(DISTINCT CASE WHEN l.view_date < p.d THEN l.browser_id END)
+      / NULLIF(COUNT(DISTINCT CASE WHEN l.view_date < p.d THEN l.gpn END), 0), 2)        AS browsers_per_person_prior
+FROM long l CROSS JOIN p
+GROUP BY l.dim, l.val
+HAVING COUNT(CASE WHEN l.view_date = p.d THEN 1 END) > 200;   -- drop the long tail
+
+
+-- ----------------------------------------------------------------------------
+-- CELL 9d — KNOWN CAUSES. Data, not code.
+--
+-- A cause is a hypothesis about a system, and no computation gets from
+-- "identifiers stopped repeating" to "the hosting layer re-initialises the SDK".
+-- Somebody works that out once. What matters is that it is recorded as DATA, so
+-- adding one costs an INSERT rather than an edit to a notebook, and so a cluster
+-- with nothing recorded renders as "cause not yet identified" instead of
+-- pretending to be several unrelated problems.
+--
+-- To record a new one: add a row. To record nothing: leave it, and the board will
+-- describe the cluster from the measurements alone.
+-- ----------------------------------------------------------------------------
+%sql
+CREATE OR REPLACE TEMPORARY VIEW dq_known_causes AS
+SELECT * FROM VALUES
+ ('april-identity',
+  DATE '2026-04-07',
+  'Browser identity stopped persisting',
+  'Since 7 April 2026 every page view arrives with a fresh browser and session identity, so a view counts as a visit. Azure Monitor confirmed on 9 September that the identifiers are already different when generated in the browser and that ingestion does not alter them; the investigation has moved to the SharePoint and SPFx hosting layer. Page views and unique visitors are unaffected, because visitors are counted on the employee number.',
+  array('B1','B2','B3','B4','B5','B6','B7','D1d')),
+ ('double-fire',
+  DATE '2025-01-01',
+  'The same page load is recorded twice',
+  'About one page view in eleven is the same page firing twice within a second, which overstates page views and shortens measured reading time. Long standing and unrelated to the April incident.',
+  array('A5','C8')),
+ ('page-lookup',
+  DATE '2025-01-01',
+  'Some pages are missing from the reference list',
+  'Roughly one page view in eight cannot be matched to the page inventory by its address, so page-level breakdowns are incomplete. Employee lookups are unaffected.',
+  array('C6'))
+AS t(cause_id, since, title, description, check_ids);
+
+
+-- ----------------------------------------------------------------------------
 -- CELL 10 — THE RESULT. One grid, worst first, with the figures each finding
 -- puts at risk. This is the Health Overview, computed rather than stored.
 -- ----------------------------------------------------------------------------
@@ -669,21 +786,35 @@ ORDER BY severity, r.check_id;
 -- ----------------------------------------------------------------------------
 -- CELL 10b — HEALTH AT A GLANCE. Run this straight after cell 10.
 --
--- Cell 10 is the detail grid, written for whoever maintains the checks. It is
--- not readable by a first- or second-line responder: "S2 critical, value 0" says
+-- Cell 10 is the detail grid, written for whoever maintains the checks. It is not
+-- readable by a first- or second-line responder: "S2 critical, value 0" says
 -- nothing about what is wrong or whether it matters.
 --
--- This cell answers the only two questions that person actually has:
---   which published figures can I trust right now, and what is wrong?
--- It organises by FIGURE rather than by check, names everything in plain words,
--- and never shows a check id in the headline. The ids stay in the detail below,
--- for when someone needs to look one up.
+-- This cell answers the two questions that person actually has: which published
+-- figures can I trust, and what is wrong. It organises by FIGURE rather than by
+-- check, names everything in plain words, and keeps check ids out of the
+-- headline.
+--
+-- HOW IT EXPLAINS SOMETHING IT HAS NEVER SEEN
+-- Three separable jobs, and only the last needs a person:
+--   1. GROUPING is computed. Checks that started failing on the same day are
+--      almost always one cause (dq_onset). No knowledge required.
+--   2. DESCRIPTION is computed. What moved, from what to what, since when, which
+--      published figures it touches, which control figures did NOT move, and
+--      which slice of the estate is affected (dq_scope). That is a template
+--      filled with measurements, so it cannot be wrong.
+--   3. THE CAUSE is written once by a person and stored as data (dq_known_causes).
+--      No computation gets from "identifiers stopped repeating" to "the hosting
+--      layer re-initialises the SDK". A cluster with nothing recorded says
+--      "cause not yet identified", which is honest and is also the prompt to
+--      record one.
+-- A language model could rephrase the computed description more fluently. It
+-- must not be asked to supply a cause: an invented explanation in a data-quality
+-- tool is worse than none.
 -- ----------------------------------------------------------------------------
 %python
 from datetime import date, timedelta
 
-# Plain-language name and question for every check. Anything not listed falls
-# back to its id, which is a prompt to add it here.
 LABELS = {
  "A1": ("Arrival volume",            "Did roughly as much data arrive as on a normal day of this weekday?"),
  "A2": ("Freshness",                 "How old is the newest event we hold?"),
@@ -716,153 +847,156 @@ LABELS = {
  "S1": ("People recognised",         "Does one employee become exactly one person in the model?"),
  "S2": ("Keys assigned",             "Did every row receive the keys it needs?"),
 }
-
-FIGURES = [   # order they appear on the board; the first three are what most people open the report for
- ("page_views",       "Page views"),
- ("unique_visitors",  "Unique visitors"),
- ("visits",           "Visits"),
- ("pages_per_visit",  "Pages per visit"),
- ("avg_time_on_page", "Time on page"),
- ("bounce_rate",      "Bounce rate"),
- ("tracking_coverage","Campaign tagging"),
- ("page_breakdowns",  "Page breakdowns"),
- ("clicks",           "Clicks"),
-]
-
-# Twelve red rows read as twelve problems. They are not. On the first production
-# run eight of the twelve came from one known incident, and the rest from three
-# separate things. A responder who sees twelve panics or stops looking; one who
-# sees "four issues, one already known" acts correctly. So findings are grouped
-# by cause, and an unlisted check appears on its own as something new.
-CAUSE = {
- "B1":"april", "B2":"april", "B3":"april", "B4":"april", "B5":"april",
- "B6":"april", "B7":"april", "D1d":"april",
- "A5":"doublefire", "C8":"doublefire",
- "C6":"pagelookup",
- "D4":"tagging",
-}
-CAUSE_INFO = {
- "april": ("Known incident: the browser identity stopped persisting",
-           "Since 7 April 2026 every page view arrives with a fresh browser and session "
-           "identity, so a view counts as a visit. Under investigation with the supplier. "
-           "Page views and unique visitors are unaffected, because visitors are counted on "
-           "the employee number rather than the browser."),
- "doublefire": ("The same page load is recorded twice",
-           "About one page view in eleven is the same page firing twice within a second, "
-           "which overstates page views and shortens measured reading time. Separate from "
-           "the April incident and long standing."),
- "pagelookup": ("Some pages are missing from the reference list",
-           "Roughly one page view in eight cannot be matched to the page inventory by its "
-           "address, so page-level breakdowns are incomplete. Employee lookups are fine."),
- "tagging": ("Page views carry no campaign tag",
-           "Campaign attribution cannot be computed from this stream while the tag is absent."),
-}
-
+FIGURES = [("page_views","Page views"), ("unique_visitors","Unique visitors"), ("visits","Visits"),
+           ("pages_per_visit","Pages per visit"), ("avg_time_on_page","Time on page"),
+           ("bounce_rate","Bounce rate"), ("tracking_coverage","Campaign tagging"),
+           ("page_breakdowns","Page breakdowns"), ("clicks","Clicks")]
+FIGNAME = dict(FIGURES)
 RANK = {"critical": 3, "warning": 2, "info": 1, "ok": 0}
+COL  = {"critical": ("#BD000C", "#FBE6E7"), "warning": ("#E4A911", "#FDF6E3"),
+        "info": ("#7A7870", "#ECEBE4"),     "ok": ("#6F7A1A", "#F1F3E7")}
+VERDICT = {("critical", True): "Broke recently", ("critical", False): "Known issue, long standing",
+           ("warning", True): "Changed, worth a look", ("warning", False): "Read with care",
+           ("info", True): "Cannot be judged", ("info", False): "Cannot be judged",
+           ("ok", True): "Sound", ("ok", False): "Sound"}
 CHECK_DAY = date.today() - timedelta(days=1)
 
 rows = spark.sql("""
-    SELECT check_id, status, note, trend FROM dq_r_corridor WHERE check_date = date_sub(current_date(), 1)
-    UNION ALL SELECT check_id, status, note, 'unknown' AS trend FROM dq_r_explicit
+    SELECT check_id, status, note, trend, metric_value, baseline
+    FROM dq_r_corridor WHERE check_date = date_sub(current_date(), 1)
+    UNION ALL
+    SELECT check_id, status, note, 'unknown', metric_value, baseline FROM dq_r_explicit
 """).collect()
 affects = spark.sql("SELECT check_id, figure FROM dq_check_affects").collect()
+onset   = {r["check_id"]: r for r in spark.sql("SELECT * FROM dq_onset").collect()}
+causes  = spark.sql("SELECT * FROM dq_known_causes").collect()
+scope   = spark.sql("SELECT * FROM dq_scope").collect()
 
-by_check   = {r["check_id"]: (r["status"], r["note"], r["trend"]) for r in rows}
+by_check = {r["check_id"]: r for r in rows}
 fig_checks = {}
 for a in affects:
     if a["check_id"] in by_check:
         fig_checks.setdefault(a["figure"], []).append(a["check_id"])
-
 def worst(ids):
-    return max((by_check[i][0] for i in ids), key=lambda s: RANK.get(s, 0)) if ids else "ok"
-
-# Verdict wording depends on severity AND on whether anything moved. A figure
-# that has been wrong at the same level for weeks needs a different sentence from
-# one that broke last night: the first is a caveat to work around, the second is
-# an incident. Saying "do not rely on this" about both trains people to ignore it.
-COL = {"critical": ("#BD000C", "#FBE6E7"),
-       "warning":  ("#E4A911", "#FDF6E3"),
-       "info":     ("#7A7870", "#ECEBE4"),
-       "ok":       ("#6F7A1A", "#F1F3E7")}
-VERDICT = {("critical", True):  "Broke recently",
-           ("critical", False): "Known issue, long standing",
-           ("warning",  True):  "Changed, worth a look",
-           ("warning",  False): "Read with care",
-           ("info",     True):  "Cannot be judged",
-           ("info",     False): "Cannot be judged",
-           ("ok",       True):  "Sound",
-           ("ok",       False): "Sound"}
+    return max((by_check[i]["status"] for i in ids), key=lambda s: RANK.get(s, 0)) if ids else "ok"
 
 # ---- figure tiles -----------------------------------------------------------
 tiles = ""
 for key, name in FIGURES:
     ids = fig_checks.get(key, [])
     st  = worst(ids)
-    bad = sorted([i for i in ids if by_check[i][0] in ("critical", "warning")],
-                 key=lambda i: -RANK[by_check[i][0]])
-    moving = [i for i in bad if by_check[i][2] == "moving"]
+    bad = sorted([i for i in ids if by_check[i]["status"] in ("critical","warning")],
+                 key=lambda i: -RANK[by_check[i]["status"]])
+    moving = [i for i in bad if by_check[i]["trend"] == "moving"]
     fg, bg = COL[st]
-    verdict = VERDICT[(st, bool(moving))]
-    # A driver whose plain name is the figure's own name adds nothing; drop it.
-    names = [LABELS.get(i, (i, ""))[0] for i in bad]
+    names = [LABELS.get(i, (i,""))[0] for i in bad]
     names = [n for n in names if n.lower() != name.lower()]
-    if st == "info":
-        detail = "no measurement available today"
-    elif not bad:
-        detail = "nothing wrong with it"
+    if st == "info":   detail = "no measurement available today"
+    elif not bad:      detail = "nothing wrong with it"
     else:
-        detail = ("; ".join(n.lower() for n in names[:3]) or "see the detail below")
-        if len(names) > 3:
-            detail += f" and {len(names)-3} more"
+        detail = "; ".join(n.lower() for n in names[:3]) or "see the detail below"
+        if len(names) > 3: detail += f" and {len(names)-3} more"
     if bad and moving:
         detail += f'<div style="margin-top:5px;font-size:11px;color:{fg};font-weight:600">changed in the last week</div>'
     elif bad:
         detail += '<div style="margin-top:5px;font-size:11px;color:#7A7870">unchanged for weeks, already known</div>'
-    tiles += (f'<div style="background:{bg};border-top:3px solid {fg};padding:12px 14px;">'
-              f'<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:{fg};font-weight:700">{verdict}</div>'
+    tiles += (f'<div style="background:{bg};border-top:3px solid {fg};padding:12px 14px">'
+              f'<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:{fg};font-weight:700">{VERDICT[(st, bool(moving))]}</div>'
               f'<div style="font-size:16px;font-weight:600;color:#000;margin:3px 0 5px">{name}</div>'
               f'<div style="font-size:12px;color:#5A5D5C;line-height:1.4">{detail}</div></div>')
 
-# ---- what needs attention ---------------------------------------------------
-attention = sorted([c for c in by_check if by_check[c][0] in ("critical", "warning")],
-                   key=lambda c: (-RANK[by_check[c][0]], c))
-# group the findings by cause, worst cause first
+# ---- cluster the failing checks ---------------------------------------------
+attention = [c for c in by_check if by_check[c]["status"] in ("critical","warning")]
+recorded  = {}
+for cz in causes:
+    for cid in cz["check_ids"]:
+        if cid in attention: recorded[cid] = cz["cause_id"]
+
 groups = {}
 for c in attention:
-    groups.setdefault(CAUSE.get(c, f"other:{c}"), []).append(c)
-order = sorted(groups, key=lambda g: (-max(RANK[by_check[c][0]] for c in groups[g]), -len(groups[g])))
+    if c in recorded:                       key = ("known", recorded[c])
+    elif onset.get(c, {}) and onset[c]["failing_since"]: key = ("onset", onset[c]["failing_since"])
+    else:                                   key = ("lone", c)
+    groups.setdefault(key, []).append(c)
 
+# ---- describe each cluster from measurements alone ---------------------------
+def describe(members):
+    """Everything in here is computed. Nothing is knowledge about this system."""
+    parts = []
+    ons = [onset[c]["failing_since"] for c in members if c in onset and onset[c]["failing_since"]]
+    if ons:
+        d = min(ons)
+        parts.append(f"{len(members)} check{'s' if len(members)!=1 else ''} have been failing since {d:%d %B %Y}"
+                     f", {(CHECK_DAY - d).days} days.")
+    else:
+        parts.append(f"{len(members)} check{'s' if len(members)!=1 else ''} failing. "
+                     f"No day-by-day history is kept in this edition, so the start date is unknown.")
+    moved = [c for c in members if by_check[c]["metric_value"] is not None and by_check[c]["baseline"] is not None
+             and by_check[c]["baseline"] != 0]
+    if moved:
+        c = max(moved, key=lambda c: abs(by_check[c]["metric_value"] - by_check[c]["baseline"]) / abs(by_check[c]["baseline"]))
+        parts.append(f"The largest movement is {LABELS.get(c,(c,''))[0].lower()}, "
+                     f"now {by_check[c]['metric_value']:.4g} against an expected {by_check[c]['baseline']:.4g}.")
+    # controls: published figures that no failing check points at
+    hit = {a["figure"] for a in affects if a["check_id"] in members}
+    ctrl = [n for k, n in FIGURES if k not in hit and worst(fig_checks.get(k, [])) == "ok"]
+    if ctrl:
+        parts.append(f"Unaffected throughout: {', '.join(ctrl).lower()}.")
+    return " ".join(parts)
+
+def scope_line(members):
+    """Which slice of the estate deviates? Computed, and often most of the answer."""
+    out = []
+    for dim in ("site", "browser", "os", "device", "sdk version"):
+        vals = [r for r in scope if r["dim"] == dim and r["browsers_per_person_prior"]]
+        if len(vals) < 2: continue
+        hi = [r for r in vals if r["browsers_per_person_today"] and
+              r["browsers_per_person_today"] > 1.6 * r["browsers_per_person_prior"]]
+        if hi and len(hi) < len(vals):
+            out.append(f"{dim}: only {', '.join(sorted(r['val'] for r in hi)[:4])}")
+        elif hi:
+            out.append(f"{dim}: every value")
+    return "Scope by dimension &mdash; " + "; ".join(out) if out else ""
+
+order = sorted(groups, key=lambda g: (-max(RANK[by_check[c]["status"]] for c in groups[g]), -len(groups[g])))
 items = ""
 for g in order:
-    members = sorted(groups[g], key=lambda c: (-RANK[by_check[c][0]], c))
-    g_st  = max((by_check[c][0] for c in members), key=lambda s: RANK[s])
-    g_mv  = any(by_check[c][2] == "moving" for c in members)
+    members = sorted(groups[g], key=lambda c: (-RANK[by_check[c]["status"]], c))
+    g_st = max((by_check[c]["status"] for c in members), key=lambda s: RANK[s])
+    g_mv = any(by_check[c]["trend"] == "moving" for c in members)
     gfg, gbg = COL[g_st]
-    if g in CAUSE_INFO:
-        g_title, g_text = CAUSE_INFO[g]
+    if g[0] == "known":
+        cz = next(z for z in causes if z["cause_id"] == g[1])
+        g_title, g_text, tag = cz["title"], cz["description"], "IDENTIFIED CAUSE"
+    elif g[0] == "onset":
+        g_title = f"Something changed on {g[1]:%d %B %Y}"
+        g_text  = describe(members) + " <b>Cause not yet identified.</b> Record it in cell 9d once it is known."
+        tag = "GROUPED BY START DATE"
     else:
         only = members[0]
-        g_title, g_text = LABELS.get(only, (only, ""))[0], LABELS.get(only, ("", ""))[1]
-    g_figs = sorted({dict(FIGURES).get(a["figure"], a["figure"])
-                     for a in affects if a["check_id"] in members})
-    items += (f'<tr><td colspan="3" style="padding:16px 0 6px">'
-              f'<div style="border-left:4px solid {gfg};background:{gbg};padding:11px 14px">'
-              f'<div style="font-size:15px;font-weight:600;color:#000">{g_title}'
-              f'{"" if not g_mv else f" <span style=\'background:{gfg};color:#fff;font-size:10px;font-weight:700;padding:2px 6px\'>MOVED THIS WEEK</span>"}</div>'
-              f'<div style="font-size:12.5px;color:#5A5D5C;margin-top:4px;max-width:88ch">{g_text}</div>'
-              f'<div style="font-size:11px;color:#7A7870;margin-top:6px">'
+        g_title = LABELS.get(only, (only, ""))[0]
+        g_text  = describe(members) + " <b>Cause not yet identified.</b>"
+        tag = "SINGLE CHECK"
+    sc = scope_line(members)
+    g_figs = sorted({FIGNAME.get(a["figure"], a["figure"]) for a in affects if a["check_id"] in members})
+    items += (f'<tr><td colspan="3" style="padding:18px 0 6px">'
+              f'<div style="border-left:4px solid {gfg};background:{gbg};padding:12px 14px">'
+              f'<div style="font-size:10px;letter-spacing:.06em;color:{gfg};font-weight:700">{tag}'
+              f'{" &middot; MOVED THIS WEEK" if g_mv else ""}</div>'
+              f'<div style="font-size:15px;font-weight:600;color:#000;margin-top:3px">{g_title}</div>'
+              f'<div style="font-size:12.5px;color:#5A5D5C;margin-top:5px;max-width:92ch;line-height:1.5">{g_text}</div>'
+              + (f'<div style="font-size:11.5px;color:#7A7870;margin-top:6px">{sc}</div>' if sc else "")
+              + f'<div style="font-size:11px;color:#7A7870;margin-top:6px">'
               f'{len(members)} check{"s" if len(members)!=1 else ""} &middot; affects {", ".join(g_figs) if g_figs else "nothing published"}</div>'
               f'</div></td></tr>')
     for c in members:
-        st, note, trend = by_check[c]
-        chip = ('<span style="background:#FBE6E7;color:#BD000C;font-size:10px;font-weight:700;padding:2px 6px;margin-left:6px">CHANGED RECENTLY</span>'
-                if trend == "moving" else
-                '<span style="background:#ECEBE4;color:#7A7870;font-size:10px;padding:2px 6px;margin-left:6px">ongoing</span>'
-                if trend == "stable" else
-                '<span style="background:#fff;border:1px solid #CCCABC;color:#8E8D83;font-size:10px;padding:1px 6px;margin-left:6px">trend not tracked</span>')
+        r = by_check[c]; st, note, trend = r["status"], r["note"], r["trend"]
+        chip = ('<span style="background:#FBE6E7;color:#BD000C;font-size:10px;font-weight:700;padding:2px 6px;margin-left:6px">CHANGED RECENTLY</span>' if trend=="moving"
+                else '<span style="background:#ECEBE4;color:#7A7870;font-size:10px;padding:2px 6px;margin-left:6px">ongoing</span>' if trend=="stable"
+                else '<span style="background:#fff;border:1px solid #CCCABC;color:#8E8D83;font-size:10px;padding:1px 6px;margin-left:6px">trend not tracked</span>')
         fg, bg = COL[st]
         title, question = LABELS.get(c, (c, ""))
-        figs = ", ".join(dict(FIGURES).get(f, f) for f in sorted({a["figure"] for a in affects if a["check_id"] == c})) or "—"
+        figs = ", ".join(FIGNAME.get(f, f) for f in sorted({a["figure"] for a in affects if a["check_id"] == c})) or "&mdash;"
         items += (f'<tr><td style="padding:9px 12px 9px 24px;border-bottom:1px solid #ECEBE4;white-space:nowrap;vertical-align:top">'
                   f'<span style="background:{fg};color:#fff;font-size:10px;font-weight:700;padding:2px 7px;letter-spacing:.05em">{st.upper()}</span></td>'
                   f'<td style="padding:9px 12px 9px 0;border-bottom:1px solid #ECEBE4;vertical-align:top">'
@@ -872,17 +1006,19 @@ for g in order:
                   f'<td style="padding:9px 0;border-bottom:1px solid #ECEBE4;font-size:12px;color:#5A5D5C;vertical-align:top;white-space:nowrap">{figs}'
                   f'<div style="font-size:10px;color:#B8B3A2;margin-top:3px">check {c}</div></td></tr>')
 
-n_crit  = sum(1 for c in by_check.values() if c[0] == "critical")
-n_warn  = sum(1 for c in by_check.values() if c[0] == "warning")
-n_ok    = sum(1 for c in by_check.values() if c[0] == "ok")
-n_moving = sum(1 for c in by_check.values() if c[0] in ("critical","warning") and c[2] == "moving")
+n_crit = sum(1 for r in by_check.values() if r["status"] == "critical")
+n_warn = sum(1 for r in by_check.values() if r["status"] == "warning")
+n_ok   = sum(1 for r in by_check.values() if r["status"] == "ok")
+n_mv   = sum(1 for r in by_check.values() if r["status"] in ("critical","warning") and r["trend"] == "moving")
+n_new  = sum(1 for g in order if g[0] != "known")
 sound  = [n for k, n in FIGURES if worst(fig_checks.get(k, [])) == "ok"]
-unknown = [n for k, n in FIGURES if worst(fig_checks.get(k, [])) == "info"]
+unknown= [n for k, n in FIGURES if worst(fig_checks.get(k, [])) == "info"]
 
-if n_moving: hfg, hbg, headline = "#BD000C", "#FBE6E7", f"{n_moving} changed recently"
-elif n_crit: hfg, hbg, headline = "#BD000C", "#FBE6E7", f"{n_crit} serious, none new today"
-elif n_warn: hfg, hbg, headline = "#E4A911", "#FDF6E3", f"{n_warn} thing{'s' if n_warn != 1 else ''} to look at"
-else:        hfg, hbg, headline = "#6F7A1A", "#F1F3E7", "All clear"
+if n_mv:      hfg, hbg, headline = "#BD000C", "#FBE6E7", f"{n_mv} changed recently"
+elif n_new:   hfg, hbg, headline = "#BD000C", "#FBE6E7", f"{n_new} cause{'s' if n_new!=1 else ''} not yet identified"
+elif n_crit:  hfg, hbg, headline = "#BD000C", "#FBE6E7", f"{n_crit} serious, all known"
+elif n_warn:  hfg, hbg, headline = "#E4A911", "#FDF6E3", f"{n_warn} to look at"
+else:         hfg, hbg, headline = "#6F7A1A", "#F1F3E7", "All clear"
 
 displayHTML(f"""
 <div style="font-family:'Frutiger 45 Light',Frutiger,'Helvetica Neue',Arial,sans-serif;color:#404040;background:#fff;padding:22px 26px;max-width:1180px">
@@ -899,19 +1035,19 @@ displayHTML(f"""
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px">{tiles}</div>
 
-  <div style="margin-top:28px;font-size:15px;font-weight:600;color:#000">What needs attention</div>
+  <div style="margin-top:30px;font-size:15px;font-weight:600;color:#000">What needs attention</div>
   <div style="font-size:12px;color:#7A7870;margin:3px 0 10px">
-    Grouped by cause, worst first, because several checks usually point at one problem.
-    <b>Changed recently</b> is what needs acting on today; <b>ongoing</b> has been at this level for weeks
-    and is already known. The grey line is the raw measurement, for whoever picks it up next.
+    Grouped by cause. Where no cause is recorded, checks that started failing on the same day are grouped
+    together and described from the measurements alone. The grey line under each check is its raw value.
   </div>
   {'<table style="width:100%;border-collapse:collapse">' + items + '</table>' if items
    else '<div style="background:#F1F3E7;border-left:3px solid #6F7A1A;padding:12px 14px;font-size:13px">Nothing is failing. All ' + str(n_ok) + ' checks passed.</div>'}
 
   <div style="margin-top:22px;padding-top:10px;border-top:1px solid #ECEBE4;font-size:11px;color:#8E8D83">
-    {n_crit} serious &middot; {n_warn} to look at &middot; {n_ok} passed &middot; {n_moving} changed recently,
-    out of {len(by_check)} checks across bronze, silver and gold, tracing back to {len(order)} distinct cause{'s' if len(order) != 1 else ''}.
-    Nothing was written: this notebook creates only temporary views. Full detail in the grid above.
+    {n_crit} serious &middot; {n_warn} to look at &middot; {n_ok} passed &middot; {n_mv} changed recently,
+    out of {len(by_check)} checks across bronze, silver and gold, tracing back to {len(order)} cluster{'s' if len(order)!=1 else ''}
+    of which {len(order)-n_new} {'has' if len(order)-n_new == 1 else 'have'} a recorded cause.
+    Nothing was written: this notebook creates only temporary views.
   </div>
 </div>
 """)

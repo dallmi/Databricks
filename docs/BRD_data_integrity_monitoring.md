@@ -203,6 +203,10 @@ and each hop is reconciled.
 | FR-RSP-09 | A figure no failing check points at is never labelled. Correct numbers stay visibly correct | Must |
 | FR-RSP-10 | The Health Overview is readable without knowledge of the checks: organised by reported figure, every check named in plain language, no check identifier above the fold | Must |
 | FR-RSP-11 | A finding that has held the same level for weeks is shown as an ongoing condition, distinct from one that moved this week | Must |
+| FR-RSP-12 | Findings are grouped without prior knowledge of the defect, by the day each check began failing | Must |
+| FR-RSP-13 | Each group is described from measurements alone: what moved, since when, which figures it touches, which control figures did not move, and which slice of the estate deviates | Must |
+| FR-RSP-14 | A cause is stored as data, not code. A group with no recorded cause is labelled as such rather than left unexplained | Must |
+| FR-RSP-15 | No component may assert a cause it has not been given. Generated text may rephrase measurements, never explain them | Must |
 | FR-RSP-06 | An info-level event annotates the day without notifying anyone | Should |
 | FR-RSP-07 | Row-level rules warn and keep. No expectation may drop or reject a row | Must |
 
@@ -484,6 +488,9 @@ answers "is the data sound right now", not "when did this start".
 - **OP-08** (investigation) Bronze carries `user_AuthenticatedId` and
   `user_AccountId`, neither yet analysed. If either remained stable across 7 April
   it is both a diagnostic and a candidate replacement key.
+- **OP-10** (design) Onset detection covers only corridor-driven checks in the
+  read-only edition, because the explicit checks judge a single day. The
+  persistent edition resolves this by storing a row per day and per check.
 - **OP-09** (governance) Retention of `dq.dq_check_result` beyond 24 months, and
   whether check results are themselves subject to the platform's retention policy.
 
