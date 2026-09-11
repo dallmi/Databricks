@@ -20,10 +20,14 @@
 --
 -- HOW TO RUN
 --   Cell 0 first: it checks every column against the live schema and costs
---   nothing. Then cells 1 to 9 in order, cell 10 for the result, cell 11 to
---   clean up. Cell 11 is safe to run at any point, including after a failure.
---   Each cell is one statement. To run the lot from a single cell instead, see
---   the note at the foot of the file.
+--   nothing. Then 1 to 9e in order. 9e materialises the verdicts, so 10 and 10b
+--   are both instant afterwards and either can be skipped.
+--     cell 10   the detail grid, every check including the ones that passed.
+--               For whoever maintains the checks.
+--     cell 10b  the health board, grouped by cause and written in plain words.
+--               For everyone else. This is the one to read first.
+--   Cell 11 cleans up and is safe to run at any point, including after a failure.
+--   To run the lot from a single cell instead, see the note at the foot.
 --
 -- NAMING
 --   Temporary views cannot be schema-qualified, so they are prefixed `dq_`
@@ -754,17 +758,35 @@ AS t(cause_id, since, title, description, check_ids);
 
 
 -- ----------------------------------------------------------------------------
+-- CELL 9e — THE VERDICTS, MATERIALISED ONCE.
+--
+-- Everything above is a lazy view, so each cell that reads it recomputes it. The
+-- first run showed exactly that cost: cell 10 took 14m41s and cell 10b then took
+-- another 10 minutes for the same work. Both consumers now read this one cached
+-- result instead, and both become instant.
+--
+-- CACHE TABLE holds it in cluster memory, never in the lakehouse. Cell 11
+-- releases it.
+-- ----------------------------------------------------------------------------
+%sql
+CREATE OR REPLACE TEMPORARY VIEW dq_results AS
+SELECT check_date, check_id, family, layer, metric_value, baseline,
+       lower_bound, upper_bound, status, note, trend
+FROM   dq_r_corridor WHERE check_date = date_sub(current_date(), 1)
+UNION ALL
+SELECT check_date, check_id, family, layer, metric_value, baseline,
+       lower_bound, upper_bound, status, note, 'unknown' AS trend
+FROM   dq_r_explicit;
+
+%sql
+CACHE TABLE dq_results;
+
+
+-- ----------------------------------------------------------------------------
 -- CELL 10 — THE RESULT. One grid, worst first, with the figures each finding
 -- puts at risk. This is the Health Overview, computed rather than stored.
 -- ----------------------------------------------------------------------------
 %sql
-WITH all_r AS (
-  SELECT check_date, check_id, family, layer, metric_value, baseline,
-         lower_bound, upper_bound, status, note
-  FROM   dq_r_corridor WHERE check_date = date_sub(current_date(), 1)
-  UNION ALL
-  SELECT * FROM dq_r_explicit
-)
 SELECT
   CASE r.status WHEN 'critical' THEN '1 critical' WHEN 'warning' THEN '2 warning'
                 WHEN 'info' THEN '3 info' ELSE '4 ok' END       AS severity,
@@ -775,11 +797,12 @@ SELECT
   ROUND(r.upper_bound, 4)                                       AS hi,
   CASE WHEN r.status IN ('warning','critical')
        THEN concat_ws(', ', collect_set(a.figure)) ELSE '' END  AS figures_at_risk,
+  r.trend                                                       AS trend,
   r.note
-FROM all_r r
+FROM dq_results r
 LEFT JOIN dq_check_affects a ON a.check_id = r.check_id
 GROUP BY r.status, r.check_id, r.layer, r.family, r.metric_value, r.baseline,
-         r.lower_bound, r.upper_bound, r.note
+         r.lower_bound, r.upper_bound, r.trend, r.note
 ORDER BY severity, r.check_id;
 
 
@@ -861,12 +884,7 @@ VERDICT = {("critical", True): "Broke recently", ("critical", False): "Known iss
            ("ok", True): "Sound", ("ok", False): "Sound"}
 CHECK_DAY = date.today() - timedelta(days=1)
 
-rows = spark.sql("""
-    SELECT check_id, status, note, trend, metric_value, baseline
-    FROM dq_r_corridor WHERE check_date = date_sub(current_date(), 1)
-    UNION ALL
-    SELECT check_id, status, note, 'unknown', metric_value, baseline FROM dq_r_explicit
-""").collect()
+rows = spark.sql("SELECT check_id, status, note, trend, metric_value, baseline FROM dq_results").collect()
 affects = spark.sql("SELECT check_id, figure FROM dq_check_affects").collect()
 onset   = {r["check_id"]: r for r in spark.sql("SELECT * FROM dq_onset").collect()}
 causes  = spark.sql("SELECT * FROM dq_known_causes").collect()
@@ -1068,12 +1086,15 @@ displayHTML(f"""
 %python
 # Reverse creation order, so dependents go before the views they read.
 VIEWS = [
+    "dq_results",
+    "dq_known_causes", "dq_scope", "dq_onset",
     "dq_r_explicit", "dq_r_corridor",
     "dq_check_affects", "dq_check_def",
     "dq_metric_baseline", "dq_metric_daily",
     "dq_sv_daily", "dq_gold_daily", "dq_pv_daily",
     "dq_pv_window",
 ]
+CACHED = ["dq_results", "dq_pv_window"]   # both need releasing, in this order
 
 # --- 1. prove that everything about to be dropped is temporary ---------------
 # A temporary view exists only in this session. If anything below reports
@@ -1087,14 +1108,14 @@ else:
     print(f"all {len(existing)} object(s) found are temporary, safe to drop")
 
 # --- 2. release the cache ----------------------------------------------------
-try:
-    if spark.catalog.isCached("dq_pv_window"):
-        spark.catalog.uncacheTable("dq_pv_window")
-        print("uncached  dq_pv_window")
-    else:
-        print("uncached  dq_pv_window (was not cached)")
-except Exception as e:
-    print(f"uncached  dq_pv_window — skipped ({type(e).__name__})")
+for t in CACHED:
+    try:
+        if spark.catalog.isCached(t):
+            spark.catalog.uncacheTable(t); print(f"uncached  {t}")
+        else:
+            print(f"uncached  {t} (was not cached)")
+    except Exception as e:
+        print(f"uncached  {t} — skipped ({type(e).__name__})")
 
 # --- 3. drop the views -------------------------------------------------------
 dropped, failed = [], []
@@ -1113,10 +1134,11 @@ for v, err in failed:
 # --- 4. prove the session is clean -------------------------------------------
 left = sorted(t.name for t in spark.catalog.listTables() if t.name.startswith("dq_"))
 still_cached = []
-try:
-    still_cached = [v for v in VIEWS if spark.catalog.isCached(v)]
-except Exception:
-    pass   # isCached raises once the view is gone, which is the outcome we want
+for v in VIEWS:
+    try:
+        if spark.catalog.isCached(v): still_cached.append(v)
+    except Exception:
+        pass   # isCached raises once the view is gone, which is the outcome we want
 
 print()
 if not left and not still_cached and not failed and not persistent:
@@ -1135,11 +1157,12 @@ else:
 -- Paste the statements above into a Python cell as a list and loop, if one cell
 -- is preferable to eleven:
 --
---   stmts = [ ... each SQL string, in order, without the %sql magic ... ]
---   for s in stmts[:-1]:
+--   stmts = [ ... each SQL string from cells 1 to 9e, in order, no %sql magic ... ]
+--   for s in stmts:
 --       spark.sql(s)
---   display(spark.sql(stmts[-1]))
---   # then run cell 11 as-is; it is already Python and cleans up on its own
+--   display(spark.sql("SELECT * FROM dq_results ORDER BY status, check_id"))
+--   # then cell 10b for the board, and cell 11 to clean up. Both are already
+--   # Python and can be pasted as they are.
 --
 -- WHAT TO DO WITH THE OUTPUT
 --   Export the grid to CSV from the result toolbar if you want a record. Nothing
@@ -1148,6 +1171,10 @@ else:
 -- WHEN THIS BECOMES THE PERSISTENT VERSION
 --   dq_checks_draft.sql is the same logic writing into a `dq` schema, which is
 --   what makes trending, alerting and the hands-off Health Overview possible.
+--   It also removes the one real gap in this edition: onset detection here covers
+--   only the corridor-driven checks, because those are the ones evaluated for
+--   every day in the window. With a stored result per day and per check, every
+--   check gets a start date and the automatic grouping covers all of them.
 --   It belongs in Dev first, then pre-prod, then PROD — not straight here.
 --   Differences to expect when promoting:
 --     · CREATE OR REPLACE TEMPORARY VIEW  ->  CREATE OR REPLACE TABLE

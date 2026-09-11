@@ -401,6 +401,18 @@ because the aggregate is still in range. Only a row-level rule catches it.
 
 ---
 
+## Two consumers, one computation
+
+Everything up to cell 9d is a lazy view, so each cell that reads it recomputes
+it. The first production run made the cost visible: cell 10 took 14m41s and cell
+10b then spent another ten minutes on the same work. Cell 9e now materialises the
+verdicts once and caches them, and both consumers read that.
+
+They are not alternatives. Cell 10 is the full grid including every check that
+passed, which is what proves coverage and what an engineer wants when tracing a
+number. Cell 10b shows only what is failing, grouped and explained. Either can be
+skipped; neither costs anything once 9e has run.
+
 ## The health board — who the output is written for
 
 Cell 10 of the read-only edition is a grid of check ids and numbers. It is the
