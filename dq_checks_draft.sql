@@ -114,10 +114,13 @@ print("""
 --      8 April change, so the thresholds in dq.check_def stop being guesses
 --   3. how far the ratios actually moved, which validates the whole approach
 --
--- Scan is limited by gmdp_date (a real DATE) because `timestamp` is a string and
--- cannot be range-filtered before it is parsed. gmdp_date is the ingestion date,
--- close enough to prune partitions; every metric below is computed on the parsed
--- event time.
+-- Windows are cut on the EVENT time (`timestamp`), not on ingestion. The raw
+-- value is ISO-8601, which sorts lexicographically in the same order as it sorts
+-- chronologically, so a plain STRING range on the unparsed column both selects
+-- the right rows and still lets Delta skip files on its min/max statistics. The
+-- cast is then only applied to the rows that survive. Never window on gmdp_date
+-- or gmdp_timestamp: those record when the platform ingested the row, so a late
+-- load would move an event into the wrong fortnight.
 --
 -- HOW TO RUN: paste from `%sql` to the semicolon into ONE cell. One result grid,
 -- three rows. Photograph it.
@@ -126,17 +129,17 @@ print("""
 WITH base AS (
   SELECT
     CASE
-      WHEN gmdp_date BETWEEN DATE '2026-03-02' AND DATE '2026-03-15' THEN '1 before (2-15 Mar)'
-      WHEN gmdp_date BETWEEN DATE '2026-04-13' AND DATE '2026-04-26' THEN '2 after  (13-26 Apr)'
-      ELSE                                                                '3 now    (last 14d)'
+      WHEN `timestamp` <  '2026-03-16' THEN '1 before (2-15 Mar)'
+      WHEN `timestamp` <  '2026-04-27' THEN '2 after  (13-26 Apr)'
+      ELSE                                  '3 now    (last 14d)'
     END                              AS period,
     CAST(`timestamp` AS TIMESTAMP)   AS ts,   -- ISO-8601 with T and Z; CAST, not to_timestamp
     `timestamp`                      AS ts_raw,
     session_Id, user_Id, GPN, sdkVersion
   FROM  sharepoint_bronze.pageviews
-  WHERE gmdp_date BETWEEN DATE '2026-03-02' AND DATE '2026-03-15'
-     OR gmdp_date BETWEEN DATE '2026-04-13' AND DATE '2026-04-26'
-     OR gmdp_date >= date_sub(current_date(), 14)
+  WHERE (`timestamp` >= '2026-03-02' AND `timestamp` < '2026-03-16')
+     OR (`timestamp` >= '2026-04-13' AND `timestamp` < '2026-04-27')
+     OR  `timestamp` >= date_format(date_sub(current_date(), 14), 'yyyy-MM-dd')
 ),
 sess AS (
   SELECT period, session_Id, COUNT(*) AS n_views
@@ -172,8 +175,12 @@ ORDER BY b.period;
 --   windows — the parse failed for every row. Raw form is ISO-8601 UTC, e.g.
 --   2026-03-02T00:00:00.229Z. Fixed by using CAST(... AS TIMESTAMP) throughout,
 --   which accepts the T separator and the Z; to_timestamp does not. The ratios
---   below were unaffected: they count session ids, browser ids and GPNs, and the
---   window comes from gmdp_date, so only first_event and last_event were NULL.
+--   below were unaffected: they count session ids, browser ids and GPNs, so only
+--   first_event and last_event were NULL.
+--   That first run still cut its windows on gmdp_date, the INGESTION date. The
+--   query now cuts them on the event time instead, so re-run it once: the figures
+--   should barely move, and if any of them does, the shift is late-arriving data
+--   and worth knowing about on its own.
 --   Row 1 gives the healthy baseline for B1 (views_per_session, expected 1.1-1.2)
 --   and B4 (browser_ids_per_person, expected near 1). Rows 2 and 3 show how far
 --   they moved. Those three numbers replace the guessed thresholds in dq.check_def.
@@ -260,7 +267,9 @@ SELECT
   `timestamp`                          AS view_ts_raw,
   CAST(`timestamp` AS TIMESTAMP)       AS view_ts,
   CAST(CAST(`timestamp` AS TIMESTAMP) AS DATE) AS view_date,
-  CAST(ingestiontime AS TIMESTAMP)     AS ingested_ts,    -- string; feeds check A2
+  gmdp_timestamp                       AS gmdp_ingested_ts, -- platform ingestion time, TIMESTAMP already
+  CAST(ingestiontime AS TIMESTAMP)     AS ingested_ts,      -- second ingestion stamp; compare the two once
+  gmdp_date                            AS gmdp_date,        -- ingestion DATE; never use as the event grain
   session_Id                           AS session_id,
   user_Id                              AS browser_id,     -- the App Insights ai_user cookie
   user_AuthenticatedId                 AS auth_id,        -- set when the SDK knows the user
@@ -278,7 +287,9 @@ SELECT
   client_OS                            AS client_os,
   client_Type                          AS client_type
 FROM sharepoint_bronze.pageviews
-WHERE CAST(`timestamp` AS TIMESTAMP) >= date_sub(current_date(), 70);
+-- String range on the raw ISO-8601 value: correct chronologically and skippable,
+-- unlike a predicate wrapped in CAST. gmdp_date is deliberately not used here.
+WHERE `timestamp` >= date_format(date_sub(current_date(), 70), 'yyyy-MM-dd');
 
 -- Guard: the cast must not silently drop rows. Run once after the first build.
 SELECT COUNT(*)                                            AS rows_in_window,
@@ -315,7 +326,8 @@ clicks AS (                                      -- customEvents clicks per day
   -- customevents carries `timestamp` (string) like pageviews, but has NO `id` column
   SELECT CAST(CAST(`timestamp` AS TIMESTAMP) AS DATE) AS view_date, COUNT(*) AS clicks
   FROM   sharepoint_bronze.customevents
-  WHERE  name = 'click_event' AND CAST(`timestamp` AS TIMESTAMP) >= date_sub(current_date(), 70)
+  WHERE  name = 'click_event'
+    AND  `timestamp` >= date_format(date_sub(current_date(), 70), 'yyyy-MM-dd')
   GROUP  BY 1
 )
 SELECT
@@ -466,9 +478,10 @@ FROM (
          timestampdiff(HOUR, MAX(view_ts), current_timestamp()) AS age_h
   FROM   dq.pv_window WHERE view_date >= date_sub(current_date(), 3)
   UNION ALL
-  -- true load latency: event time vs ingestion time (bronze carries ingestiontime)
-  SELECT 'bronze_load_lag', MAX(ingested_ts),
-         CAST(percentile_approx(timestampdiff(MINUTE, view_ts, ingested_ts), 0.95) / 60 AS INT)
+  -- True load latency is the ONLY place an ingestion column belongs: how long the
+  -- platform took to land an event, measured against the event's own time.
+  SELECT 'bronze_load_lag', MAX(gmdp_ingested_ts),
+         CAST(percentile_approx(timestampdiff(MINUTE, view_ts, gmdp_ingested_ts), 0.95) / 60 AS INT)
   FROM   dq.pv_window WHERE view_date >= date_sub(current_date(), 3)
   UNION ALL
   SELECT 'gold', to_timestamp(MAX(visitdatekey), 'yyyyMMdd'),
@@ -513,10 +526,13 @@ FROM params p CROSS JOIN b CROSS JOIN s CROSS JOIN g;
 -- A7 — late arrival: recount day D-3 today vs. what bronze held three days ago (Delta time travel)
 INSERT INTO dq.dq_check_result
 WITH params AS (SELECT date_sub(current_date(), 3) AS d),
-now_cnt  AS (SELECT COUNT(*) AS n FROM sharepoint_bronze.pageviews pv JOIN params p ON CAST(CAST(pv.`timestamp` AS TIMESTAMP) AS DATE) = p.d),
+now_cnt  AS (SELECT COUNT(*) AS n FROM sharepoint_bronze.pageviews pv JOIN params p
+             ON pv.`timestamp` >= date_format(p.d, 'yyyy-MM-dd')
+            AND pv.`timestamp` <  date_format(date_add(p.d, 1), 'yyyy-MM-dd')),
 then_cnt AS (SELECT COUNT(*) AS n
              FROM sharepoint_bronze.pageviews TIMESTAMP AS OF date_sub(current_date(), 2) pv   -- retention is 7 days
-             JOIN params p ON CAST(CAST(pv.`timestamp` AS TIMESTAMP) AS DATE) = p.d)
+             JOIN params p ON pv.`timestamp` >= date_format(p.d, 'yyyy-MM-dd')
+                          AND pv.`timestamp` <  date_format(date_add(p.d, 1), 'yyyy-MM-dd'))
 SELECT p.d, 'A7', 'completeness', 'bronze',
        (n.n - t.n) / NULLIF(t.n, 0) AS growth, 0, NULL, 0.02,
        CASE WHEN (n.n - t.n) / NULLIF(t.n, 0) > 0.02 THEN 'warning' ELSE 'ok' END,
@@ -698,7 +714,8 @@ v AS (
     AVG(CASE WHEN gpn_raw IS NOT NULL AND gpn_raw NOT RLIKE '^[0-9]{8}$' THEN 1.0 ELSE 0.0 END)       AS bad_gpn,
     AVG(CASE WHEN tracking_id IS NOT NULL
               AND tracking_id NOT RLIKE '^[A-Z0-9]{5}-[A-Z0-9]{7}-[0-9]{6}-[A-Z0-9]{7}-[A-Z]{3}$' THEN 1.0 ELSE 0.0 END) AS bad_tid,
-    AVG(CASE WHEN view_ts > current_timestamp() OR view_ts < date_sub(current_date(), 70) THEN 1.0 ELSE 0.0 END) AS bad_ts
+    AVG(CASE WHEN view_ts IS NULL OR view_ts > current_timestamp()
+                   OR view_ts < date_sub(current_date(), 70) THEN 1.0 ELSE 0.0 END) AS bad_ts
   FROM dq.pv_window w JOIN params p ON w.view_date = p.check_date
 )
 SELECT p.check_date, 'C5', 'schema', 'staging',

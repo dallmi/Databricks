@@ -332,6 +332,12 @@ write-side schema for the check results (`dq` in the draft).
 Block 0b ran over three fortnights: before the change, just after it, and the
 most recent two weeks. Every figure below is from `sharepoint_bronze.pageviews`.
 
+That first run cut its windows on `gmdp_date`, the platform's ingestion date.
+The query now cuts them on the event time in `timestamp` instead, because a late
+load would otherwise move an event into the wrong fortnight. The figures are
+expected to move very little; a re-run confirms them, and any figure that does
+move is measuring late arrival, which is worth knowing separately.
+
 | | 2–15 Mar, before | 13–26 Apr, after | last 14 days |
 |---|---|---|---|
 | Page views scanned | 2,861,485 | 2,384,105 | 2,122,418 |
