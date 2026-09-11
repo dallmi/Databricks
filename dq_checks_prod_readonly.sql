@@ -347,6 +347,7 @@ SELECT
   COALESCE(d.abs_warn_low,  b.corr_low)  AS lower_bound,
   COALESCE(d.abs_warn_high, b.corr_high) AS upper_bound,
   CASE
+    WHEN b.value IS NULL                                                                THEN 'info'
     WHEN b.n_hist < 4                                                                   THEN 'info'
     WHEN d.abs_block_low  IS NOT NULL AND b.value <= d.abs_block_low                    THEN 'critical'
     WHEN d.abs_block_high IS NOT NULL AND b.value >= d.abs_block_high                   THEN 'critical'
@@ -360,7 +361,12 @@ SELECT
     ELSE 'ok'
   END AS status,
   CONCAT(d.note, ' | 7d ', ROUND(b.mean_7d, 3), ' vs prior 28d ', ROUND(b.mean_prior_28d, 3),
-         ' (', ROUND(100 * b.step_pct, 1), ' %)') AS note
+         ' (', ROUND(100 * b.step_pct, 1), ' %)') AS note,
+  -- Has this moved lately, or has it been sitting at this value for weeks? A
+  -- failing check that has not moved is a known condition, not today's news, and
+  -- a first-line responder needs to tell the two apart before escalating.
+  CASE WHEN b.step_pct IS NULL THEN 'unknown'
+       WHEN ABS(b.step_pct) > 0.10 THEN 'moving' ELSE 'stable' END AS trend
 FROM dq_metric_baseline b
 JOIN dq_check_def d ON d.metric = b.metric;
 
@@ -397,18 +403,35 @@ a5 AS (
          CONCAT(SUM(n - 1), ' duplicate rows of ', SUM(n))
   FROM a5k CROSS JOIN p GROUP BY p.d
 ),
--- A6 layer tie-out, bronze vs silver vs gold
+-- A6 layer retention, bronze -> silver.
+--
+-- Bronze holds MORE rows than silver by design: unpublished pages, drafts and
+-- similar are filtered out on the way in (confirmed 2026-09-11). So the gap
+-- itself is not a defect and comparing the counts for equality was wrong. What
+-- matters is whether the share that survives suddenly changes: a filter that
+-- starts dropping far more, or far less, than it did last month is the signal.
+-- Silver against gold is checked separately and strictly, by G3.
 a6b AS (SELECT COUNT(*) AS n FROM dq_pv_window w JOIN p ON w.view_date = p.d),
 a6s AS (SELECT COALESCE(MAX(sv_rows), 0) AS n FROM dq_sv_daily v JOIN p ON v.view_date = p.d),
 a6g AS (SELECT COALESCE(MAX(gold_views), 0) AS n FROM dq_gold_daily g JOIN p ON g.view_date = p.d),
+a6hist AS (                      -- the retention share over the prior 28 days
+  SELECT percentile_approx(sv.sv_rows / NULLIF(pv.views, 0), 0.5) AS med_keep
+  FROM   dq_pv_daily pv JOIN dq_sv_daily sv ON sv.view_date = pv.view_date
+  CROSS  JOIN p
+  WHERE  pv.view_date BETWEEN date_sub(p.d, 28) AND date_sub(p.d, 1)
+),
 a6 AS (
   SELECT p.d, 'A6', 'completeness', 'all layers',
-         a6g.n / NULLIF(a6b.n, 0), 1.0, 0.99, 1.01,
-         CASE WHEN a6b.n = a6s.n AND a6s.n = a6g.n THEN 'ok'
-              WHEN ABS(a6g.n / NULLIF(a6b.n,0) - 1) > 0.05 THEN 'critical' ELSE 'warning' END,
-         CONCAT('bronze ', a6b.n, ' | silver ', a6s.n, ' | gold ', a6g.n,
-                ' — document intentional filters as the tolerated gap')
-  FROM p CROSS JOIN a6b CROSS JOIN a6s CROSS JOIN a6g
+         a6s.n / NULLIF(a6b.n, 0), h.med_keep,
+         h.med_keep - 0.05, h.med_keep + 0.05,
+         CASE WHEN h.med_keep IS NULL THEN 'info'
+              WHEN ABS(a6s.n / NULLIF(a6b.n,0) - h.med_keep) > 0.10 THEN 'critical'
+              WHEN ABS(a6s.n / NULLIF(a6b.n,0) - h.med_keep) > 0.05 THEN 'warning' ELSE 'ok' END,
+         CONCAT('bronze ', a6b.n, ' -> silver ', a6s.n, ' -> gold ', a6g.n,
+                ' | kept ', ROUND(100 * a6s.n / NULLIF(a6b.n,0), 1),
+                ' % vs 28-day median ', ROUND(100 * h.med_keep, 1),
+                ' % — unpublished pages and drafts are filtered out by design')
+  FROM p CROSS JOIN a6b CROSS JOIN a6s CROSS JOIN a6g CROSS JOIN a6hist h
 ),
 -- B3 recurring browser identities
 b3t AS (SELECT DISTINCT browser_id FROM dq_pv_window w JOIN p ON w.view_date = p.d),
@@ -549,15 +572,19 @@ s1 AS (
   FROM p CROSS JOIN s1b CROSS JOIN s1v
 ),
 -- S2 key completeness on silver
+-- S2 judges only the keys that are actually in use. `visitorId` measured 0.0 %
+-- on 2026-09-11, i.e. the column exists but is never populated, so including it
+-- made the check fail on a column nobody fills. It is still reported in the note,
+-- because a column that starts filling is worth noticing.
 s2 AS (
   SELECT p.d, 'S2', 'schema', 'silver',
-         LEAST(v.contact_resolution_rate, v.visitor_id_rate, v.page_guid_rate),
+         LEAST(v.contact_resolution_rate, v.page_guid_rate),
          CAST(NULL AS DOUBLE), 0.95, CAST(NULL AS DOUBLE),
-         CASE WHEN LEAST(v.contact_resolution_rate, v.visitor_id_rate, v.page_guid_rate) < 0.80 THEN 'critical'
-              WHEN LEAST(v.contact_resolution_rate, v.visitor_id_rate, v.page_guid_rate) < 0.95 THEN 'warning' ELSE 'ok' END,
+         CASE WHEN LEAST(v.contact_resolution_rate, v.page_guid_rate) < 0.80 THEN 'critical'
+              WHEN LEAST(v.contact_resolution_rate, v.page_guid_rate) < 0.95 THEN 'warning' ELSE 'ok' END,
          CONCAT('contactId ', ROUND(100*v.contact_resolution_rate,1),
-                ' % | visitorId ', ROUND(100*v.visitor_id_rate,1),
-                ' % | marketingPageId ', ROUND(100*v.page_guid_rate,1), ' %')
+                ' % | marketingPageId ', ROUND(100*v.page_guid_rate,1),
+                ' % | (visitorId ', ROUND(100*v.visitor_id_rate,1), ' %, not in use, not judged)')
   FROM dq_sv_daily v JOIN p ON v.view_date = p.d
 ),
 -- G1 grain uniqueness on gold
@@ -629,6 +656,176 @@ LEFT JOIN dq_check_affects a ON a.check_id = r.check_id
 GROUP BY r.status, r.check_id, r.layer, r.family, r.metric_value, r.baseline,
          r.lower_bound, r.upper_bound, r.note
 ORDER BY severity, r.check_id;
+
+
+-- ----------------------------------------------------------------------------
+-- CELL 10b — HEALTH AT A GLANCE. Run this straight after cell 10.
+--
+-- Cell 10 is the detail grid, written for whoever maintains the checks. It is
+-- not readable by a first- or second-line responder: "S2 critical, value 0" says
+-- nothing about what is wrong or whether it matters.
+--
+-- This cell answers the only two questions that person actually has:
+--   which published figures can I trust right now, and what is wrong?
+-- It organises by FIGURE rather than by check, names everything in plain words,
+-- and never shows a check id in the headline. The ids stay in the detail below,
+-- for when someone needs to look one up.
+-- ----------------------------------------------------------------------------
+%python
+from datetime import date, timedelta
+
+# Plain-language name and question for every check. Anything not listed falls
+# back to its id, which is a prompt to add it here.
+LABELS = {
+ "A1": ("Arrival volume",            "Did roughly as much data arrive as on a normal day of this weekday?"),
+ "A2": ("Freshness",                 "How old is the newest event we hold?"),
+ "A4": ("Complete capture",          "Is every event stored, or only a sample of them?"),
+ "A5": ("Repeated events",           "Did the same event land more than once?"),
+ "A6": ("Rows kept between layers",  "Does the share of rows carried forward look like it normally does?"),
+ "B1": ("Pages per visit",           "Does one visit still contain several pages?"),
+ "B2": ("Visits per browser",        "How many visits does one browser gather in a week?"),
+ "B3": ("Returning browsers",        "Do we recognise yesterday's browsers again today?"),
+ "B4": ("Browsers per employee",     "Does one employee still look like one person?"),
+ "B5": ("Single-page visits",        "How many visits contain only one page?"),
+ "B6": ("Visit continuity",          "Does a visit survive a short pause?"),
+ "B7": ("Two ways of counting visits","Do the cookie count and the person count agree?"),
+ "B8": ("Employee number present",   "Do events carry the number we count people on?"),
+ "C3": ("Tracking software version", "Did the tracking software change?"),
+ "C4": ("Tracking configuration",    "Is the data still coming from the same application?"),
+ "C5": ("Value formats",             "Do identifiers and dates have the shape we expect?"),
+ "C6": ("Reference lookups",         "Do pages and employees resolve against their reference lists?"),
+ "C8": ("Double-counted page loads", "Is the same page counted twice in the same instant?"),
+ "D1a":("Published page views",      "Is the published page-view figure in its normal range?"),
+ "D1b":("Published visits",          "Is the published visit figure in its normal range?"),
+ "D1c":("Published unique visitors", "Is the published visitor figure in its normal range?"),
+ "D1d":("Published pages per visit", "Is the published ratio in its normal range?"),
+ "D3": ("Top pages stable",          "Are broadly the same pages at the top as last week?"),
+ "D4": ("Campaign tagging",          "Do page views carry a campaign tag?"),
+ "D7": ("Clicks per page view",      "Are clicks arriving in proportion to page views?"),
+ "G1": ("No double counting",        "Is each page, day and person summarised exactly once?"),
+ "G2": ("Summary rows consistent",   "Do the numbers inside one summary row contradict each other?"),
+ "G3": ("Summary matches detail",    "Does the summary add up to the detail it came from?"),
+ "S1": ("People recognised",         "Does one employee become exactly one person in the model?"),
+ "S2": ("Keys assigned",             "Did every row receive the keys it needs?"),
+}
+
+FIGURES = [   # order they appear on the board; the first three are what most people open the report for
+ ("page_views",       "Page views"),
+ ("unique_visitors",  "Unique visitors"),
+ ("visits",           "Visits"),
+ ("pages_per_visit",  "Pages per visit"),
+ ("avg_time_on_page", "Time on page"),
+ ("bounce_rate",      "Bounce rate"),
+ ("tracking_coverage","Campaign tagging"),
+ ("page_breakdowns",  "Page breakdowns"),
+ ("clicks",           "Clicks"),
+]
+
+RANK = {"critical": 3, "warning": 2, "info": 1, "ok": 0}
+CHECK_DAY = date.today() - timedelta(days=1)
+
+rows = spark.sql("""
+    SELECT check_id, status, note, trend FROM dq_r_corridor WHERE check_date = date_sub(current_date(), 1)
+    UNION ALL SELECT check_id, status, note, 'unknown' AS trend FROM dq_r_explicit
+""").collect()
+affects = spark.sql("SELECT check_id, figure FROM dq_check_affects").collect()
+
+by_check   = {r["check_id"]: (r["status"], r["note"], r["trend"]) for r in rows}
+fig_checks = {}
+for a in affects:
+    if a["check_id"] in by_check:
+        fig_checks.setdefault(a["figure"], []).append(a["check_id"])
+
+def worst(ids):
+    return max((by_check[i][0] for i in ids), key=lambda s: RANK.get(s, 0)) if ids else "ok"
+
+COL = {"critical": ("#BD000C", "#FBE6E7", "Do not rely on this"),
+       "warning":  ("#E4A911", "#FDF6E3", "Read with care"),
+       "info":     ("#7A7870", "#ECEBE4", "Not measurable today"),
+       "ok":       ("#6F7A1A", "#F1F3E7", "Sound")}
+
+# ---- figure tiles -----------------------------------------------------------
+tiles = ""
+for key, name in FIGURES:
+    ids = fig_checks.get(key, [])
+    st  = worst(ids)
+    bad = sorted([i for i in ids if by_check[i][0] in ("critical", "warning")],
+                 key=lambda i: -RANK[by_check[i][0]])
+    fg, bg, verdict = COL[st]
+    moving = [i for i in bad if by_check[i][2] == "moving"]
+    detail = ("nothing wrong with it" if not bad
+              else "; ".join(LABELS.get(i, (i, ""))[0].lower() for i in bad[:3])
+                   + (f" and {len(bad)-3} more" if len(bad) > 3 else ""))
+    if bad and not moving:
+        detail += '<div style="margin-top:5px;font-size:11px;color:#7A7870">known condition, not moving</div>'
+    elif moving:
+        detail += f'<div style="margin-top:5px;font-size:11px;color:{fg};font-weight:600">changed recently</div>'
+    tiles += (f'<div style="background:{bg};border-top:3px solid {fg};padding:12px 14px;">'
+              f'<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:{fg};font-weight:700">{verdict}</div>'
+              f'<div style="font-size:16px;font-weight:600;color:#000;margin:3px 0 5px">{name}</div>'
+              f'<div style="font-size:12px;color:#5A5D5C;line-height:1.4">{detail}</div></div>')
+
+# ---- what needs attention ---------------------------------------------------
+attention = sorted([c for c in by_check if by_check[c][0] in ("critical", "warning")],
+                   key=lambda c: (-RANK[by_check[c][0]], c))
+items = ""
+for c in attention:
+    st, note, trend = by_check[c]
+    chip = ('<span style="background:#FBE6E7;color:#BD000C;font-size:10px;font-weight:700;padding:2px 6px;margin-left:6px">CHANGED RECENTLY</span>'
+            if trend == "moving" else
+            '<span style="background:#ECEBE4;color:#7A7870;font-size:10px;padding:2px 6px;margin-left:6px">ongoing</span>'
+            if trend == "stable" else "")
+    fg, bg, _ = COL[st]
+    title, question = LABELS.get(c, (c, ""))
+    figs = ", ".join(dict(FIGURES).get(f, f) for f in sorted({a["figure"] for a in affects if a["check_id"] == c})) or "—"
+    items += (f'<tr><td style="padding:9px 12px 9px 0;border-bottom:1px solid #ECEBE4;white-space:nowrap;vertical-align:top">'
+              f'<span style="background:{fg};color:#fff;font-size:10px;font-weight:700;padding:2px 7px;letter-spacing:.05em">{st.upper()}</span></td>'
+              f'<td style="padding:9px 12px 9px 0;border-bottom:1px solid #ECEBE4;vertical-align:top">'
+              f'<div style="font-size:14px;font-weight:600;color:#000">{title}{chip}</div>'
+              f'<div style="font-size:12px;color:#7A7870;margin-top:2px">{question}</div>'
+              f'<div style="font-size:11px;color:#8E8D83;margin-top:4px;font-family:ui-monospace,Menlo,monospace">{note}</div></td>'
+              f'<td style="padding:9px 0;border-bottom:1px solid #ECEBE4;font-size:12px;color:#5A5D5C;vertical-align:top;white-space:nowrap">{figs}'
+              f'<div style="font-size:10px;color:#B8B3A2;margin-top:3px">check {c}</div></td></tr>')
+
+n_crit  = sum(1 for c in by_check.values() if c[0] == "critical")
+n_warn  = sum(1 for c in by_check.values() if c[0] == "warning")
+n_ok    = sum(1 for c in by_check.values() if c[0] == "ok")
+n_moving = sum(1 for c in by_check.values() if c[0] in ("critical","warning") and c[2] == "moving")
+sound  = [n for k, n in FIGURES if worst(fig_checks.get(k, [])) == "ok"]
+
+if n_moving: hfg, hbg, headline = "#BD000C", "#FBE6E7", f"{n_moving} changed recently"
+elif n_crit: hfg, hbg, headline = "#BD000C", "#FBE6E7", f"{n_crit} serious, none new today"
+elif n_warn: hfg, hbg, headline = "#E4A911", "#FDF6E3", f"{n_warn} thing{'s' if n_warn != 1 else ''} to look at"
+else:        hfg, hbg, headline = "#6F7A1A", "#F1F3E7", "All clear"
+
+displayHTML(f"""
+<div style="font-family:'Frutiger 45 Light',Frutiger,'Helvetica Neue',Arial,sans-serif;color:#404040;background:#fff;padding:22px 26px;max-width:1180px">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #E60000;padding-bottom:12px">
+    <div><div style="font-size:26px;font-weight:300;color:#000">Data health</div>
+      <div style="font-size:13px;color:#7A7870;margin-top:3px">Intranet analytics &middot; judged for {CHECK_DAY:%d %B %Y}</div></div>
+    <div style="background:{hbg};color:{hfg};font-weight:700;font-size:13px;padding:7px 14px">{headline}</div>
+  </div>
+
+  <div style="margin-top:22px;font-size:15px;font-weight:600;color:#000">Can I trust this figure today?</div>
+  <div style="font-size:12px;color:#7A7870;margin:3px 0 12px">
+    {len(sound)} of {len(FIGURES)} figures are sound: {', '.join(sound) if sound else 'none'}.
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px">{tiles}</div>
+
+  <div style="margin-top:28px;font-size:15px;font-weight:600;color:#000">What needs attention</div>
+  <div style="font-size:12px;color:#7A7870;margin:3px 0 10px">
+    Ordered by severity. <b>Changed recently</b> is the one that needs acting on today; <b>ongoing</b> has been
+    at this level for weeks and is already known. The grey line is the raw measurement, for whoever picks it up next.
+  </div>
+  {'<table style="width:100%;border-collapse:collapse">' + items + '</table>' if items
+   else '<div style="background:#F1F3E7;border-left:3px solid #6F7A1A;padding:12px 14px;font-size:13px">Nothing is failing. All ' + str(n_ok) + ' checks passed.</div>'}
+
+  <div style="margin-top:22px;padding-top:10px;border-top:1px solid #ECEBE4;font-size:11px;color:#8E8D83">
+    {n_crit} serious &middot; {n_warn} to look at &middot; {n_ok} passed &middot; {n_moving} changed recently, out of {len(by_check)} checks across bronze, silver and gold.
+    Nothing was written: this notebook creates only temporary views. Full detail in the grid above.
+  </div>
+</div>
+""")
 
 
 -- ----------------------------------------------------------------------------

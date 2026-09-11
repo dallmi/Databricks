@@ -201,6 +201,8 @@ and each hop is reconciled.
 | FR-RSP-05 | A **Health Overview** gives the technical team every check, layer and day for the last 90 days, with drill-down to the failing metric | **Must** — the compensating control for FR-RSP-02 |
 | FR-RSP-08 | Each check declares which reported figures it casts doubt on. Labelling is scoped to those figures only | Must |
 | FR-RSP-09 | A figure no failing check points at is never labelled. Correct numbers stay visibly correct | Must |
+| FR-RSP-10 | The Health Overview is readable without knowledge of the checks: organised by reported figure, every check named in plain language, no check identifier above the fold | Must |
+| FR-RSP-11 | A finding that has held the same level for weeks is shown as an ongoing condition, distinct from one that moved this week | Must |
 | FR-RSP-06 | An info-level event annotates the day without notifying anyone | Should |
 | FR-RSP-07 | Row-level rules warn and keep. No expectation may drop or reject a row | Must |
 

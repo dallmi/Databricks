@@ -45,6 +45,15 @@ breaks several blocks.
 | Page | `pageId` | **INT**, while the inventory keys on a GUID. BRD OP-04. |
 | Ingestion | `gmdp_timestamp`, `ingestiontime` | Two stamps, relationship unconfirmed. BRD OP-05. |
 
+### Bronze holds more rows than silver, by design
+
+Confirmed 2026-09-11: unpublished pages, drafts and similar are filtered out on
+the way into silver, so bronze is legitimately larger. The first run measured
+202,887 against 169,910, a gap of 16.3 %. Comparing the counts for equality was
+therefore wrong, and A6 now watches the *share that survives* against its own
+28-day median instead. Silver against gold stays strict and is checked by G3,
+which measured exactly 1.0.
+
 ### Gold columns, corrected against the workspace
 
 | Documented as | Actually | Found by |
@@ -391,6 +400,32 @@ looks plausible. No other check in the catalogue would see it.
 because the aggregate is still in range. Only a row-level rule catches it.
 
 ---
+
+## The health board — who the output is written for
+
+Cell 10 of the read-only edition is a grid of check ids and numbers. It is the
+right artefact for whoever maintains the checks and the wrong one for everybody
+else: *"S2 critical, value 0"* tells a first-line responder nothing about what
+broke or whether it matters.
+
+Cell 10b renders the same results as a board, and the reframing is the point. It
+organises by **reported figure** rather than by check, because the only question
+that person has is which published number they can still trust. Every check gets
+a plain-language name and the question it answers, and no check id appears above
+the fold.
+
+Two design decisions are worth keeping if this is ever rebuilt in the report.
+
+**One broad check must not condemn everything.** A single failing check that maps
+to three figures turns three tiles red at once. That is the blanket-banner
+problem from BRD §8.0 reappearing one level down, so the mapping in
+`dq_check_affects` has to stay narrow and honest.
+
+**New matters more than bad.** A check failing at the same level for weeks is a
+known condition; one that moved this week is today's news. The board separates
+them with an *ongoing* or *changed recently* chip, derived from the seven-day
+mean against the prior twenty-eight. Without that distinction first-line support
+escalates the same chronic finding every morning and stops reading the board.
 
 ## Block 9 — Alerting, labelling and consumption
 
