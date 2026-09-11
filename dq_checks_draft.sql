@@ -23,6 +23,11 @@
 
 -- ----------------------------------------------------------------------------
 -- BLOCK 0 — Probes: confirm the [VERIFY] columns before anything else
+--
+-- NOTE (2026-09-11): `information_schema` is NOT available in this workspace
+-- (AnalysisException: Table or view not found). It is a Unity Catalog feature;
+-- this workspace still resolves two-part names via the Hive Metastore. Every
+-- probe below therefore uses DESCRIBE / SHOW, which work on both.
 -- ----------------------------------------------------------------------------
 DESCRIBE TABLE sharepoint_bronze.pageviews;
 DESCRIBE TABLE sharepoint_bronze.customevents;
@@ -30,20 +35,31 @@ DESCRIBE TABLE sharepoint_silver.pageviewed;
 DESCRIBE TABLE sharepoint_silver.pagevisited;
 DESCRIBE TABLE sharepoint_gold.pbi_db_employeecontact;
 
--- Which of the expected envelope columns exist on bronze pageviews?
-SELECT column_name, data_type
-FROM   information_schema.columns
-WHERE  table_schema = 'sharepoint_bronze' AND table_name = 'pageviews'
-  AND  lower(column_name) IN ('id','viewtime','timestamp','session_id','user_id','user_gpn',
-                              'email','pageid','gictrackingid','sdkversion','itemcount','ikey',
-                              'appid','operation_id','client_browser','client_os','client_type',
-                              'customdimensions','_ingestion_ts','ingestion_ts','load_ts')
-ORDER BY column_name;
+-- Silver inventory confirmed 2026-09-11 (SHOW TABLES IN sharepoint_silver, 7 tables):
+--   marketingpage · marketingsite · pageviewed · pagevisited · webpage · webpagevisited · website
+-- `marketingpage` / `marketingsite` are NOT in the April inventory — check whether
+-- gold's `marketingPageId` joins to `marketingpage` rather than bronze `pages`.
 
--- Does the contact dimension carry GPN / e-mail / T-number? (the unique-visitor bridge)
-SELECT column_name, data_type
-FROM   information_schema.columns
-WHERE  table_schema = 'sharepoint_gold' AND table_name = 'pbi_db_employeecontact';
+-- Which of the expected envelope columns exist on bronze pageviews?
+-- (filters the DESCRIBE output instead of querying information_schema)
+%python
+EXPECTED = ['id','viewtime','timestamp','session_id','user_id','user_gpn',
+            'email','pageid','gictrackingid','sdkversion','itemcount','ikey',
+            'appid','operation_id','client_browser','client_os','client_type',
+            'customdimensions','_ingestion_ts','ingestion_ts','load_ts']
+for tbl in ['sharepoint_bronze.pageviews', 'sharepoint_gold.pbi_db_employeecontact']:
+    cols = {f.name.lower(): f.dataType.simpleString() for f in spark.table(tbl).schema.fields}
+    print(f"\n=== {tbl} — {len(cols)} columns ===")
+    print("PRESENT:", sorted(c for c in cols if c in EXPECTED))
+    print("MISSING:", sorted(c for c in EXPECTED if c not in cols))
+    # the unique-visitor bridge: anything that looks like a person key
+    print("PERSON-ISH:", sorted(c for c in cols
+          if any(k in c for k in ('gpn','mail','worker','tnumber','t_number','contact','person','upn'))))
+
+-- If sdkVersion / itemCount / iKey are MISSING on bronze, checks A4, C3 and C4
+-- cannot run there. Move them to KQL against App Insights instead — the fields
+-- are already projected in kql/export_for_pipeline.kql (lines 44-47) and the
+-- sampling aggregation exists in kql/validate_page_engagement.kql (lines 38-40).
 
 
 -- ----------------------------------------------------------------------------
@@ -425,16 +441,21 @@ GROUP BY p.check_date;
 -- ----------------------------------------------------------------------------
 -- BLOCK 7 — Schema & fields: C1 drift, C2 nulls, C3 SDK version, C4 key, C5 format, C6 references, C7 client mix
 -- ----------------------------------------------------------------------------
--- C1 — schema contract: register today's columns once, then diff daily
-CREATE TABLE IF NOT EXISTS dq.schema_contract AS
-SELECT table_schema, table_name, column_name, data_type
-FROM   information_schema.columns
-WHERE  (table_schema, table_name) IN (('sharepoint_bronze','pageviews'), ('sharepoint_bronze','customevents'));
+-- C1 — schema contract: register today's columns once, then diff daily.
+-- No information_schema in this workspace (see BLOCK 0), so the current column
+-- set is materialised from the Spark schema by this Python cell, then diffed in SQL.
+%python
+from pyspark.sql import Row
+TRACKED = [('sharepoint_bronze', 'pageviews'), ('sharepoint_bronze', 'customevents')]
+rows = [Row(table_schema=sch, table_name=tbl, column_name=f.name, data_type=f.dataType.simpleString())
+        for sch, tbl in TRACKED for f in spark.table(f"{sch}.{tbl}").schema.fields]
+spark.createDataFrame(rows).createOrReplaceTempView("cur_columns")
+# first run only — freeze today's schema as the contract:
+# spark.createDataFrame(rows).write.saveAsTable("dq.schema_contract")
 
 INSERT INTO dq.dq_check_result
 WITH cur AS (
-  SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
-  WHERE  (table_schema, table_name) IN (('sharepoint_bronze','pageviews'), ('sharepoint_bronze','customevents'))
+  SELECT table_schema, table_name, column_name, data_type FROM cur_columns
 ),
 missing AS (SELECT c.* FROM dq.schema_contract c ANTI JOIN cur USING (table_schema, table_name, column_name)),
 added   AS (SELECT c.* FROM cur c ANTI JOIN dq.schema_contract USING (table_schema, table_name, column_name))

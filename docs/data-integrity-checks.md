@@ -249,8 +249,11 @@ change coincides with the incident.
 4. Holiday calendar source for the baseline.
 5. Whether `customEvents` gets the same identity checks (same fields, separate
    stream) in phase 2 or 3.
-6. Name of the staging table or volume. The April inventory found no `*_staging`
-   schema; until it is known the staging-level checks (A4, A5, C1, C3) run on
+6. ~~Name of the staging table or volume.~~ **Resolved 2026-09-11.** There is no
+   staging *schema* (Q26 scanned the workspace and found none), but the ingestion
+   notebook is parameterised with a landing-zone and a raw-storage container
+   alongside bronze, silver and gold. Staging is therefore a storage container,
+   not a queryable table. The staging-level checks (A4, A5, C1, C3) stay on
    `sharepoint_bronze.pageviews`, which is a 1:1 append landing of the source.
 7. The `[VERIFY]` columns in the SQL draft (`session_Id`, `user_Id`, `sdkVersion`,
    `itemCount`, `iKey`, `appId`, `client_*` on bronze; the GPN / e-mail column on
@@ -271,7 +274,7 @@ BLOCK 0 of the SQL draft confirms them.
 App Insights pageViews / customEvents
   → (staging — name not yet documented)
   → sharepoint_bronze.pageviews (173M, 57 cols)  +  sharepoint_bronze.customevents (262M, 62 cols)
-  → sharepoint_silver.pageviewed (136M) / pagevisited (105M) / webpagevisited (262M) + dims webpage, website
+  → sharepoint_silver.pageviewed (136M) / pagevisited (105M) / webpagevisited (262M) + dims webpage, website, marketingpage, marketingsite
   → sharepoint_gold.pbi_db_interactions_metrics (84M, page × date × contact)  + pbi_db_pageviewed_metric, pbi_db_pagevisited_metric, pbi_db_datewise_overview_fact_tbl
   → semantic model → Power BI
 ```
@@ -317,5 +320,20 @@ not an independent measurement.
 | D7 | `sharepoint_bronze.customevents` | `name`, `timestamp` | timestamp column [VERIFY] |
 | D8 | semantic model | control measure (DAX) | — |
 
-Not yet in the repo: the catalog name (docs use two-part names), the staging
-layer, and the write-side schema for the check results (`dq` in the draft).
+Not yet in the repo: the catalog name (docs use two-part names) and the
+write-side schema for the check results (`dq` in the draft).
+
+### Verified in the workspace, 2026-09-11
+
+- **`sharepoint_silver` holds 7 tables**: `marketingpage`, `marketingsite`,
+  `pageviewed`, `pagevisited`, `webpage`, `webpagevisited`, `website`. This
+  confirms the April Q17 inventory and refutes the Q26 transcription, which read
+  `webpageviewed` and `pageposted` off a photo of the Genie output. `marketingpage`
+  and `marketingsite` appear in neither April list — check whether the gold
+  facts' `marketingPageId` joins to `marketingpage` rather than to
+  `sharepoint_bronze.pages`, which would shorten every attribution path.
+- **`information_schema` is not available.** It is a Unity Catalog feature and the
+  workspace still resolves two-part names through the Hive Metastore. Every probe
+  must use `DESCRIBE` / `SHOW`, or read the Spark schema. The SQL draft was
+  rewritten accordingly (BLOCK 0 and C1).
+- **17 schemas carry the `_silver` suffix**, matching Q26.
