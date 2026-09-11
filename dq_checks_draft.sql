@@ -189,6 +189,64 @@ ORDER BY b.period;
 
 
 -- ----------------------------------------------------------------------------
+-- BLOCK 0c — The transition itself, one row per day. READ-ONLY.
+--
+-- Block 0b deliberately stays away from the boundary: it compares a clean
+-- fortnight before with a clean fortnight after, so neither window mixes the two
+-- behaviours and the healthy baseline stays trustworthy. The cost of that choice
+-- is that it says nothing about 8 and 9 April themselves.
+--
+-- This block closes that gap. Thirty days centred on 8 April, one row per day, so
+-- the shape of the change is visible rather than just its size:
+--   a single overnight step  -> a deployment or a configuration switch
+--   a ramp over several days -> a staged rollout across sites or regions
+--   a partial drop           -> only part of the estate is affected
+-- The last column is the share of traffic on the SDK version that disappeared.
+-- If it falls on exactly the day the ratios break, the two are the same event and
+-- the vendor case is much easier to make.
+--
+-- HOW TO RUN: paste from `%sql` to the semicolon into ONE cell. Thirty rows.
+-- ----------------------------------------------------------------------------
+%sql
+WITH base AS (
+  SELECT CAST(CAST(`timestamp` AS TIMESTAMP) AS DATE) AS d,
+         session_Id, user_Id, GPN, sdkVersion
+  FROM   sharepoint_bronze.pageviews
+  WHERE  `timestamp` >= '2026-03-25' AND `timestamp` < '2026-04-24'
+),
+sess AS (
+  SELECT d, session_Id, COUNT(*) AS n_views FROM base GROUP BY d, session_Id
+),
+sv AS (
+  SELECT d, AVG(CASE WHEN n_views = 1 THEN 1.0 ELSE 0.0 END) AS sv_share FROM sess GROUP BY d
+)
+SELECT
+  b.d                                                              AS day,
+  date_format(b.d, 'E')                                            AS dow,
+  COUNT(*)                                                         AS views,
+  ROUND(COUNT(*) / COUNT(DISTINCT b.session_Id), 3)                AS views_per_session,
+  ROUND(COUNT(DISTINCT b.user_Id) / COUNT(DISTINCT b.GPN), 2)      AS browser_ids_per_person,
+  ROUND(MAX(sv.sv_share), 3)                                       AS single_view_share,
+  COUNT(DISTINCT b.GPN)                                            AS persons,
+  COUNT(DISTINCT b.user_Id)                                        AS browser_ids,
+  ROUND(AVG(CASE WHEN b.sdkVersion = 'javascript:3.3.6' THEN 1.0 ELSE 0.0 END), 4) AS sdk_336_share
+FROM base b
+LEFT JOIN sv ON sv.d = b.d
+GROUP BY b.d
+ORDER BY b.d;
+
+-- Reading the result:
+--   `persons` should stay flat across the whole month. It is the control: if the
+--   population moves too, something other than the identifier changed.
+--   `views_per_session` and `browser_ids_per_person` should move on the same day
+--   and in opposite directions. The day they do is the incident date.
+--   `sdk_336_share` going to zero on that same day makes the version change and
+--   the identity change one event rather than two.
+--   Weekends carry far less traffic; compare Monday with Monday, which is why the
+--   weekday is printed next to the date.
+
+
+-- ----------------------------------------------------------------------------
 -- BLOCK 1 — Result table + check catalogue
 -- ----------------------------------------------------------------------------
 CREATE SCHEMA IF NOT EXISTS dq;
