@@ -327,6 +327,54 @@ not an independent measurement.
 Not yet in the repo: the catalog name (docs use two-part names) and the
 write-side schema for the check results (`dq` in the draft).
 
+### Measured on the workspace, 2026-09-11
+
+Block 0b ran over three fortnights: before the change, just after it, and the
+most recent two weeks. Every figure below is from `sharepoint_bronze.pageviews`.
+
+| | 2–15 Mar, before | 13–26 Apr, after | last 14 days |
+|---|---|---|---|
+| Page views scanned | 2,861,485 | 2,384,105 | 2,122,418 |
+| Page views per session | **2.231** | 1.062 | 1.157 |
+| Browser identities per person | **1.71** | 20.004 | 17.342 |
+| Sessions per person | 11.123 | 20.005 | 17.111 |
+| Single-view session share | **0.584** | 0.939 | 0.888 |
+| Distinct people (GPN) | 115,298 | 112,168 | 107,222 |
+| Distinct browser identities | 197,107 | **2,243,859** | 1,859,435 |
+| Views carrying a GPN | 1.000 | 1.000 | 1.000 |
+| SDK versions present | 3.3.6, 2.8.16, 2.7.4 | **2.8.16, 2.7.4** | 2.8.16, 2.7.4 |
+
+Five conclusions.
+
+1. **People are stable, identities are not.** The number of distinct employees
+   moved by less than 7 % across all three windows, while distinct browser
+   identities rose elevenfold. That is the incident, measured. It also confirms
+   that unique visitors, which rest on the contact id, were never affected.
+2. **After the change one identity equals one session.** Browser identities per
+   person (20.004) and sessions per person (20.005) are the same number to three
+   decimals, and page views per session is 1.06. Effectively a fresh identity per
+   view.
+3. **The SDK version set changed at the incident, by losing a version.** Version
+   `javascript:3.3.6` is present before and absent from the April window onward.
+   The check was written expecting a new version to appear; a version vanishing is
+   the same signal. This is the most concrete lead for the vendor investigation.
+4. **The healthy baselines are not what the documentation assumed.** Page views
+   per session was 2.23, not 1.1–1.2, and browser identities per person was 1.71,
+   not near 1. The figure of 1.1–1.2 quoted at the outset most likely came from the
+   reported views-to-visits ratio in Power BI, which is computed on the gold
+   `visits` column with its own de-duplication, not on the raw session id. Both
+   numbers can be right; they measure different things.
+5. **Partial recovery, still broken.** The most recent fortnight is better than
+   April on every ratio and still far from March.
+
+Thresholds in `dq.check_def` now hold these measured values. B1, B4 and B5
+therefore fire today by design and will keep firing until the source is fixed.
+They must not be retuned to the current state, which would define the incident
+away.
+
+**Every row carries a GPN** (share 1.000 in all three windows), so the
+person-based route is fully available whenever the visit definition is revisited.
+
 ### Integrity per medallion layer
 
 Decision 2026-09-11: the identity family (B1–B7) **stays on bronze**. The raw

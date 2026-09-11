@@ -130,7 +130,7 @@ WITH base AS (
       WHEN gmdp_date BETWEEN DATE '2026-04-13' AND DATE '2026-04-26' THEN '2 after  (13-26 Apr)'
       ELSE                                                                '3 now    (last 14d)'
     END                              AS period,
-    to_timestamp(`timestamp`)        AS ts,
+    CAST(`timestamp` AS TIMESTAMP)   AS ts,   -- ISO-8601 with T and Z; CAST, not to_timestamp
     `timestamp`                      AS ts_raw,
     session_Id, user_Id, GPN, sdkVersion
   FROM  sharepoint_bronze.pageviews
@@ -168,8 +168,12 @@ GROUP BY b.period
 ORDER BY b.period;
 
 -- Reading the result:
---   unparsed_timestamps must be 0. If not, `timestamp` needs an explicit format
---   and every to_timestamp() in this file gets that format string.
+--   RESULT 2026-09-11: unparsed_timestamps equalled rows_scanned in all three
+--   windows — the parse failed for every row. Raw form is ISO-8601 UTC, e.g.
+--   2026-03-02T00:00:00.229Z. Fixed by using CAST(... AS TIMESTAMP) throughout,
+--   which accepts the T separator and the Z; to_timestamp does not. The ratios
+--   below were unaffected: they count session ids, browser ids and GPNs, and the
+--   window comes from gmdp_date, so only first_event and last_event were NULL.
 --   Row 1 gives the healthy baseline for B1 (views_per_session, expected 1.1-1.2)
 --   and B4 (browser_ids_per_person, expected near 1). Rows 2 and 3 show how far
 --   they moved. Those three numbers replace the guessed thresholds in dq.check_def.
@@ -210,11 +214,19 @@ CREATE OR REPLACE TABLE dq.check_def (
 INSERT INTO dq.check_def VALUES
   ('A1','completeness','bronze','views',                 NULL, NULL, NULL, NULL, 0.25, 0.50, NULL, NULL, 'daily page views vs same-weekday 8-week median'),
   ('A4','completeness','staging','sampling_factor',      NULL, NULL, 1.001, 1.001, NULL, NULL, NULL, NULL, 'sum(itemCount)/count(*) must be 1.00'),
-  ('B1','identity','silver','views_per_session',         1.02, 1.05, NULL, NULL, NULL, NULL, 0.10, 0.25, 'page views per visit; healthy 1.1-1.2'),
-  ('B2','identity','silver','sessions_per_browser_7d',   1.02, 1.10, NULL, NULL, NULL, NULL, 0.15, 0.30, 'visits per browser identity over a rolling week'),
-  ('B4','identity','silver','browser_ids_per_person',    NULL, NULL, 2.0, 3.0, NULL, NULL, 0.15, 0.30, 'distinct user_Id per GPN and day, healthy ~1.0-1.3'),
-  ('B5','identity','silver','single_view_session_share', NULL, NULL, 0.95, 0.98, NULL, NULL, 0.10, 0.20, 'share of sessions with exactly one view'),
-  ('B8','identity','bronze','identified_share',          0.80, 0.90, NULL, NULL, NULL, NULL, 0.05, 0.15, 'views with a valid GPN / all views'),
+  -- MEASURED, not guessed. Block 0b, 2-15 March 2026 (2.86M views, pre-incident):
+  --   views_per_session 2.231 | browser_ids_per_person 1.71 | single-view share 0.584
+  --   identified_share 1.000  | 115,298 people behind 197,107 browser identities
+  -- For 13-26 April the same numbers read 1.062 / 20.004 / 0.939, and the most
+  -- recent fortnight 1.157 / 17.342 / 0.888 — improved but far from healthy.
+  -- These thresholds describe HEALTHY data, so B1, B4 and B5 fire today by design
+  -- and keep firing until the source is fixed. Do not retune them to the broken
+  -- state; that would define the incident away.
+  ('B1','identity','bronze','views_per_session',         1.50, 1.90, NULL, NULL, NULL, NULL, 0.10, 0.25, 'page views per visit; measured healthy 2.23'),
+  ('B2','identity','bronze','sessions_per_browser_7d',   1.02, 1.10, NULL, NULL, NULL, NULL, 0.15, 0.30, 'visits per browser identity over a rolling week; not yet measured'),
+  ('B4','identity','bronze','browser_ids_per_person',    NULL, NULL, 3.0, 6.0, NULL, NULL, 0.15, 0.30, 'distinct user_Id per GPN; measured healthy 1.71'),
+  ('B5','identity','bronze','single_view_session_share', NULL, NULL, 0.70, 0.85, NULL, NULL, 0.10, 0.20, 'share of sessions with exactly one view; measured healthy 0.584'),
+  ('B8','identity','bronze','identified_share',          0.90, 0.97, NULL, NULL, NULL, NULL, 0.05, 0.15, 'views with a valid GPN; measured 1.000, every row carries a GPN'),
   ('C8','schema','silver','double_fire_share',           NULL, NULL, 0.10, 0.25, NULL, NULL, 0.05, NULL, 'same person, same page, < 1 s apart'),
   ('D1a','plausibility','gold','gold_views',             NULL, NULL, NULL, NULL, 0.25, 0.50, NULL, NULL, 'gold views per day corridor'),
   ('D1b','plausibility','gold','gold_visits',            NULL, NULL, NULL, NULL, 0.25, 0.50, 0.25, 0.50, 'gold visits per day corridor + step change'),
@@ -236,12 +248,19 @@ PARTITIONED BY (view_date) AS
 -- `timestamp` is the INTERACTION time and is typed STRING, so it is parsed here.
 -- `gmdp_timestamp` is when the record was ingested into the source platform and
 -- is NOT the event time — never use it for the daily grain.
+-- TIMESTAMP PARSING — settled 2026-09-11 by running Block 0b.
+-- The raw value is ISO-8601 UTC with a T separator, milliseconds and a Z suffix,
+-- e.g. 2026-03-02T00:00:00.229Z. Neither a bare to_timestamp() nor the pattern
+-- 'yyyy-MM-dd HH:mm:ss' matches it; both return NULL for every row (the first
+-- Block 0b run had unparsed_timestamps = rows_scanned, 2.8M of 2.8M).
+-- CAST handles ISO-8601 including the T and the Z, so CAST is used everywhere.
+-- The values are UTC. Any local-time reporting grain must convert explicitly.
 SELECT
   id                                   AS view_id,
   `timestamp`                          AS view_ts_raw,
-  to_timestamp(`timestamp`)            AS view_ts,
-  CAST(to_timestamp(`timestamp`) AS DATE) AS view_date,
-  to_timestamp(ingestiontime)          AS ingested_ts,    -- string; feeds check A2
+  CAST(`timestamp` AS TIMESTAMP)       AS view_ts,
+  CAST(CAST(`timestamp` AS TIMESTAMP) AS DATE) AS view_date,
+  CAST(ingestiontime AS TIMESTAMP)     AS ingested_ts,    -- string; feeds check A2
   session_Id                           AS session_id,
   user_Id                              AS browser_id,     -- the App Insights ai_user cookie
   user_AuthenticatedId                 AS auth_id,        -- set when the SDK knows the user
@@ -259,7 +278,7 @@ SELECT
   client_OS                            AS client_os,
   client_Type                          AS client_type
 FROM sharepoint_bronze.pageviews
-WHERE to_timestamp(`timestamp`) >= date_sub(current_date(), 70);
+WHERE CAST(`timestamp` AS TIMESTAMP) >= date_sub(current_date(), 70);
 
 -- Guard: the cast must not silently drop rows. Run once after the first build.
 SELECT COUNT(*)                                            AS rows_in_window,
@@ -294,9 +313,9 @@ b7d AS (                                         -- rolling 7-day sessions per b
 ),
 clicks AS (                                      -- customEvents clicks per day
   -- customevents carries `timestamp` (string) like pageviews, but has NO `id` column
-  SELECT CAST(to_timestamp(`timestamp`) AS DATE) AS view_date, COUNT(*) AS clicks
+  SELECT CAST(CAST(`timestamp` AS TIMESTAMP) AS DATE) AS view_date, COUNT(*) AS clicks
   FROM   sharepoint_bronze.customevents
-  WHERE  name = 'click_event' AND to_timestamp(`timestamp`) >= date_sub(current_date(), 70)
+  WHERE  name = 'click_event' AND CAST(`timestamp` AS TIMESTAMP) >= date_sub(current_date(), 70)
   GROUP  BY 1
 )
 SELECT
@@ -494,10 +513,10 @@ FROM params p CROSS JOIN b CROSS JOIN s CROSS JOIN g;
 -- A7 — late arrival: recount day D-3 today vs. what bronze held three days ago (Delta time travel)
 INSERT INTO dq.dq_check_result
 WITH params AS (SELECT date_sub(current_date(), 3) AS d),
-now_cnt  AS (SELECT COUNT(*) AS n FROM sharepoint_bronze.pageviews pv JOIN params p ON CAST(to_timestamp(pv.`timestamp`) AS DATE) = p.d),
+now_cnt  AS (SELECT COUNT(*) AS n FROM sharepoint_bronze.pageviews pv JOIN params p ON CAST(CAST(pv.`timestamp` AS TIMESTAMP) AS DATE) = p.d),
 then_cnt AS (SELECT COUNT(*) AS n
              FROM sharepoint_bronze.pageviews TIMESTAMP AS OF date_sub(current_date(), 2) pv   -- retention is 7 days
-             JOIN params p ON CAST(to_timestamp(pv.`timestamp`) AS DATE) = p.d)
+             JOIN params p ON CAST(CAST(pv.`timestamp` AS TIMESTAMP) AS DATE) = p.d)
 SELECT p.d, 'A7', 'completeness', 'bronze',
        (n.n - t.n) / NULLIF(t.n, 0) AS growth, 0, NULL, 0.02,
        CASE WHEN (n.n - t.n) / NULLIF(t.n, 0) > 0.02 THEN 'warning' ELSE 'ok' END,
@@ -651,9 +670,14 @@ LEFT JOIN mix y ON y.sdk_version = t.sdk_version AND y.view_date = date_sub(p.ch
 LEFT JOIN known k ON k.sdk_version = t.sdk_version
 GROUP BY p.check_date;
 -- Incident forensics: did the version mix change around 8 April 2026?
--- SELECT CAST(to_timestamp(`timestamp`) AS DATE) d, sdkVersion, COUNT(*)
+-- ANSWERED 2026-09-11 by Block 0b. The SDK mix changed at the incident, but in
+-- the opposite direction to the one this check was written to expect: version
+-- `javascript:3.3.6` is present 2-15 March and ABSENT from 13-26 April onward.
+-- 2.8.16 and 2.7.4 remain in both windows. A version DISAPPEARING is as much a
+-- signal as a new one arriving, so C3 alerts on any change to the version set.
+-- SELECT CAST(CAST(`timestamp` AS TIMESTAMP) AS DATE) d, sdkVersion, COUNT(*)
 -- FROM sharepoint_bronze.pageviews
--- WHERE to_timestamp(`timestamp`) BETWEEN '2026-03-25' AND '2026-04-20'
+-- WHERE CAST(`timestamp` AS TIMESTAMP) BETWEEN '2026-03-25' AND '2026-04-20'
 -- GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- C4 — instrumentation key / app id constant
@@ -988,8 +1012,8 @@ SELECT * FROM (
 -- @dlt.expect_or_fail("browser id present",  "user_Id IS NOT NULL")
 -- @dlt.expect("gpn well-formed",             "GPN IS NULL OR GPN RLIKE '^[0-9]{8}$'")
 -- @dlt.expect("tracking id well-formed",     "GICTrackingID IS NULL OR GICTrackingID RLIKE '^[A-Z0-9]{5}-[A-Z0-9]{7}-[0-9]{6}-[A-Z0-9]{7}-[A-Z]{3}$'")
--- @dlt.expect("timestamp parses",            "to_timestamp(`timestamp`) IS NOT NULL")
--- @dlt.expect("timestamp in window",         "to_timestamp(`timestamp`) <= current_timestamp()")
+-- @dlt.expect("timestamp parses",            "CAST(`timestamp` AS TIMESTAMP) IS NOT NULL")
+-- @dlt.expect("timestamp in window",         "CAST(`timestamp` AS TIMESTAMP) <= current_timestamp()")
 -- def pageviews():
 --     return dlt.read_stream("staging_pageviews")
 
