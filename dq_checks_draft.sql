@@ -51,10 +51,12 @@ TABLES = [
 ]
 
 # The envelope columns the checks rely on. Missing ones change the plan, see below.
-ENVELOPE = ["id", "viewtime", "timestamp", "session_id", "user_id", "user_gpn",
-            "email", "pageid", "gictrackingid", "sdkversion", "itemcount",
-            "ikey", "appid", "operation_id", "client_browser", "client_os",
-            "client_type", "customdimensions"]
+# Confirmed present on sharepoint_bronze.pageviews, 2026-09-11. A name that goes
+# missing on a later run is schema drift and breaks the check that reads it.
+ENVELOPE = ["id", "timestamp", "ingestiontime", "session_id", "user_id",
+            "user_authenticatedid", "gpn", "email", "pageid", "pageurl",
+            "gictrackingid", "sdkversion", "itemcount", "ikey", "appid",
+            "operation_id", "client_browser", "client_os", "client_type"]
 
 BUCKETS = {
     "time":     ("time", "date", "ts", "stamp"),
@@ -155,25 +157,43 @@ INSERT INTO dq.check_def VALUES
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE TABLE dq.pv_window
 PARTITIONED BY (view_date) AS
+-- Column names confirmed against the workspace on 2026-09-11 (BLOCK 0).
+-- Bronze is ALREADY FLAT: there is no `customDimensions`; the CustomProps are
+-- real columns (GPN, Email, PageURL, PageName, PublishingDate, SiteId, ...).
+-- `timestamp` is the INTERACTION time and is typed STRING, so it is parsed here.
+-- `gmdp_timestamp` is when the record was ingested into the source platform and
+-- is NOT the event time — never use it for the daily grain.
 SELECT
-  Id                                   AS view_id,
-  ViewTime                             AS view_ts,        -- [VERIFY] UTC or CET? document it
-  CAST(ViewTime AS DATE)               AS view_date,
-  session_Id                           AS session_id,     -- [VERIFY]
-  user_Id                              AS browser_id,     -- [VERIFY] the App Insights ai_user cookie
-  CASE WHEN user_gpn RLIKE '^[0-9]{8}$' THEN user_gpn END AS gpn,
-  user_gpn                             AS gpn_raw,
-  pageId                               AS page_id,
+  id                                   AS view_id,
+  `timestamp`                          AS view_ts_raw,
+  to_timestamp(`timestamp`)            AS view_ts,
+  CAST(to_timestamp(`timestamp`) AS DATE) AS view_date,
+  to_timestamp(ingestiontime)          AS ingested_ts,    -- string; feeds check A2
+  session_Id                           AS session_id,
+  user_Id                              AS browser_id,     -- the App Insights ai_user cookie
+  user_AuthenticatedId                 AS auth_id,        -- set when the SDK knows the user
+  CASE WHEN GPN RLIKE '^[0-9]{8}$' THEN GPN END AS gpn,
+  GPN                                  AS gpn_raw,
+  Email                                AS email,
+  pageId                               AS page_id,        -- INT on bronze, not the pages GUID
+  PageURL                              AS page_url,
   GICTrackingID                        AS tracking_id,
-  sdkVersion                           AS sdk_version,    -- [VERIFY]
-  COALESCE(itemCount, 1)               AS item_count,     -- [VERIFY]
-  iKey                                 AS ikey,           -- [VERIFY]
-  appId                                AS app_id,         -- [VERIFY]
-  client_Browser                       AS client_browser, -- [VERIFY]
-  client_OS                            AS client_os,      -- [VERIFY]
-  client_Type                          AS client_type     -- [VERIFY]
+  sdkVersion                           AS sdk_version,
+  COALESCE(itemCount, 1)               AS item_count,
+  iKey                                 AS ikey,
+  appId                                AS app_id,
+  client_Browser                       AS client_browser,
+  client_OS                            AS client_os,
+  client_Type                          AS client_type
 FROM sharepoint_bronze.pageviews
-WHERE ViewTime >= date_sub(current_date(), 70);
+WHERE to_timestamp(`timestamp`) >= date_sub(current_date(), 70);
+
+-- Guard: the cast must not silently drop rows. Run once after the first build.
+SELECT COUNT(*)                                            AS rows_in_window,
+       SUM(CASE WHEN view_ts IS NULL THEN 1 ELSE 0 END)    AS unparsed_timestamps,
+       MIN(view_ts) AS first_event, MAX(view_ts) AS last_event,
+       MIN(view_ts_raw) AS sample_raw_low, MAX(view_ts_raw) AS sample_raw_high
+FROM dq.pv_window;
 
 
 -- ----------------------------------------------------------------------------
@@ -200,9 +220,10 @@ b7d AS (                                         -- rolling 7-day sessions per b
   GROUP  BY d.view_date
 ),
 clicks AS (                                      -- customEvents clicks per day
-  SELECT CAST(`timestamp` AS DATE) AS view_date, COUNT(*) AS clicks   -- [VERIFY] timestamp vs EventTime
+  -- customevents carries `timestamp` (string) like pageviews, but has NO `id` column
+  SELECT CAST(to_timestamp(`timestamp`) AS DATE) AS view_date, COUNT(*) AS clicks
   FROM   sharepoint_bronze.customevents
-  WHERE  name = 'click_event' AND `timestamp` >= date_sub(current_date(), 70)
+  WHERE  name = 'click_event' AND to_timestamp(`timestamp`) >= date_sub(current_date(), 70)
   GROUP  BY 1
 )
 SELECT
@@ -349,9 +370,14 @@ SELECT date_sub(current_date(), 1), 'A2', 'completeness', layer,
        CASE WHEN age_h > 48 THEN 'blocker' WHEN age_h > 24 THEN 'warning' ELSE 'ok' END,
        CONCAT('newest event ', CAST(max_ts AS STRING)), current_timestamp()
 FROM (
-  SELECT 'bronze' AS layer, MAX(ViewTime) AS max_ts,
-         timestampdiff(HOUR, MAX(ViewTime), current_timestamp()) AS age_h
-  FROM   sharepoint_bronze.pageviews WHERE ViewTime >= date_sub(current_date(), 3)
+  SELECT 'bronze' AS layer, MAX(view_ts) AS max_ts,
+         timestampdiff(HOUR, MAX(view_ts), current_timestamp()) AS age_h
+  FROM   dq.pv_window WHERE view_date >= date_sub(current_date(), 3)
+  UNION ALL
+  -- true load latency: event time vs ingestion time (bronze carries ingestiontime)
+  SELECT 'bronze_load_lag', MAX(ingested_ts),
+         CAST(percentile_approx(timestampdiff(MINUTE, view_ts, ingested_ts), 0.95) / 60 AS INT)
+  FROM   dq.pv_window WHERE view_date >= date_sub(current_date(), 3)
   UNION ALL
   SELECT 'gold', to_timestamp(MAX(visitdatekey), 'yyyyMMdd'),
          timestampdiff(HOUR, to_timestamp(MAX(visitdatekey), 'yyyyMMdd'), current_timestamp())
@@ -381,7 +407,7 @@ INSERT INTO dq.dq_check_result
 WITH params AS (SELECT date_sub(current_date(), 1) AS check_date),
 b AS (SELECT COUNT(*) AS n FROM dq.pv_window w JOIN params p ON w.view_date = p.check_date),
 s AS (SELECT COUNT(*) AS n FROM sharepoint_silver.pageviewed sv JOIN params p
-      ON CAST(sv.ViewTime AS DATE) = p.check_date),                          -- [VERIFY] column
+      ON CAST(sv.`timestamp` AS DATE) = p.check_date),   -- silver: real TIMESTAMP type
 g AS (SELECT SUM(views) AS n FROM sharepoint_gold.pbi_db_interactions_metrics gm JOIN params p
       ON gm.visitdatekey = date_format(p.check_date, 'yyyyMMdd'))
 SELECT p.check_date, 'A6', 'completeness', 'every hop',
@@ -395,10 +421,10 @@ FROM params p CROSS JOIN b CROSS JOIN s CROSS JOIN g;
 -- A7 — late arrival: recount day D-3 today vs. what bronze held three days ago (Delta time travel)
 INSERT INTO dq.dq_check_result
 WITH params AS (SELECT date_sub(current_date(), 3) AS d),
-now_cnt  AS (SELECT COUNT(*) AS n FROM sharepoint_bronze.pageviews pv JOIN params p ON CAST(pv.ViewTime AS DATE) = p.d),
+now_cnt  AS (SELECT COUNT(*) AS n FROM sharepoint_bronze.pageviews pv JOIN params p ON CAST(to_timestamp(pv.`timestamp`) AS DATE) = p.d),
 then_cnt AS (SELECT COUNT(*) AS n
              FROM sharepoint_bronze.pageviews TIMESTAMP AS OF date_sub(current_date(), 2) pv   -- retention is 7 days
-             JOIN params p ON CAST(pv.ViewTime AS DATE) = p.d)
+             JOIN params p ON CAST(to_timestamp(pv.`timestamp`) AS DATE) = p.d)
 SELECT p.d, 'A7', 'completeness', 'bronze',
        (n.n - t.n) / NULLIF(t.n, 0) AS growth, 0, NULL, 0.02,
        CASE WHEN (n.n - t.n) / NULLIF(t.n, 0) > 0.02 THEN 'warning' ELSE 'ok' END,
@@ -506,8 +532,9 @@ SELECT date_sub(current_date(), 1), 'C1', 'schema', 'staging',
        CONCAT('missing: ', (SELECT COALESCE(concat_ws(', ', collect_list(column_name)), '-') FROM missing),
               ' | added: ',  (SELECT COALESCE(concat_ws(', ', collect_list(column_name)), '-') FROM added)),
        current_timestamp();
--- CustomProps keys inside customDimensions (bronze keeps the raw JSON): inventory of keys per day
--- SELECT k, COUNT(*) FROM dq.pv_window LATERAL VIEW explode(map_keys(from_json(get_json_object(customDimensions, '$.CustomProps'), 'map<string,string>'))) AS k GROUP BY k;
+-- Note: bronze is already flat (BLOCK 0, 2026-09-11) — there is no customDimensions
+-- column to explode. The former CustomProps keys are first-class columns, so C1's
+-- column diff covers them directly.
 
 -- C2 — null rate per critical field vs the same field 7 days earlier
 INSERT INTO dq.dq_check_result
@@ -551,8 +578,10 @@ LEFT JOIN mix y ON y.sdk_version = t.sdk_version AND y.view_date = date_sub(p.ch
 LEFT JOIN known k ON k.sdk_version = t.sdk_version
 GROUP BY p.check_date;
 -- Incident forensics: did the version mix change around 8 April 2026?
--- SELECT CAST(ViewTime AS DATE) d, sdkVersion, COUNT(*) FROM sharepoint_bronze.pageviews
--- WHERE ViewTime BETWEEN '2026-03-25' AND '2026-04-20' GROUP BY 1, 2 ORDER BY 1, 2;
+-- SELECT CAST(to_timestamp(`timestamp`) AS DATE) d, sdkVersion, COUNT(*)
+-- FROM sharepoint_bronze.pageviews
+-- WHERE to_timestamp(`timestamp`) BETWEEN '2026-03-25' AND '2026-04-20'
+-- GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- C4 — instrumentation key / app id constant
 INSERT INTO dq.dq_check_result
@@ -584,25 +613,35 @@ SELECT p.check_date, 'C5', 'schema', 'staging',
        current_timestamp()
 FROM v CROSS JOIN params p;
 
--- C6 — referential integrity: page id in the inventory, GPN in HR, GPN → contact id
+-- C6 — referential integrity from bronze: page in the inventory, GPN in HR.
+--
+-- The GPN -> contact-id bridge is deliberately NOT checked here. BLOCK 0 showed
+-- that sharepoint_gold.pbi_db_employeecontact carries `contactId` and no GPN,
+-- e-mail or T-number, so it is not the lookup that resolves a person. The
+-- resolution happens inside the bronze -> silver transformation, which surfaces
+-- `contactId` on sharepoint_silver.pageviewed. Checking it would mean reading
+-- silver; the checks stay on bronze by decision (2026-09-11). The contact side
+-- is covered indirectly by D1c and D5, which count distinct contacts in gold.
+--
+-- `pageId` is an INT on bronze while `pages.pageUUID` is a GUID string, so the
+-- page join below is by URL, which both sides carry. Confirm the URL forms match
+-- (trailing slash, host prefix, case) before trusting the hit rate.
 INSERT INTO dq.dq_check_result
 WITH params AS (SELECT date_sub(current_date(), 1) AS check_date),
 r AS (
   SELECT
-    AVG(CASE WHEN pg.pageUUID IS NOT NULL THEN 1.0 ELSE 0.0 END)                          AS page_hit,
-    AVG(CASE WHEN w.gpn IS NULL THEN NULL WHEN hr.WORKER_ID IS NOT NULL THEN 1.0 ELSE 0.0 END) AS hr_hit,
-    AVG(CASE WHEN w.gpn IS NULL THEN NULL WHEN ec.contactId IS NOT NULL THEN 1.0 ELSE 0.0 END) AS contact_hit
+    AVG(CASE WHEN pg.PageURL IS NOT NULL THEN 1.0 ELSE 0.0 END)                                AS page_hit,
+    AVG(CASE WHEN w.gpn IS NULL THEN NULL WHEN hr.WORKER_ID IS NOT NULL THEN 1.0 ELSE 0.0 END) AS hr_hit
   FROM dq.pv_window w JOIN params p ON w.view_date = p.check_date
-  LEFT JOIN sharepoint_bronze.pages pg              ON pg.pageUUID = w.page_id
-  LEFT JOIN imep_bronze.tbl_hr_employee hr          ON hr.WORKER_ID = w.gpn
-  LEFT JOIN sharepoint_gold.pbi_db_employeecontact ec ON ec.<gpn_column> = w.gpn    -- [VERIFY] from BLOCK 0
+  LEFT JOIN sharepoint_bronze.pages pg     ON LOWER(TRIM(pg.PageURL)) = LOWER(TRIM(w.page_url))
+  LEFT JOIN imep_bronze.tbl_hr_employee hr ON hr.WORKER_ID = w.gpn
 )
-SELECT p.check_date, 'C6', 'schema', 'silver',
-       LEAST(page_hit, hr_hit, contact_hit), NULL, 0.95, NULL,
-       CASE WHEN LEAST(page_hit, hr_hit, contact_hit) < 0.90 THEN 'blocker'
-            WHEN LEAST(page_hit, hr_hit, contact_hit) < 0.95 THEN 'warning' ELSE 'ok' END,
-       CONCAT('page inventory hit ', ROUND(100 * page_hit, 1), ' % | HR hit ', ROUND(100 * hr_hit, 1),
-              ' % | contact hit ', ROUND(100 * contact_hit, 1), ' %'),
+SELECT p.check_date, 'C6', 'schema', 'bronze',
+       LEAST(page_hit, hr_hit), NULL, 0.95, NULL,
+       CASE WHEN LEAST(page_hit, hr_hit) < 0.90 THEN 'blocker'
+            WHEN LEAST(page_hit, hr_hit) < 0.95 THEN 'warning' ELSE 'ok' END,
+       CONCAT('page inventory hit ', ROUND(100 * page_hit, 1),
+              ' % | HR hit ', ROUND(100 * hr_hit, 1), ' %'),
        current_timestamp()
 FROM r CROSS JOIN params p;
 
@@ -703,6 +742,150 @@ GROUP BY p.check_date;
 
 
 -- ----------------------------------------------------------------------------
+-- BLOCK 8b — SILVER: does the refinement preserve what bronze delivered?
+--
+-- The B-family above is labelled "identity" but reads BRONZE (dq.pv_window) by
+-- decision (2026-09-11): the raw cookie signals are the early warning. Silver
+-- needs its OWN checks, because this is where the person is resolved — bronze
+-- has GPN and e-mail, silver has `contactId`, and that resolution is what the
+-- unique-visitor KPI rests on. A silent failure here changes the headline number
+-- while every bronze check stays green.
+--
+-- Columns confirmed 2026-09-11: timestamp (TIMESTAMP), contactId, visitorId,
+-- sessionId (pageviewed only), visitorReturningStatus, visitorAnonymousStatus,
+-- marketingPageId, pageAddress, websiteId.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE TABLE dq.sv_daily AS
+SELECT
+  CAST(`timestamp` AS DATE)                                        AS view_date,
+  COUNT(*)                                                         AS sv_rows,
+  COUNT(contactId)              / COUNT(*)                         AS contact_resolution_rate,
+  COUNT(visitorId)              / COUNT(*)                         AS visitor_id_rate,
+  COUNT(sessionId)              / COUNT(*)                         AS session_id_rate,
+  COUNT(marketingPageId)        / COUNT(*)                         AS page_guid_rate,
+  COUNT(DISTINCT contactId)                                        AS sv_contacts,
+  COUNT(DISTINCT visitorId)                                        AS sv_visitors,
+  AVG(CASE WHEN LOWER(visitorReturningStatus) LIKE '%return%' THEN 1.0 ELSE 0.0 END) AS returning_share,
+  AVG(CASE WHEN LOWER(visitorAnonymousStatus) LIKE '%anon%'   THEN 1.0 ELSE 0.0 END) AS anonymous_share
+FROM   sharepoint_silver.pageviewed
+WHERE  `timestamp` >= date_sub(current_date(), 70)
+GROUP  BY 1;
+
+-- S1 — person resolution: every bronze view with a GPN must end up as a contact.
+-- Compares the two layers on their own terms: distinct people in bronze (GPN)
+-- against distinct people in silver (contactId) for the same day.
+INSERT INTO dq.dq_check_result
+WITH params AS (SELECT date_sub(current_date(), 1) AS check_date),
+b AS (SELECT COUNT(DISTINCT gpn) AS n FROM dq.pv_window w JOIN params p ON w.view_date = p.check_date),
+v AS (SELECT sv_contacts AS n FROM dq.sv_daily sv JOIN params p ON sv.view_date = p.check_date)
+SELECT p.check_date, 'S1', 'identity', 'silver',
+       v.n / NULLIF(b.n, 0), 1.0, 0.9, 1.1,
+       CASE WHEN v.n / NULLIF(b.n, 0) NOT BETWEEN 0.75 AND 1.35 THEN 'blocker'
+            WHEN v.n / NULLIF(b.n, 0) NOT BETWEEN 0.90 AND 1.10 THEN 'warning' ELSE 'ok' END,
+       CONCAT('bronze distinct GPN ', b.n, ' vs silver distinct contactId ', v.n,
+              ' — a ratio far below 1 means people are collapsing, far above means they are splitting'),
+       current_timestamp()
+FROM params p CROSS JOIN b CROSS JOIN v;
+
+-- S2 — key completeness on silver (contact, visitor, session, page GUID)
+INSERT INTO dq.dq_check_result
+WITH params AS (SELECT date_sub(current_date(), 1) AS check_date)
+SELECT p.check_date, 'S2', 'schema', 'silver',
+       LEAST(contact_resolution_rate, visitor_id_rate, page_guid_rate), NULL, 0.95, NULL,
+       CASE WHEN LEAST(contact_resolution_rate, visitor_id_rate, page_guid_rate) < 0.80 THEN 'blocker'
+            WHEN LEAST(contact_resolution_rate, visitor_id_rate, page_guid_rate) < 0.95 THEN 'warning' ELSE 'ok' END,
+       CONCAT('contactId ', ROUND(100 * contact_resolution_rate, 1),
+              ' % | visitorId ', ROUND(100 * visitor_id_rate, 1),
+              ' % | sessionId ', ROUND(100 * session_id_rate, 1),
+              ' % | marketingPageId ', ROUND(100 * page_guid_rate, 1), ' %'),
+       current_timestamp()
+FROM dq.sv_daily sv JOIN params p ON sv.view_date = p.check_date;
+
+-- S3 — returning-visitor mix. Silver computes this itself; a collapse is the
+-- April signature seen one layer later, and it needs no reconstruction from us.
+INSERT INTO dq.dq_check_result
+WITH params AS (SELECT date_sub(current_date(), 1) AS check_date),
+base AS (SELECT AVG(returning_share) AS r FROM dq.sv_daily sv JOIN params p
+         ON sv.view_date BETWEEN date_sub(p.check_date, 35) AND date_sub(p.check_date, 8))
+SELECT p.check_date, 'S3', 'identity', 'silver',
+       sv.returning_share, base.r, base.r - 0.20, base.r + 0.20,
+       CASE WHEN base.r IS NULL THEN 'info'
+            WHEN sv.returning_share < base.r - 0.20 THEN 'blocker'
+            WHEN ABS(sv.returning_share - base.r) > 0.10 THEN 'warning' ELSE 'ok' END,
+       CONCAT('returning ', ROUND(100 * sv.returning_share, 1), ' % vs 4-week baseline ',
+              ROUND(100 * base.r, 1), ' % | anonymous ', ROUND(100 * sv.anonymous_share, 1), ' %'),
+       current_timestamp()
+FROM dq.sv_daily sv JOIN params p ON sv.view_date = p.check_date CROSS JOIN base;
+
+
+-- ----------------------------------------------------------------------------
+-- BLOCK 8c — GOLD: is the aggregate a faithful summary of silver?
+--
+-- Gold is what Power BI reads. Two failure modes matter and neither shows up
+-- anywhere else: a broken grain silently multiplies every KPI, and an internally
+-- inconsistent row makes visits and duration disagree with views.
+-- ----------------------------------------------------------------------------
+-- G1 — grain uniqueness. Documented PK: marketingpageid x visitdatekey x
+-- viewingcontactid x referenceapplicationid. A duplicate doubles the KPI.
+INSERT INTO dq.dq_check_result
+WITH params AS (SELECT date_sub(current_date(), 1) AS check_date),
+g AS (
+  SELECT marketingpageid, viewingcontactid, referenceapplicationid, COUNT(*) AS n
+  FROM   sharepoint_gold.pbi_db_interactions_metrics gm JOIN params p
+         ON gm.visitdatekey = date_format(p.check_date, 'yyyyMMdd')
+  GROUP  BY 1, 2, 3
+)
+SELECT p.check_date, 'G1', 'plausibility', 'gold',
+       SUM(CASE WHEN n > 1 THEN n - 1 ELSE 0 END) / SUM(n), 0, NULL, 0,
+       CASE WHEN SUM(CASE WHEN n > 1 THEN 1 ELSE 0 END) > 0 THEN 'blocker' ELSE 'ok' END,
+       CONCAT(SUM(CASE WHEN n > 1 THEN 1 ELSE 0 END), ' duplicated grain keys of ', COUNT(*)),
+       current_timestamp()
+FROM g CROSS JOIN params p;
+
+-- G2 — row-level internal consistency: a visit cannot exceed the views it holds,
+-- metrics cannot be negative, and durationavg must match durationsum / views.
+INSERT INTO dq.dq_check_result
+WITH params AS (SELECT date_sub(current_date(), 1) AS check_date),
+g AS (
+  SELECT
+    AVG(CASE WHEN visits > views THEN 1.0 ELSE 0.0 END)                                   AS visits_gt_views,
+    AVG(CASE WHEN views < 0 OR visits < 0 OR durationsum < 0 THEN 1.0 ELSE 0.0 END)       AS negatives,
+    AVG(CASE WHEN views > 0 AND durationavg IS NOT NULL
+              AND ABS(durationavg - durationsum / views) > 0.01 THEN 1.0 ELSE 0.0 END)    AS avg_mismatch
+  FROM sharepoint_gold.pbi_db_interactions_metrics gm JOIN params p
+       ON gm.visitdatekey = date_format(p.check_date, 'yyyyMMdd')
+)
+SELECT p.check_date, 'G2', 'plausibility', 'gold',
+       GREATEST(visits_gt_views, negatives, avg_mismatch), 0, NULL, 0.001,
+       CASE WHEN GREATEST(visits_gt_views, negatives) > 0 THEN 'blocker'
+            WHEN avg_mismatch > 0.001 THEN 'warning' ELSE 'ok' END,
+       CONCAT('visits > views ', ROUND(100 * visits_gt_views, 3),
+              ' % | negative metrics ', ROUND(100 * negatives, 3),
+              ' % | durationavg mismatch ', ROUND(100 * avg_mismatch, 3), ' %'),
+       current_timestamp()
+FROM g CROSS JOIN params p;
+
+-- G3 — silver -> gold aggregation tie-out: gold views must equal silver rows,
+-- and gold contacts must equal silver contacts, for the same day.
+INSERT INTO dq.dq_check_result
+WITH params AS (SELECT date_sub(current_date(), 1) AS check_date),
+v AS (SELECT sv_rows, sv_contacts FROM dq.sv_daily sv JOIN params p ON sv.view_date = p.check_date),
+g AS (SELECT SUM(views) AS views, COUNT(DISTINCT viewingcontactid) AS contacts
+      FROM sharepoint_gold.pbi_db_interactions_metrics gm JOIN params p
+           ON gm.visitdatekey = date_format(p.check_date, 'yyyyMMdd'))
+SELECT p.check_date, 'G3', 'completeness', 'gold',
+       g.views / NULLIF(v.sv_rows, 0), 1.0, 0.99, 1.01,
+       CASE WHEN g.views / NULLIF(v.sv_rows, 0) NOT BETWEEN 0.95 AND 1.05
+             OR g.contacts / NULLIF(v.sv_contacts, 0) NOT BETWEEN 0.95 AND 1.05 THEN 'blocker'
+            WHEN g.views / NULLIF(v.sv_rows, 0) NOT BETWEEN 0.99 AND 1.01 THEN 'warning' ELSE 'ok' END,
+       CONCAT('views gold/silver ', ROUND(g.views / NULLIF(v.sv_rows, 0), 4),
+              ' | contacts gold/silver ', ROUND(g.contacts / NULLIF(v.sv_contacts, 0), 4),
+              ' — document any intentional filter as the tolerated gap'),
+       current_timestamp()
+FROM params p CROSS JOIN v CROSS JOIN g;
+
+
+-- ----------------------------------------------------------------------------
 -- BLOCK 9 — Alerting, Power BI feed, DLT expectations, daily job order
 -- ----------------------------------------------------------------------------
 -- Databricks SQL alert query (fires when any warning/blocker exists for yesterday)
@@ -730,9 +913,10 @@ SELECT * FROM (
 -- @dlt.table(name="pageviews")
 -- @dlt.expect_or_fail("session id present",  "session_Id IS NOT NULL")
 -- @dlt.expect_or_fail("browser id present",  "user_Id IS NOT NULL")
--- @dlt.expect("gpn well-formed",             "user_gpn IS NULL OR user_gpn RLIKE '^[0-9]{8}$'")
+-- @dlt.expect("gpn well-formed",             "GPN IS NULL OR GPN RLIKE '^[0-9]{8}$'")
 -- @dlt.expect("tracking id well-formed",     "GICTrackingID IS NULL OR GICTrackingID RLIKE '^[A-Z0-9]{5}-[A-Z0-9]{7}-[0-9]{6}-[A-Z0-9]{7}-[A-Z]{3}$'")
--- @dlt.expect("timestamp in window",         "ViewTime <= current_timestamp()")
+-- @dlt.expect("timestamp parses",            "to_timestamp(`timestamp`) IS NOT NULL")
+-- @dlt.expect("timestamp in window",         "to_timestamp(`timestamp`) <= current_timestamp()")
 -- def pageviews():
 --     return dlt.read_stream("staging_pageviews")
 

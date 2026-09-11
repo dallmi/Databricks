@@ -323,6 +323,41 @@ not an independent measurement.
 Not yet in the repo: the catalog name (docs use two-part names) and the
 write-side schema for the check results (`dq` in the draft).
 
+### Integrity per medallion layer
+
+Decision 2026-09-11: the identity family (B1–B7) **stays on bronze**. The raw
+cookie signals are the early warning, and they are what broke in April. Silver
+and gold get their own families instead, so every layer carries integrity rather
+than inheriting it.
+
+| Layer | Owns | Checks | Tie-out to the next layer |
+|---|---|---|---|
+| Bronze | arrival, schema, formats, raw identity | A1–A7, B1–B8, C1–C8 | A6 bronze = silver = gold row counts |
+| Silver | person resolution, key completeness | **S1–S3** | S1 bronze GPN = silver contactId |
+| Gold | aggregate correctness, KPI plausibility | **G1–G3**, D1–D8 | G3 silver rows = gold views |
+
+**S1 person resolution.** Distinct `GPN` in bronze against distinct `contactId`
+in silver for the same day. This is the check that guards the unique-visitor
+number. Far below 1 means people are collapsing into one another, far above
+means one person is splitting into several.
+
+**S2 key completeness.** Fill rate of `contactId`, `visitorId`, `sessionId` and
+`marketingPageId` on `sharepoint_silver.pageviewed`.
+
+**S3 returning-visitor mix.** Silver computes `visitorReturningStatus` itself, so
+the April signature is readable without reconstructing anything. A collapse here
+confirms at the silver layer what B3 sees at bronze.
+
+**G1 grain uniqueness.** The documented primary key of
+`pbi_db_interactions_metrics` must be unique per day. A duplicated grain
+multiplies every KPI silently and is invisible in any corridor.
+
+**G2 row-level consistency.** Visits never exceed views, no negative metrics, and
+`durationavg` matches `durationsum ÷ views`.
+
+**G3 aggregation tie-out.** Gold views equal silver rows, gold contacts equal
+silver contacts.
+
 ### Verified in the workspace, 2026-09-11
 
 - **`sharepoint_silver` holds 7 tables**: `marketingpage`, `marketingsite`,
@@ -337,3 +372,24 @@ write-side schema for the check results (`dq` in the draft).
   must use `DESCRIBE` / `SHOW`, or read the Spark schema. The SQL draft was
   rewritten accordingly (BLOCK 0 and C1).
 - **17 schemas carry the `_silver` suffix**, matching Q26.
+- **Bronze is already flat.** There is no `customDimensions` column; the former
+  CustomProps are first-class columns (`GPN`, `Email`, `PageURL`, `PageName`,
+  `PublishingDate`, `SiteId`, `SiteName`, `GICTrackingID`). The table card in
+  `docs/tables/sharepoint/customevents.md` still claims the opposite.
+- **The person column is `GPN`, not `user_gpn`**, and the event-time column is
+  `timestamp`, not `ViewTime`. `timestamp` is typed STRING and must be parsed.
+  `gmdp_timestamp` is the ingestion time of the source platform and must never
+  be used for the daily grain.
+- **`sdkVersion`, `itemCount`, `iKey` and `appId` are all present on bronze**, so
+  checks A4, C3 and C4 run there. The KQL fallback is not needed. Bronze also
+  carries `ingestiontime`, which lets A2 measure true load latency.
+- **`pageId` is an INT on bronze** while `pages.pageUUID` is a GUID string, so the
+  documented page join cannot be a key join. C6 joins on the URL instead, and the
+  real relationship still needs confirming.
+- **`pbi_db_employeecontact` is not the person bridge.** Its 17 columns carry
+  `contactId` and no GPN, e-mail or T-number. The resolution happens inside the
+  bronze-to-silver transformation, which surfaces `contactId` on
+  `sharepoint_silver.pageviewed`. Check S1 measures it from the outside.
+- **Silver carries identity columns we do not have to rebuild**: `contactId`,
+  `visitorId`, `sessionId`, `visitorReturningStatus`, `visitorAnonymousStatus`.
+- The gold comment column is `comments`, not `commentss` as the table card says.
