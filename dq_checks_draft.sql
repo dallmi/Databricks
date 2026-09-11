@@ -105,6 +105,79 @@ print("""
 """)
 
 -- ----------------------------------------------------------------------------
+-- BLOCK 0b — Calibration probe. READ-ONLY, writes nothing, needs no permissions.
+--
+-- Run this BEFORE Block 1. It answers the three things still open and calibrates
+-- the corridors at the same time:
+--   1. does `timestamp` parse, and what does the raw string look like
+--   2. what are the healthy values of the identity ratios, measured BEFORE the
+--      8 April change, so the thresholds in dq.check_def stop being guesses
+--   3. how far the ratios actually moved, which validates the whole approach
+--
+-- Scan is limited by gmdp_date (a real DATE) because `timestamp` is a string and
+-- cannot be range-filtered before it is parsed. gmdp_date is the ingestion date,
+-- close enough to prune partitions; every metric below is computed on the parsed
+-- event time.
+--
+-- HOW TO RUN: paste from `%sql` to the semicolon into ONE cell. One result grid,
+-- three rows. Photograph it.
+-- ----------------------------------------------------------------------------
+%sql
+WITH base AS (
+  SELECT
+    CASE
+      WHEN gmdp_date BETWEEN DATE '2026-03-02' AND DATE '2026-03-15' THEN '1 before (2-15 Mar)'
+      WHEN gmdp_date BETWEEN DATE '2026-04-13' AND DATE '2026-04-26' THEN '2 after  (13-26 Apr)'
+      ELSE                                                                '3 now    (last 14d)'
+    END                              AS period,
+    to_timestamp(`timestamp`)        AS ts,
+    `timestamp`                      AS ts_raw,
+    session_Id, user_Id, GPN, sdkVersion
+  FROM  sharepoint_bronze.pageviews
+  WHERE gmdp_date BETWEEN DATE '2026-03-02' AND DATE '2026-03-15'
+     OR gmdp_date BETWEEN DATE '2026-04-13' AND DATE '2026-04-26'
+     OR gmdp_date >= date_sub(current_date(), 14)
+),
+sess AS (
+  SELECT period, session_Id, COUNT(*) AS n_views
+  FROM   base GROUP BY period, session_Id
+),
+sess_agg AS (
+  SELECT period,
+         AVG(CASE WHEN n_views = 1 THEN 1.0 ELSE 0.0 END) AS single_view_session_share
+  FROM   sess GROUP BY period
+)
+SELECT
+  b.period,
+  COUNT(*)                                                          AS rows_scanned,
+  SUM(CASE WHEN b.ts IS NULL THEN 1 ELSE 0 END)                     AS unparsed_timestamps,
+  MIN(b.ts_raw)                                                     AS sample_raw_timestamp,
+  MIN(b.ts)                                                         AS first_event,
+  MAX(b.ts)                                                         AS last_event,
+  ROUND(COUNT(*) / COUNT(DISTINCT b.session_Id), 3)                 AS views_per_session,
+  ROUND(COUNT(DISTINCT b.user_Id) / COUNT(DISTINCT b.GPN), 3)       AS browser_ids_per_person,
+  ROUND(COUNT(DISTINCT b.session_Id) / COUNT(DISTINCT b.GPN), 3)    AS sessions_per_person,
+  ROUND(COUNT(b.GPN) / COUNT(*), 4)                                 AS identified_share,
+  COUNT(DISTINCT b.GPN)                                             AS distinct_persons,
+  COUNT(DISTINCT b.user_Id)                                         AS distinct_browser_ids,
+  ROUND(MAX(s.single_view_session_share), 4)                        AS single_view_session_share,
+  CONCAT_WS(' | ', COLLECT_SET(b.sdkVersion))                       AS sdk_versions
+FROM base b
+LEFT JOIN sess_agg s ON s.period = b.period
+GROUP BY b.period
+ORDER BY b.period;
+
+-- Reading the result:
+--   unparsed_timestamps must be 0. If not, `timestamp` needs an explicit format
+--   and every to_timestamp() in this file gets that format string.
+--   Row 1 gives the healthy baseline for B1 (views_per_session, expected 1.1-1.2)
+--   and B4 (browser_ids_per_person, expected near 1). Rows 2 and 3 show how far
+--   they moved. Those three numbers replace the guessed thresholds in dq.check_def.
+--   sdk_versions per period: a version that appears only from row 2 onward is the
+--   leading indicator C3 is built to catch, and evidence for the vendor case.
+
+
+-- ----------------------------------------------------------------------------
 -- BLOCK 1 — Result table + check catalogue
 -- ----------------------------------------------------------------------------
 CREATE SCHEMA IF NOT EXISTS dq;
