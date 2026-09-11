@@ -24,43 +24,83 @@
 -- ----------------------------------------------------------------------------
 -- BLOCK 0 — Probes: confirm the [VERIFY] columns before anything else
 --
+-- HOW TO RUN: paste everything from `%python` down to the end of this block
+-- into ONE notebook cell and run it. The magic must be the cell's first line,
+-- so do not put it in a `%sql` cell and do not prepend the comment lines.
+--
 -- NOTE (2026-09-11): `information_schema` is NOT available in this workspace
 -- (AnalysisException: Table or view not found). It is a Unity Catalog feature;
--- this workspace still resolves two-part names via the Hive Metastore. Every
--- probe below therefore uses DESCRIBE / SHOW, which work on both.
+-- this workspace still resolves two-part names through the Hive Metastore, so
+-- every probe reads the Spark schema instead. Works on either metastore.
+--
+-- Silver inventory confirmed 2026-09-11 (SHOW TABLES IN sharepoint_silver):
+--   marketingpage · marketingsite · pageviewed · pagevisited · webpage
+--   · webpagevisited · website
+-- `marketingpage` / `marketingsite` are in neither April inventory. Worth a look:
+-- does gold's `marketingPageId` join to `marketingpage` rather than bronze `pages`?
 -- ----------------------------------------------------------------------------
-DESCRIBE TABLE sharepoint_bronze.pageviews;
-DESCRIBE TABLE sharepoint_bronze.customevents;
-DESCRIBE TABLE sharepoint_silver.pageviewed;
-DESCRIBE TABLE sharepoint_silver.pagevisited;
-DESCRIBE TABLE sharepoint_gold.pbi_db_employeecontact;
-
--- Silver inventory confirmed 2026-09-11 (SHOW TABLES IN sharepoint_silver, 7 tables):
---   marketingpage · marketingsite · pageviewed · pagevisited · webpage · webpagevisited · website
--- `marketingpage` / `marketingsite` are NOT in the April inventory — check whether
--- gold's `marketingPageId` joins to `marketingpage` rather than bronze `pages`.
-
--- Which of the expected envelope columns exist on bronze pageviews?
--- (filters the DESCRIBE output instead of querying information_schema)
 %python
-EXPECTED = ['id','viewtime','timestamp','session_id','user_id','user_gpn',
-            'email','pageid','gictrackingid','sdkversion','itemcount','ikey',
-            'appid','operation_id','client_browser','client_os','client_type',
-            'customdimensions','_ingestion_ts','ingestion_ts','load_ts']
-for tbl in ['sharepoint_bronze.pageviews', 'sharepoint_gold.pbi_db_employeecontact']:
-    cols = {f.name.lower(): f.dataType.simpleString() for f in spark.table(tbl).schema.fields}
-    print(f"\n=== {tbl} — {len(cols)} columns ===")
-    print("PRESENT:", sorted(c for c in cols if c in EXPECTED))
-    print("MISSING:", sorted(c for c in EXPECTED if c not in cols))
-    # the unique-visitor bridge: anything that looks like a person key
-    print("PERSON-ISH:", sorted(c for c in cols
-          if any(k in c for k in ('gpn','mail','worker','tnumber','t_number','contact','person','upn'))))
+# BLOCK 0 — one cell, prints everything the draft needs to be filled in.
+TABLES = [
+    "sharepoint_bronze.pageviews",
+    "sharepoint_bronze.customevents",
+    "sharepoint_silver.pageviewed",
+    "sharepoint_silver.pagevisited",
+    "sharepoint_gold.pbi_db_interactions_metrics",
+    "sharepoint_gold.pbi_db_employeecontact",
+]
 
--- If sdkVersion / itemCount / iKey are MISSING on bronze, checks A4, C3 and C4
--- cannot run there. Move them to KQL against App Insights instead — the fields
--- are already projected in kql/export_for_pipeline.kql (lines 44-47) and the
--- sampling aggregation exists in kql/validate_page_engagement.kql (lines 38-40).
+# The envelope columns the checks rely on. Missing ones change the plan, see below.
+ENVELOPE = ["id", "viewtime", "timestamp", "session_id", "user_id", "user_gpn",
+            "email", "pageid", "gictrackingid", "sdkversion", "itemcount",
+            "ikey", "appid", "operation_id", "client_browser", "client_os",
+            "client_type", "customdimensions"]
 
+BUCKETS = {
+    "time":     ("time", "date", "ts", "stamp"),
+    "person":   ("gpn", "mail", "worker", "tnumber", "t_number", "contact", "person", "upn"),
+    "identity": ("session", "user_", "userid", "device", "visitor", "anon"),
+    "page":     ("page", "site", "url", "marketing"),
+    "tracking": ("tracking", "camms", "gic"),
+    "ingest":   ("ingest", "load", "_meta", "batch", "etl", "insert"),
+}
+
+for tbl in TABLES:
+    try:
+        fields = spark.table(tbl).schema.fields
+    except Exception as e:
+        print(f"\n### {tbl}: NOT READABLE — {type(e).__name__}: {str(e)[:120]}")
+        continue
+    cols = {f.name: f.dataType.simpleString() for f in fields}
+    low = {c.lower(): c for c in cols}
+    print(f"\n### {tbl} — {len(cols)} columns")
+    present = sorted(low[c] for c in ENVELOPE if c in low)
+    missing = sorted(c for c in ENVELOPE if c not in low)
+    print(f"  envelope PRESENT : {present}")
+    print(f"  envelope MISSING : {missing}")
+    for label, keys in BUCKETS.items():
+        hits = sorted(orig for lc, orig in low.items() if any(k in lc for k in keys))
+        if hits:
+            print(f"  {label:<9}: {[f'{h} ({cols[h]})' for h in hits]}")
+
+print("\n" + "=" * 70)
+print("WHAT TO DO WITH THIS OUTPUT")
+print("=" * 70)
+print("""
+1. bronze pageviews: note the exact spelling of the session, user, gpn, page and
+   timestamp columns, and whether the timestamp is UTC or local. BLOCK 2 maps them.
+2. If sdkversion / itemcount / ikey are MISSING on bronze, checks A4, C3 and C4
+   cannot run there. They move to KQL against App Insights: the fields are already
+   projected in kql/export_for_pipeline.kql and the sampling aggregation exists
+   in kql/validate_page_engagement.kql.
+3. pbi_db_employeecontact: whichever column appears under `person` is the bridge
+   from GPN or e-mail to the contact id. That value goes into check C6, which
+   still carries a <gpn_column> placeholder.
+4. silver pageviewed: whichever column appears under `time` is the one check A6
+   needs for the layer tie-out.
+5. If an ingestion column shows up under `ingest`, check A2 can measure true load
+   latency instead of event age.
+""")
 
 -- ----------------------------------------------------------------------------
 -- BLOCK 1 — Result table + check catalogue
