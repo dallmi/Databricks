@@ -405,15 +405,36 @@ b7 AS (
                 ' reconstructed visits for ', COUNT(DISTINCT person_id), ' persons')
   FROM b7v JOIN p ON b7v.view_date = p.d GROUP BY p.d
 ),
--- C3 SDK version watch
+-- C3 SDK version watch.
+--
+-- Compares the SET of versions, not their count, and in both directions. April
+-- is the reason: javascript:3.3.6 DISAPPEARED, and a check that only notices new
+-- versions arriving would have stayed silent. A swap would also keep the count
+-- unchanged while changing everything.
+--
+-- Written as two plain CTEs joined together, never as a correlated subquery:
+-- Spark rejects an outer reference inside a range predicate with
+-- "Correlated column is not allowed in predicate".
+c3prev AS (
+  SELECT collect_set(x.sdk_version) AS vprev
+  FROM   dq_pv_window x CROSS JOIN p
+  WHERE  x.view_date BETWEEN date_sub(p.d, 8) AND date_sub(p.d, 1)
+),
+c3now AS (
+  SELECT p.d AS d, collect_set(w.sdk_version) AS vnow
+  FROM   dq_pv_window w JOIN p ON w.view_date = p.d
+  GROUP  BY p.d
+),
 c3 AS (
-  SELECT p.d, 'C3', 'schema', 'bronze',
-         CAST(COUNT(DISTINCT w.sdk_version) AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE),
-         CASE WHEN COUNT(DISTINCT w.sdk_version) <>
-                   (SELECT COUNT(DISTINCT sdk_version) FROM dq_pv_window x
-                     WHERE x.view_date BETWEEN date_sub(p.d,8) AND date_sub(p.d,1)) THEN 'warning' ELSE 'ok' END,
-         CONCAT('versions today: ', concat_ws(' | ', collect_set(w.sdk_version)))
-  FROM dq_pv_window w JOIN p ON w.view_date = p.d GROUP BY p.d
+  SELECT n.d, 'C3', 'schema', 'bronze',
+         CAST(size(array_except(n.vnow, v.vprev)) + size(array_except(v.vprev, n.vnow)) AS DOUBLE),
+         0.0, CAST(NULL AS DOUBLE), 0.0,
+         CASE WHEN size(array_except(n.vnow, v.vprev)) + size(array_except(v.vprev, n.vnow)) > 0
+              THEN 'warning' ELSE 'ok' END,
+         CONCAT('today: ', concat_ws(' | ', n.vnow),
+                ' | appeared: ',  COALESCE(NULLIF(concat_ws(',', array_except(n.vnow, v.vprev)), ''), '-'),
+                ' | disappeared: ', COALESCE(NULLIF(concat_ws(',', array_except(v.vprev, n.vnow)), ''), '-'))
+  FROM c3now n CROSS JOIN c3prev v
 ),
 -- C4 instrumentation key constant
 c4 AS (

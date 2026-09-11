@@ -939,25 +939,36 @@ SELECT p.check_date, 'C2', 'schema', 'bronze', t.null_rate, y.null_rate, NULL, y
 FROM nulls t JOIN params p ON t.view_date = p.check_date
 LEFT JOIN nulls y ON y.field = t.field AND y.view_date = date_sub(p.check_date, 7);
 
--- C3 — SDK version watch: new value, or a share shift > 20 pp in one day
+-- C3 — SDK version watch. Compares the SET of versions against the prior week,
+-- in BOTH directions.
+--
+-- The earlier version of this check joined today's versions to yesterday's and
+-- flagged anything new. It would have missed April entirely: javascript:3.3.6
+-- disappeared, and a version that is absent today simply produces no row to
+-- flag. A swap would likewise keep the count unchanged while changing the set.
 INSERT INTO dq.dq_check_result
 WITH params AS (SELECT date_sub(current_date(), 1) AS check_date),
-mix AS (
-  SELECT view_date, sdk_version, COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY view_date) AS share
-  FROM   dq.pv_window GROUP BY view_date, sdk_version
+prev AS (
+  SELECT collect_set(w.sdk_version) AS vprev
+  FROM   dq.pv_window w CROSS JOIN params p
+  WHERE  w.view_date BETWEEN date_sub(p.check_date, 8) AND date_sub(p.check_date, 1)
 ),
-known AS (SELECT DISTINCT sdk_version FROM dq.pv_window w JOIN params p ON w.view_date < p.check_date)
-SELECT p.check_date, 'C3', 'schema', 'staging',
-       MAX(ABS(t.share - COALESCE(y.share, 0))) AS max_shift, NULL, NULL, 0.20,
-       CASE WHEN MAX(ABS(t.share - COALESCE(y.share, 0))) > 0.20 THEN 'warning'
-            WHEN COUNT(CASE WHEN k.sdk_version IS NULL THEN 1 END) > 0 THEN 'info' ELSE 'ok' END,
-       CONCAT('versions today: ', concat_ws(', ', collect_list(CONCAT(t.sdk_version, ' ', ROUND(100 * t.share, 1), ' %'))),
-              ' | new: ', concat_ws(', ', collect_list(CASE WHEN k.sdk_version IS NULL THEN t.sdk_version END))),
+now AS (
+  SELECT p.check_date AS d, collect_set(w.sdk_version) AS vnow
+  FROM   dq.pv_window w JOIN params p ON w.view_date = p.check_date
+  GROUP  BY p.check_date
+)
+SELECT n.d, 'C3', 'schema', 'bronze',
+       CAST(size(array_except(n.vnow, v.vprev)) + size(array_except(v.vprev, n.vnow)) AS DOUBLE),
+       0, NULL, 0,
+       CASE WHEN size(array_except(v.vprev, n.vnow)) > 0 THEN 'warning'   -- a version vanished
+            WHEN size(array_except(n.vnow, v.vprev)) > 0 THEN 'info'      -- a version appeared
+            ELSE 'ok' END,
+       CONCAT('today: ', concat_ws(' | ', n.vnow),
+              ' | appeared: ',    COALESCE(NULLIF(concat_ws(',', array_except(n.vnow, v.vprev)), ''), '-'),
+              ' | disappeared: ', COALESCE(NULLIF(concat_ws(',', array_except(v.vprev, n.vnow)), ''), '-')),
        current_timestamp()
-FROM mix t JOIN params p ON t.view_date = p.check_date
-LEFT JOIN mix y ON y.sdk_version = t.sdk_version AND y.view_date = date_sub(p.check_date, 1)
-LEFT JOIN known k ON k.sdk_version = t.sdk_version
-GROUP BY p.check_date;
+FROM now n CROSS JOIN prev v;
 -- Incident forensics: did the version mix change around 8 April 2026?
 -- ANSWERED 2026-09-11, then CORRECTED by Block 0c. Version `javascript:3.3.6` is
 -- present 2-15 March and absent from 13-26 April, which first looked like the
