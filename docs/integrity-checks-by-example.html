@@ -36,7 +36,29 @@ section{margin-top:44px}
 .card-hd{padding:14px 16px 10px;display:grid;grid-template-columns:auto 1fr;gap:4px 10px;align-items:baseline}
 .chip{grid-row:span 2;align-self:start;font-family:var(--mono);font-size:11px;font-weight:600;color:var(--white);background:var(--ink);padding:3px 7px;letter-spacing:.02em}
 .card-hd h3{align-self:center}
-.q{grid-column:2;font-size:13px;color:var(--muted)}
+.card-hd{grid-template-columns:auto 1fr auto}
+.blk{font-size:10.5px;font-weight:600;color:var(--bronze);border:1px solid var(--bronze);padding:2px 6px;white-space:nowrap;align-self:center}
+.q{grid-column:2/span 2;font-size:13px;color:var(--muted)}
+.plain{margin:0 16px 12px;padding:9px 12px;background:#F5F0E1;font-size:12.5px;color:var(--ink)}
+.plain span{display:block;font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--bronze);margin-bottom:3px}
+.card{grid-template-rows:auto auto auto 1fr auto}
+.trip{margin-top:28px;border:1px solid var(--rule);padding:20px 24px}
+.trip h2{margin-bottom:8px}
+.trip .lead{max-width:80ch;font-size:13.5px;margin-bottom:16px;color:var(--ink)}
+.trip-grid{display:grid;gap:14px}
+@media(min-width:820px){.trip-grid{grid-template-columns:repeat(5,1fr)}}
+.trip-col{border-top:2px solid var(--bronze);padding-top:9px}
+.trip-col b{display:block;font-size:12.5px;color:var(--black);margin-bottom:4px}
+.trip-col span{font-size:12px;color:var(--muted)}
+.flow{margin-top:34px}
+.flow-lead{max-width:80ch;font-size:13.5px;margin:8px 0 14px;color:var(--ink)}
+.flow table{width:100%;border-collapse:collapse;font-size:12.5px}
+.flow th{text-align:left;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:0 10px 6px 0;border-bottom:1px solid var(--black)}
+.flow td{padding:7px 10px 7px 0;border-bottom:1px solid var(--pastel);vertical-align:top}
+.flow tr:last-child td{border-bottom:1px solid var(--black)}
+.flow td.b{font-family:var(--mono);font-size:11.5px;font-weight:600;color:var(--bronze);white-space:nowrap}
+.flow td.c{font-family:var(--mono);font-size:11.5px;color:var(--ink2)}
+.flow tr.setup td{color:var(--muted)}
 .panes{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--rule);border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
 @media(max-width:620px){.panes{grid-template-columns:1fr}}
 .pane{background:var(--white);padding:12px 14px 14px;display:grid;grid-template-rows:auto auto 1fr auto;gap:8px}
@@ -78,13 +100,49 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
   <div class="k">Severity</div><div class="v">Warning keeps publishing and notifies the data owner. Blocker holds the refresh and shows a banner in the report.</div>
   <div class="k">Row counts</div><div class="v">Three or four rows stand in for a day of traffic, so the arithmetic stays checkable by eye. Thresholds apply at real volume.</div>
 </div>
+<div class="trip">
+  <h2>The whole thing as a school trip</h2>
+  <p class="lead">Three hundred children visit a museum. Every check on this page is something a teacher would check anyway, and the failure of 8 April is one of them exactly.</p>
+  <div class="trip-grid">
+    <div class="trip-col"><b>The bus</b><span>Did everyone who got on get off again? Counting, nothing else.</span></div>
+    <div class="trip-col"><b>The name tags</b><span>One child, one tag, all day. This is the one that broke.</span></div>
+    <div class="trip-col"><b>The worksheet</b><span>The same boxes as always, filled in the way we expect.</span></div>
+    <div class="trip-col"><b>The totals</b><span>Three hundred children, nine hundred lunches. Something is off.</span></div>
+    <div class="trip-col"><b>Three teachers</b><span>One counts at the bus, one at the door, one on the summary sheet. All three must reach the same number.</span></div>
+  </div>
+</div>
+
+<div class="flow">
+  <h2>How the file runs</h2>
+  <p class="flow-lead">The blocks run top to bottom once a day, after the silver refresh and before gold publishes. The first four set the table, the rest produce verdicts.</p>
+  <table>
+    <thead><tr><th>Block</th><th>What it does</th><th>Checks it produces</th></tr></thead>
+    <tbody>
+      <tr class="setup"><td class="b">0 / 0b</td><td>Probes the real column names, then measures the healthy ratios on a window before 8 April so the thresholds stop being guesses. Read-only, run once.</td><td class="c">&ndash;</td></tr>
+      <tr class="setup"><td class="b">1</td><td>Creates the result table and the small catalogue that holds every threshold.</td><td class="c">&ndash;</td></tr>
+      <tr class="setup"><td class="b">2</td><td>Cuts one 70-day slice out of the 173 million bronze rows, so no check ever scans the whole table.</td><td class="c">&ndash;</td></tr>
+      <tr class="setup"><td class="b">3</td><td>Turns that slice into one number per day per metric, and builds the same-weekday baseline behind every corridor.</td><td class="c">&ndash;</td></tr>
+      <tr><td class="b">4</td><td>The corridor engine. One piece of SQL evaluates every check whose rule is simply "stay inside a band".</td><td class="c">A1 A4 B1 B2 B4 B5 B8 C8 D1 D4 D7</td></tr>
+      <tr><td class="b">5</td><td>Arrival: freshness, duplicates, the layer tie-out, late-arriving rows.</td><td class="c">A2 A5 A6 A7</td></tr>
+      <tr><td class="b">6</td><td>The identity questions a corridor cannot answer, because they compare one day against the 28 before it.</td><td class="c">B3 B6 B7</td></tr>
+      <tr><td class="b">7</td><td>Shape: columns, empty values, software version, formats, references, client mix.</td><td class="c">C1 C2 C3 C4 C5 C6 C7</td></tr>
+      <tr><td class="b">8</td><td>Plausibility from the outside, including the recount of gold against the raw events.</td><td class="c">D3 D5 D6 D8</td></tr>
+      <tr><td class="b">8b</td><td>Silver only: did the person resolution survive, and did every row get its derived keys.</td><td class="c">S1 S2 S3</td></tr>
+      <tr><td class="b">8c</td><td>Gold only: is the grain unique, is each row internally consistent, does the aggregate tie back to silver.</td><td class="c">G1 G2 G3</td></tr>
+      <tr class="setup"><td class="b">9</td><td>What happens with the verdicts: the alert, the hold that stops publishing, the page the report shows.</td><td class="c">&ndash;</td></tr>
+    </tbody>
+  </table>
+</div>
+
 <section><div class="sec-hd"><h2>Did everything arrive?</h2><p>Every row the source produced reaches every layer exactly once. These checks never look at meaning, only at counts and freshness.</p></div><div class="cards">
 <article class="card">
       <header class="card-hd">
         <span class="chip">A1</span>
         <h3>Daily volume corridor</h3>
+        <span class="blk">Block 4</span>
         <p class="q">Did roughly as much arrive today as on the same weekday before?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>Count the children getting on the bus. Today far fewer got on than on any other Monday.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -105,8 +163,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">A4</span>
         <h3>Sampling factor</h3>
+        <span class="blk">Block 4</span>
         <p class="q">Is every single event stored, or only a sample of them?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>Only every second child was written down, so the list says half the class stayed home.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -127,8 +187,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">A5</span>
         <h3>Duplicate rate</h3>
+        <span class="blk">Block 5</span>
         <p class="q">Did the same event land twice?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>The same child was ticked off twice, so the list says there is one child too many.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -149,8 +211,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">A6</span>
         <h3>Layer tie-out</h3>
+        <span class="blk">Block 5</span>
         <p class="q">Does every layer hold the same day?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>Three teachers count at three different points. They must all reach the same number.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -173,8 +237,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">B1</span>
         <h3>Page views per visit</h3>
+        <span class="blk">Block 4</span>
         <p class="q">Does one visit still hold several pages?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>One child walks through several rooms. If every room reports a brand new visitor, the museum thinks four children came instead of one.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -195,8 +261,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">B4</span>
         <h3>Browser identities per person</h3>
+        <span class="blk">Block 4</span>
         <p class="q">Does one employee still look like one person?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>One child, one name tag. If the same child gets a new tag in every room, we count them as three children.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -217,8 +285,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">B3</span>
         <h3>Recurring browser identities</h3>
+        <span class="blk">Block 6</span>
         <p class="q">Do we see yesterday&#x27;s browsers again today?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>Yesterday&#x27;s children should still be recognisable today. If not one of them is, every name tag was reprinted overnight.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -239,8 +309,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">B6</span>
         <h3>Session timeout behaviour</h3>
+        <span class="blk">Block 6</span>
         <p class="q">Does a session survive a short pause?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>A child who steps out for five minutes is still the same child. Hand them a new tag and nothing hangs together any more.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -263,8 +335,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">C3</span>
         <h3>Software version watch</h3>
+        <span class="blk">Block 7</span>
         <p class="q">Did the tracking software change under us?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>Someone swapped the label printer overnight. Worth knowing before the labels start looking odd.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -285,8 +359,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">C5</span>
         <h3>Format validity</h3>
+        <span class="blk">Block 7</span>
         <p class="q">Do the identifiers still have the shape we rely on?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>A name tag has to have eight digits. One that lost its leading zeros no longer matches the class list.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -307,8 +383,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">C8</span>
         <h3>Double-fire rate</h3>
+        <span class="blk">Block 4</span>
         <p class="q">Is the same page counted twice in the same instant?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>The door counted the same child twice in the same second, because the door swung open twice.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -331,8 +409,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">D1</span>
         <h3>KPI corridor and step change</h3>
+        <span class="blk">Block 4</span>
         <p class="q">Did a headline number jump without a business reason?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>Twice as many room visits as last week, but exactly the same number of children. One of those two numbers is lying.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -353,8 +433,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">D5</span>
         <h3>Gold against a fresh recount</h3>
+        <span class="blk">Block 8</span>
         <p class="q">Does the published aggregate match a recount from the raw events?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>Count by hand and hold it against the summary sheet. If the children match but the visits do not, the visits are the problem.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -377,8 +459,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">S1</span>
         <h3>Person resolution, bronze to silver</h3>
+        <span class="blk">Block 8b</span>
         <p class="q">Does one employee become exactly one contact?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>Three thousand children got on the bus and the list at the other end has four hundred names. Children were merged together.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -399,8 +483,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">S2</span>
         <h3>Key completeness on silver</h3>
+        <span class="blk">Block 8b</span>
         <p class="q">Did every row get its derived keys?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>Half the worksheets carry no name and no room on them. They still get counted, but they belong to nobody.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -421,8 +507,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">G1</span>
         <h3>Grain uniqueness on gold</h3>
+        <span class="blk">Block 8c</span>
         <p class="q">Is each page, day and person present exactly once?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>The same child, the same day, the same room, written down twice. Every total for that room doubles.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
@@ -443,8 +531,10 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <header class="card-hd">
         <span class="chip">G2</span>
         <h3>Row consistency on gold</h3>
+        <span class="blk">Block 8c</span>
         <p class="q">Do the metrics in one row contradict each other?</p>
       </header>
+      <p class="plain"><span>On a school trip</span>Nine visits to a room that was only entered six times. That cannot have happened.</p>
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
