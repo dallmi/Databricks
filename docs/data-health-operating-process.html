@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data Health Operating Process</title>
+<style>
+:root{color-scheme:light;
+--white:#FFFFFF;--black:#000;--ink:#404040;--ink2:#5A5D5C;--muted:#7A7870;--mid:#8E8D83;
+--rule:#CCCABC;--pastel:#ECEBE4;--pastel2:#F5F0E1;--rowalt:#F8F7F2;
+--red:#E60000;--bordeaux:#BD000C;--bronze:#B98E2C;--ok:#6F7A1A;--warn:#E4A911;
+--font:"Frutiger 45 Light","Frutiger","Helvetica Neue",Helvetica,Arial,"Segoe UI",system-ui,sans-serif;
+--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+html{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--white);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.page{max-width:1160px;margin:0;padding:40px 48px 56px}
+h1,h2,h3{color:var(--black);margin:0;text-wrap:balance}
+h1{font-size:40px;font-weight:300;line-height:1.1;letter-spacing:-.01em}
+h2{font-size:20px;font-weight:600}
+h3{font-size:15px;font-weight:600}
+p{margin:0}
+.head{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:start;padding-bottom:20px;border-bottom:2px solid var(--red)}
+.head .sub{margin-top:12px;max-width:66ch;font-size:15px;color:var(--muted)}
+.corner{background:var(--pastel);padding:8px 14px;font-size:12px;white-space:nowrap}
+.corner b{display:block}
+section{margin-top:44px}
+.sec-hd{border-top:1px solid var(--black);padding-top:12px;margin-bottom:18px;display:grid;gap:6px}
+.sec-hd p{max-width:80ch;font-size:13.5px;color:var(--ink)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:0 12px 6px 0;border-bottom:1px solid var(--black);vertical-align:bottom}
+td{padding:9px 12px 9px 0;border-bottom:1px solid var(--pastel);vertical-align:top}
+tr:last-child td{border-bottom:1px solid var(--black)}
+td.k{font-weight:600;color:var(--black);white-space:nowrap}
+td.k span{display:block;font-weight:400;color:var(--muted);font-size:11px;white-space:normal}
+.mono{font-family:var(--mono);font-size:12px;color:var(--ink2)}
+.key{background:var(--pastel);border-left:3px solid var(--bordeaux);padding:16px 20px;max-width:none}
+.key h3{margin-bottom:6px}
+.key p{font-size:13.5px;max-width:88ch}
+.key .sum{margin-top:10px;font-family:var(--mono);font-size:12.5px;color:var(--bordeaux);font-weight:600}
+.timeline{display:grid;grid-template-columns:repeat(6,1fr);gap:0;margin-top:6px}
+.tl{padding:0 10px;position:relative}
+.tl .box{border:1px solid var(--mid);background:var(--white);padding:9px 11px;font-size:12.5px;font-weight:600;color:var(--black);position:relative;min-height:52px}
+.tl .box span{display:block;font-weight:400;font-size:11px;color:var(--muted);margin-top:3px}
+.tl.ours .box{background:var(--pastel);border-color:var(--pastel)}
+.tl.gate .box{border-color:var(--bordeaux);border-width:2px}
+.tl .box::after{content:"";position:absolute;right:-21px;top:50%;width:20px;height:1px;background:var(--mid)}
+.tl:last-child .box::after{display:none}
+.tl .t{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--bronze);font-weight:700;margin-bottom:5px}
+@media(max-width:900px){.timeline{grid-template-columns:repeat(2,1fr);row-gap:16px}.tl .box::after{display:none}}
+.lanes{display:grid;gap:12px}
+.lane{display:grid;grid-template-columns:170px 1fr;gap:16px;align-items:start;border-left:3px solid var(--mid);padding:10px 0 10px 14px}
+.lane.a{border-left-color:var(--bordeaux)}.lane.b{border-left-color:var(--warn)}
+.lane.c{border-left-color:var(--bronze)}.lane.d{border-left-color:var(--ok)}
+.lane .who{font-size:14px;font-weight:600;color:var(--black)}
+.lane .who span{display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:2px}
+.lane .what{font-size:13px}
+.lane .what b{color:var(--black)}
+.lane .what .q{display:block;margin-top:4px;color:var(--muted);font-size:12.5px;font-style:italic}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+@media(max-width:860px){.steps{grid-template-columns:1fr 1fr}}
+.step{border-top:3px solid var(--mid);padding-top:10px}
+.step.s1{border-top-color:var(--rule)}.step.s2{border-top-color:var(--bronze)}
+.step.s3{border-top-color:var(--warn)}.step.s4{border-top-color:var(--ok)}
+.step b{display:block;font-size:13.5px;color:var(--black);margin-bottom:3px}
+.step .d{font-size:12px;color:var(--muted);margin-bottom:6px}
+.step p{font-size:12.5px}
+.loop{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:12px;align-items:center;margin-top:8px}
+@media(max-width:860px){.loop{grid-template-columns:1fr;gap:8px}.loop svg{display:none}}
+.loop .n{background:var(--white);border:1px solid var(--rule);padding:12px 14px}
+.loop .n b{display:block;font-size:13px;color:var(--black);margin-bottom:3px}
+.loop .n p{font-size:12px;color:var(--muted)}
+.loop .n.hot{border-color:var(--bordeaux);border-width:2px}
+.loop svg{width:26px;height:14px}
+.loop svg line{stroke:var(--mid);stroke-width:1.2}
+.loop svg path{fill:var(--mid)}
+footer{margin-top:52px;padding-top:14px;border-top:1px solid var(--black);font-size:11px;color:var(--muted);display:grid;grid-template-columns:1fr auto;gap:16px}
+footer p{max-width:94ch}
+code{font-family:var(--mono);font-size:.92em}
+@media print{.page{padding:0;max-width:none}.key,.lane,.step,.tl,tr{break-inside:avoid}h2{break-after:avoid}}
+</style>
+</head>
+<body>
+
+<div class="page">
+<div class="head">
+  <div><h1>Data Health Operating Process</h1>
+  <p class="sub">How the checks run once they are trusted, who looks at the results, and what happens when something new appears.</p></div>
+  <div class="corner"><b>Proposal</b>September 2026 · Analytics pipeline</div>
+</div>
+
+<section>
+  <div class="sec-hd"><h2>The rule the whole process rests on</h2></div>
+  <div class="key">
+    <h3>Alert on change, never on failure</h3>
+    <p>Eight checks have been failing every day since 7 April and will keep failing until the source is repaired. A process that alerts whenever a check fails would send those eight every morning, for months. Within a week nobody reads the mail, and the ninth alert, the one that matters, arrives into an inbox that has already been trained to ignore it.</p>
+    <p style="margin-top:9px">So the daily job stays silent while the picture is unchanged. It speaks only when a cluster appears that was not there yesterday, when a known cluster moves, or when something recovers. All three are computed, not judged: a cluster is a set of checks that began failing on the same day, and movement is the seven-day mean against the prior twenty-eight.</p>
+    <div class="sum">8 permanent failures &times; 250 working days = 2,000 ignorable alerts a year, or 0 if the trigger is change</div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-hd"><h2>The daily run</h2>
+    <p>After the silver refresh, before gold publishes. Publishing is never gated on the outcome: a failing check labels the data, it does not withhold it.</p></div>
+  <div class="timeline">
+    <div class="tl"><div class="t">01:00</div><div class="box">Source lands<span>bronze append</span></div></div>
+    <div class="tl"><div class="t">02:00</div><div class="box">Silver refresh<span>person resolved</span></div></div>
+    <div class="tl ours"><div class="t">02:30</div><div class="box">Checks run<span>~15 min, writes one row per check</span></div></div>
+    <div class="tl ours gate"><div class="t">02:45</div><div class="box">Compare with yesterday<span>new cluster? moved? recovered?</span></div></div>
+    <div class="tl"><div class="t">03:00</div><div class="box">Gold and semantic publish<span>always, never held</span></div></div>
+    <div class="tl ours"><div class="t">03:05</div><div class="box">Report reflects state<span>banner and badges from the results</span></div></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-hd"><h2>Who looks, at what, and when</h2>
+    <p>Four audiences, four surfaces. Nobody is asked to read a dashboard daily out of goodwill, because nobody does.</p></div>
+  <div class="lanes">
+    <div class="lane a">
+      <div class="who">Data engineer on duty<span>named rota, one person at a time</span></div>
+      <div class="what"><b>An alert, only when something changed.</b> Triage within one working day: either fix it, or record what it is. Recording the cause is what stops it alerting again, which is the incentive we want.
+        <span class="q">What is different since yesterday?</span></div>
+    </div>
+    <div class="lane b">
+      <div class="who">Data team<span>weekly, fifteen minutes</span></div>
+      <div class="what"><b>The health board, every Monday.</b> Catches slow drift that never trips a threshold, reviews the clusters still marked <i>cause not yet identified</i>, and retires the ones that have been resolved.
+        <span class="q">What is drifting, and what is still open?</span></div>
+    </div>
+    <div class="lane c">
+      <div class="who">First and second line<span>on demand, no training needed</span></div>
+      <div class="what"><b>The health board, when somebody asks.</b> Organised by published figure and written in plain words, so the answer to "is this number right today" takes under a minute and needs no knowledge of the checks.
+        <span class="q">Can this person trust the figure they are looking at?</span></div>
+    </div>
+    <div class="lane d">
+      <div class="who">Report consumers<span>passive, always visible</span></div>
+      <div class="what"><b>A banner and a badge inside the report.</b> Names the affected figures and, just as importantly, the ones that are still sound. They never open the board and never need to know it exists.
+        <span class="q">Does this affect what I came here to look at?</span></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-hd"><h2>When something new appears</h2>
+    <p>The loop closes on itself: diagnosing a problem is what silences its alert, so the incentive points the right way.</p></div>
+  <div class="loop">
+    <div class="n hot"><b>A new cluster</b><p>Checks that began failing together on a day nobody has described. Described automatically from the measurements.</p></div>
+    <svg viewBox="0 0 26 14" aria-hidden="true"><line x1="0" y1="7" x2="18" y2="7"/><path d="M17 3 L25 7 L17 11 Z"/></svg>
+    <div class="n"><b>Duty engineer triages</b><p>One working day. The description already says what moved, since when, which figures it touches, and which slice of the estate deviates.</p></div>
+    <svg viewBox="0 0 26 14" aria-hidden="true"><line x1="0" y1="7" x2="18" y2="7"/><path d="M17 3 L25 7 L17 11 Z"/></svg>
+    <div class="n"><b>Cause recorded, or fixed</b><p>A row in the cause table turns it from unidentified into known, and it stops alerting. A fix makes it disappear on its own.</p></div>
+  </div>
+  <p style="margin-top:14px;font-size:13px;max-width:84ch">A cluster that nobody records keeps alerting. That is deliberate. An unexplained defect in the numbers a business runs on should be uncomfortable until somebody explains it.</p>
+</section>
+
+<section>
+  <div class="sec-hd"><h2>Getting there</h2>
+    <p>Nothing is created in production before the same thing has run in development and pre-production. The last step exists because a monitoring system needs its own settling period.</p></div>
+  <div class="steps">
+    <div class="step s1"><b>Development</b><div class="d">2 weeks</div><p>Build against a copy. Replay March and April: the checks must flag 7 and 8 April, stay quiet on the days before, and raise nothing over Easter.</p></div>
+    <div class="step s2"><b>Pre-production</b><div class="d">4 weeks</div><p>Run daily alongside the real pipeline. Calibrate thresholds on real volume and measure how often a check fires with nothing behind it.</p></div>
+    <div class="step s3"><b>Production, silent</b><div class="d">4 weeks</div><p>Daily run, results stored, alerts to the data team only. Nothing appears in the report. This is where a noisy check gets found, before it has cost anyone's trust.</p></div>
+    <div class="step s4"><b>Production, live</b><div class="d">ongoing</div><p>Banner and badges switched on in the report. Thresholds reviewed after the first month, then quarterly.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-hd"><h2>What has to exist before day one</h2></div>
+  <table>
+    <thead><tr><th style="width:200px">Prerequisite</th><th>Why it blocks</th></tr></thead>
+    <tbody>
+      <tr><td class="k">A named duty rota<span>not "the team"</span></td><td>An alert addressed to everybody is actioned by nobody. One person at a time, with a handover.</td></tr>
+      <tr><td class="k">A public-holiday calendar</td><td>Good Friday drew 29,845 page views against roughly 220,000 on a normal Friday. Without a calendar the volume check raises a serious finding on every public holiday, for ever.</td></tr>
+      <tr><td class="k">The <code>dq</code> schema<span>dev first</span></td><td>Storing a row per day and per check is what makes trending, onset detection for every check, and alerting on change possible at all.</td></tr>
+      <tr><td class="k">A decision on the visit definition<span>BRD OP-01</span></td><td>The cookie-based count or the person-based one. It changes what the checks are guarding and it restates history either way.</td></tr>
+      <tr><td class="k">Agreement that nothing is ever held back</td><td>The whole labelling design follows from it. If a hold can be added later, the banner becomes optional and the process quietly turns into a gate.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<footer>
+  <p>Notes: 1. Volumes and dates are measurements from the production runs of 11 September 2026. 2. Requirements, severities and open points: <code>docs/BRD_data_integrity_monitoring.md</code>. 3. The checks themselves: <code>dq_checks_prod_readonly.sql</code> for the read-only edition, <code>dq_checks_draft.sql</code> for the persistent one.</p>
+  <p>Draft for discussion</p>
+</footer>
+</div>
+</body>
+</html>

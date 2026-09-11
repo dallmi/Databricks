@@ -15,14 +15,16 @@ is the monitoring that closes that gap.
 |---|---|---|
 | 1 | [`docs/data-integrity-checks.html`](docs/data-integrity-checks.html) | Executive one-pager. The incident and the ten signals that would have caught it. Open in a browser. |
 | 2 | [`docs/integrity-checks-by-example.html`](docs/integrity-checks-by-example.html) | Every check on a worked example, healthy beside broken, with a plain-language explanation. Open in a browser. |
-| 3 | [`docs/BRD_data_integrity_monitoring.md`](docs/BRD_data_integrity_monitoring.md) | The requirements: goals, scope, 28 numbered requirements, operating model, acceptance criteria, open points. |
-| 4 | [`docs/data-integrity-checks.md`](docs/data-integrity-checks.md) | The full catalogue: every check with formula, fields, layer, threshold and the measured results. |
-| 5 | [`docs/dq_blocks_engineering_notes.md`](docs/dq_blocks_engineering_notes.md) | Block by block: what each part of the SQL intends, what the query does, and which decisions are non-obvious. |
-| 6 | [`dq_checks_prod_readonly.sql`](dq_checks_prod_readonly.sql) | The checks as a read-only notebook. Creates nothing, safe to run against production today. Cell 10b renders a plain-language health board for first- and second-line support. |
-| 7 | [`dq_checks_draft.sql`](dq_checks_draft.sql) | The persistent edition, for Dev then pre-prod then production. |
+| 3 | [`docs/data-health-operating-process.html`](docs/data-health-operating-process.html) | How it runs day to day once trusted: the daily timeline, who reads what and when, and the path from development to production. Open in a browser. |
+| 4 | [`docs/BRD_data_integrity_monitoring.md`](docs/BRD_data_integrity_monitoring.md) | The requirements: goals, scope, 28 numbered requirements, operating model, acceptance criteria, open points. |
+| 5 | [`docs/data-integrity-checks.md`](docs/data-integrity-checks.md) | The full catalogue: every check with formula, fields, layer, threshold and the measured results. |
+| 6 | [`docs/dq_blocks_engineering_notes.md`](docs/dq_blocks_engineering_notes.md) | Block by block: what each part of the SQL intends, what the query does, and which decisions are non-obvious. |
+| 7 | [`dq_checks_prod_readonly.sql`](dq_checks_prod_readonly.sql) | The checks as a read-only notebook. Creates nothing, safe to run against production today. Cell 10b renders a plain-language health board for first- and second-line support. |
+| 8 | [`dq_checks_draft.sql`](dq_checks_draft.sql) | The persistent edition, for Dev then pre-prod then production. |
 
-A reviewer with ten minutes should read 1 and 2. A reviewer deciding whether to
-build this should read 3. Whoever implements it lives in 5, 6 and 7.
+A reviewer with ten minutes should read 1 and 2. Whoever has to run this in
+production should read 3. A reviewer deciding whether to build it should read 4.
+Whoever implements it lives in 6, 7 and 8.
 
 ## The two SQL editions
 

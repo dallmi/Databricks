@@ -207,6 +207,8 @@ and each hop is reconciled.
 | FR-RSP-13 | Each group is described from measurements alone: what moved, since when, which figures it touches, which control figures did not move, and which slice of the estate deviates | Must |
 | FR-RSP-14 | A cause is stored as data, not code. A group with no recorded cause is labelled as such rather than left unexplained | Must |
 | FR-RSP-15 | No component may assert a cause it has not been given. Generated text may rephrase measurements, never explain them | Must |
+| FR-RSP-16 | **Alerts fire on change, not on failure.** A cluster appearing, moving or recovering triggers a notification; a cluster failing at an unchanged level does not | Must |
+| FR-RSP-17 | Alerts address a named person on a duty rota, never a group mailbox | Must |
 | FR-RSP-06 | An info-level event annotates the day without notifying anyone | Should |
 | FR-RSP-07 | Row-level rules warn and keep. No expectation may drop or reject a row | Must |
 
@@ -449,6 +451,8 @@ answers "is the data sound right now", not "when did this start".
 | 1 | 1–2 | B1, B3, B4, A1, A2, A4, A6, C3; result table; one alert; holiday calendar. **Built in Dev, promoted through pre-prod** | The eight checks that catch an April-class defect on day one |
 | 2 | 3–4 | B2, B5, B7, C1, C2, C5, D1, D5, D8, S1–S3 | Full identity family, silver family, row-level expectations, report tie-out, data-health page |
 | 3 | 5–6 | Remaining A, C, D checks; G1–G3; banner driven by `dq.v_affected_dates`; data-health page | Operating model complete |
+| 4 | 7–10 | Four weeks running in production **silently**: results stored, alerts to the data team only, nothing in the report | A noisy check is found before it costs anyone's trust |
+| 5 | 11+ | Banner and badges switched on for report consumers; thresholds reviewed after the first month, then quarterly | Live |
 
 ---
 
@@ -500,6 +504,7 @@ answers "is the data sound right now", not "when did this start".
 
 | Document | Purpose |
 |---|---|
+| [`data-health-operating-process.html`](data-health-operating-process.html) | The operating process: daily timeline, the four audiences, the loop for an unexplained defect, and the promotion path |
 | [`data-integrity-checks.md`](data-integrity-checks.md) | The full check catalogue: formulas, fields, thresholds, measured results |
 | [`dq_blocks_engineering_notes.md`](dq_blocks_engineering_notes.md) | Block-by-block engineering companion to the SQL |
 | [`../dq_checks_draft.sql`](../dq_checks_draft.sql) | The implementation draft |
