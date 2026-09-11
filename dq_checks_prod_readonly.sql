@@ -349,6 +349,9 @@ SELECT
   CASE
     WHEN b.value IS NULL                                                                THEN 'info'
     WHEN b.n_hist < 4                                                                   THEN 'info'
+    -- flat zero with a flat-zero baseline: there is nothing to compare against,
+    -- so the honest verdict is "cannot judge", not "warning"
+    WHEN b.value = 0 AND COALESCE(b.baseline, 0) = 0 AND COALESCE(b.mad, 0) = 0        THEN 'info'
     WHEN d.abs_block_low  IS NOT NULL AND b.value <= d.abs_block_low                    THEN 'critical'
     WHEN d.abs_block_high IS NOT NULL AND b.value >= d.abs_block_high                   THEN 'critical'
     WHEN d.rel_block_pct  IS NOT NULL AND ABS(b.value - b.baseline) / NULLIF(b.baseline,0) > d.rel_block_pct THEN 'critical'
@@ -365,7 +368,12 @@ SELECT
   -- Has this moved lately, or has it been sitting at this value for weeks? A
   -- failing check that has not moved is a known condition, not today's news, and
   -- a first-line responder needs to tell the two apart before escalating.
-  CASE WHEN b.step_pct IS NULL THEN 'unknown'
+  -- A step percentage computed from a base of zero is arithmetic noise, not
+  -- movement. D4 measured 0.0 against a prior mean of 0.0 and still reported
+  -- -17.8 %, which put an artefact at the top of the board as the only thing
+  -- that had "changed recently". Anything with no baseline to move away from is
+  -- reported as unknown instead.
+  CASE WHEN b.step_pct IS NULL OR ABS(COALESCE(b.mean_prior_28d, 0)) < 1e-9 THEN 'unknown'
        WHEN ABS(b.step_pct) > 0.10 THEN 'moving' ELSE 'stable' END AS trend
 FROM dq_metric_baseline b
 JOIN dq_check_def d ON d.metric = b.metric;
@@ -721,6 +729,35 @@ FIGURES = [   # order they appear on the board; the first three are what most pe
  ("clicks",           "Clicks"),
 ]
 
+# Twelve red rows read as twelve problems. They are not. On the first production
+# run eight of the twelve came from one known incident, and the rest from three
+# separate things. A responder who sees twelve panics or stops looking; one who
+# sees "four issues, one already known" acts correctly. So findings are grouped
+# by cause, and an unlisted check appears on its own as something new.
+CAUSE = {
+ "B1":"april", "B2":"april", "B3":"april", "B4":"april", "B5":"april",
+ "B6":"april", "B7":"april", "D1d":"april",
+ "A5":"doublefire", "C8":"doublefire",
+ "C6":"pagelookup",
+ "D4":"tagging",
+}
+CAUSE_INFO = {
+ "april": ("Known incident: the browser identity stopped persisting",
+           "Since 7 April 2026 every page view arrives with a fresh browser and session "
+           "identity, so a view counts as a visit. Under investigation with the supplier. "
+           "Page views and unique visitors are unaffected, because visitors are counted on "
+           "the employee number rather than the browser."),
+ "doublefire": ("The same page load is recorded twice",
+           "About one page view in eleven is the same page firing twice within a second, "
+           "which overstates page views and shortens measured reading time. Separate from "
+           "the April incident and long standing."),
+ "pagelookup": ("Some pages are missing from the reference list",
+           "Roughly one page view in eight cannot be matched to the page inventory by its "
+           "address, so page-level breakdowns are incomplete. Employee lookups are fine."),
+ "tagging": ("Page views carry no campaign tag",
+           "Campaign attribution cannot be computed from this stream while the tag is absent."),
+}
+
 RANK = {"critical": 3, "warning": 2, "info": 1, "ok": 0}
 CHECK_DAY = date.today() - timedelta(days=1)
 
@@ -739,10 +776,22 @@ for a in affects:
 def worst(ids):
     return max((by_check[i][0] for i in ids), key=lambda s: RANK.get(s, 0)) if ids else "ok"
 
-COL = {"critical": ("#BD000C", "#FBE6E7", "Do not rely on this"),
-       "warning":  ("#E4A911", "#FDF6E3", "Read with care"),
-       "info":     ("#7A7870", "#ECEBE4", "Not measurable today"),
-       "ok":       ("#6F7A1A", "#F1F3E7", "Sound")}
+# Verdict wording depends on severity AND on whether anything moved. A figure
+# that has been wrong at the same level for weeks needs a different sentence from
+# one that broke last night: the first is a caveat to work around, the second is
+# an incident. Saying "do not rely on this" about both trains people to ignore it.
+COL = {"critical": ("#BD000C", "#FBE6E7"),
+       "warning":  ("#E4A911", "#FDF6E3"),
+       "info":     ("#7A7870", "#ECEBE4"),
+       "ok":       ("#6F7A1A", "#F1F3E7")}
+VERDICT = {("critical", True):  "Broke recently",
+           ("critical", False): "Known issue, long standing",
+           ("warning",  True):  "Changed, worth a look",
+           ("warning",  False): "Read with care",
+           ("info",     True):  "Cannot be judged",
+           ("info",     False): "Cannot be judged",
+           ("ok",       True):  "Sound",
+           ("ok",       False): "Sound"}
 
 # ---- figure tiles -----------------------------------------------------------
 tiles = ""
@@ -751,15 +800,24 @@ for key, name in FIGURES:
     st  = worst(ids)
     bad = sorted([i for i in ids if by_check[i][0] in ("critical", "warning")],
                  key=lambda i: -RANK[by_check[i][0]])
-    fg, bg, verdict = COL[st]
     moving = [i for i in bad if by_check[i][2] == "moving"]
-    detail = ("nothing wrong with it" if not bad
-              else "; ".join(LABELS.get(i, (i, ""))[0].lower() for i in bad[:3])
-                   + (f" and {len(bad)-3} more" if len(bad) > 3 else ""))
-    if bad and not moving:
-        detail += '<div style="margin-top:5px;font-size:11px;color:#7A7870">known condition, not moving</div>'
-    elif moving:
-        detail += f'<div style="margin-top:5px;font-size:11px;color:{fg};font-weight:600">changed recently</div>'
+    fg, bg = COL[st]
+    verdict = VERDICT[(st, bool(moving))]
+    # A driver whose plain name is the figure's own name adds nothing; drop it.
+    names = [LABELS.get(i, (i, ""))[0] for i in bad]
+    names = [n for n in names if n.lower() != name.lower()]
+    if st == "info":
+        detail = "no measurement available today"
+    elif not bad:
+        detail = "nothing wrong with it"
+    else:
+        detail = ("; ".join(n.lower() for n in names[:3]) or "see the detail below")
+        if len(names) > 3:
+            detail += f" and {len(names)-3} more"
+    if bad and moving:
+        detail += f'<div style="margin-top:5px;font-size:11px;color:{fg};font-weight:600">changed in the last week</div>'
+    elif bad:
+        detail += '<div style="margin-top:5px;font-size:11px;color:#7A7870">unchanged for weeks, already known</div>'
     tiles += (f'<div style="background:{bg};border-top:3px solid {fg};padding:12px 14px;">'
               f'<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:{fg};font-weight:700">{verdict}</div>'
               f'<div style="font-size:16px;font-weight:600;color:#000;margin:3px 0 5px">{name}</div>'
@@ -768,30 +826,58 @@ for key, name in FIGURES:
 # ---- what needs attention ---------------------------------------------------
 attention = sorted([c for c in by_check if by_check[c][0] in ("critical", "warning")],
                    key=lambda c: (-RANK[by_check[c][0]], c))
-items = ""
+# group the findings by cause, worst cause first
+groups = {}
 for c in attention:
-    st, note, trend = by_check[c]
-    chip = ('<span style="background:#FBE6E7;color:#BD000C;font-size:10px;font-weight:700;padding:2px 6px;margin-left:6px">CHANGED RECENTLY</span>'
-            if trend == "moving" else
-            '<span style="background:#ECEBE4;color:#7A7870;font-size:10px;padding:2px 6px;margin-left:6px">ongoing</span>'
-            if trend == "stable" else "")
-    fg, bg, _ = COL[st]
-    title, question = LABELS.get(c, (c, ""))
-    figs = ", ".join(dict(FIGURES).get(f, f) for f in sorted({a["figure"] for a in affects if a["check_id"] == c})) or "—"
-    items += (f'<tr><td style="padding:9px 12px 9px 0;border-bottom:1px solid #ECEBE4;white-space:nowrap;vertical-align:top">'
-              f'<span style="background:{fg};color:#fff;font-size:10px;font-weight:700;padding:2px 7px;letter-spacing:.05em">{st.upper()}</span></td>'
-              f'<td style="padding:9px 12px 9px 0;border-bottom:1px solid #ECEBE4;vertical-align:top">'
-              f'<div style="font-size:14px;font-weight:600;color:#000">{title}{chip}</div>'
-              f'<div style="font-size:12px;color:#7A7870;margin-top:2px">{question}</div>'
-              f'<div style="font-size:11px;color:#8E8D83;margin-top:4px;font-family:ui-monospace,Menlo,monospace">{note}</div></td>'
-              f'<td style="padding:9px 0;border-bottom:1px solid #ECEBE4;font-size:12px;color:#5A5D5C;vertical-align:top;white-space:nowrap">{figs}'
-              f'<div style="font-size:10px;color:#B8B3A2;margin-top:3px">check {c}</div></td></tr>')
+    groups.setdefault(CAUSE.get(c, f"other:{c}"), []).append(c)
+order = sorted(groups, key=lambda g: (-max(RANK[by_check[c][0]] for c in groups[g]), -len(groups[g])))
+
+items = ""
+for g in order:
+    members = sorted(groups[g], key=lambda c: (-RANK[by_check[c][0]], c))
+    g_st  = max((by_check[c][0] for c in members), key=lambda s: RANK[s])
+    g_mv  = any(by_check[c][2] == "moving" for c in members)
+    gfg, gbg = COL[g_st]
+    if g in CAUSE_INFO:
+        g_title, g_text = CAUSE_INFO[g]
+    else:
+        only = members[0]
+        g_title, g_text = LABELS.get(only, (only, ""))[0], LABELS.get(only, ("", ""))[1]
+    g_figs = sorted({dict(FIGURES).get(a["figure"], a["figure"])
+                     for a in affects if a["check_id"] in members})
+    items += (f'<tr><td colspan="3" style="padding:16px 0 6px">'
+              f'<div style="border-left:4px solid {gfg};background:{gbg};padding:11px 14px">'
+              f'<div style="font-size:15px;font-weight:600;color:#000">{g_title}'
+              f'{"" if not g_mv else f" <span style=\'background:{gfg};color:#fff;font-size:10px;font-weight:700;padding:2px 6px\'>MOVED THIS WEEK</span>"}</div>'
+              f'<div style="font-size:12.5px;color:#5A5D5C;margin-top:4px;max-width:88ch">{g_text}</div>'
+              f'<div style="font-size:11px;color:#7A7870;margin-top:6px">'
+              f'{len(members)} check{"s" if len(members)!=1 else ""} &middot; affects {", ".join(g_figs) if g_figs else "nothing published"}</div>'
+              f'</div></td></tr>')
+    for c in members:
+        st, note, trend = by_check[c]
+        chip = ('<span style="background:#FBE6E7;color:#BD000C;font-size:10px;font-weight:700;padding:2px 6px;margin-left:6px">CHANGED RECENTLY</span>'
+                if trend == "moving" else
+                '<span style="background:#ECEBE4;color:#7A7870;font-size:10px;padding:2px 6px;margin-left:6px">ongoing</span>'
+                if trend == "stable" else
+                '<span style="background:#fff;border:1px solid #CCCABC;color:#8E8D83;font-size:10px;padding:1px 6px;margin-left:6px">trend not tracked</span>')
+        fg, bg = COL[st]
+        title, question = LABELS.get(c, (c, ""))
+        figs = ", ".join(dict(FIGURES).get(f, f) for f in sorted({a["figure"] for a in affects if a["check_id"] == c})) or "—"
+        items += (f'<tr><td style="padding:9px 12px 9px 24px;border-bottom:1px solid #ECEBE4;white-space:nowrap;vertical-align:top">'
+                  f'<span style="background:{fg};color:#fff;font-size:10px;font-weight:700;padding:2px 7px;letter-spacing:.05em">{st.upper()}</span></td>'
+                  f'<td style="padding:9px 12px 9px 0;border-bottom:1px solid #ECEBE4;vertical-align:top">'
+                  f'<div style="font-size:14px;font-weight:600;color:#000">{title}{chip}</div>'
+                  f'<div style="font-size:12px;color:#7A7870;margin-top:2px">{question}</div>'
+                  f'<div style="font-size:11px;color:#8E8D83;margin-top:4px;font-family:ui-monospace,Menlo,monospace">{note}</div></td>'
+                  f'<td style="padding:9px 0;border-bottom:1px solid #ECEBE4;font-size:12px;color:#5A5D5C;vertical-align:top;white-space:nowrap">{figs}'
+                  f'<div style="font-size:10px;color:#B8B3A2;margin-top:3px">check {c}</div></td></tr>')
 
 n_crit  = sum(1 for c in by_check.values() if c[0] == "critical")
 n_warn  = sum(1 for c in by_check.values() if c[0] == "warning")
 n_ok    = sum(1 for c in by_check.values() if c[0] == "ok")
 n_moving = sum(1 for c in by_check.values() if c[0] in ("critical","warning") and c[2] == "moving")
 sound  = [n for k, n in FIGURES if worst(fig_checks.get(k, [])) == "ok"]
+unknown = [n for k, n in FIGURES if worst(fig_checks.get(k, [])) == "info"]
 
 if n_moving: hfg, hbg, headline = "#BD000C", "#FBE6E7", f"{n_moving} changed recently"
 elif n_crit: hfg, hbg, headline = "#BD000C", "#FBE6E7", f"{n_crit} serious, none new today"
@@ -809,19 +895,22 @@ displayHTML(f"""
   <div style="margin-top:22px;font-size:15px;font-weight:600;color:#000">Can I trust this figure today?</div>
   <div style="font-size:12px;color:#7A7870;margin:3px 0 12px">
     {len(sound)} of {len(FIGURES)} figures are sound: {', '.join(sound) if sound else 'none'}.
+    {('Could not be judged today: ' + ', '.join(unknown) + '.') if unknown else ''}
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px">{tiles}</div>
 
   <div style="margin-top:28px;font-size:15px;font-weight:600;color:#000">What needs attention</div>
   <div style="font-size:12px;color:#7A7870;margin:3px 0 10px">
-    Ordered by severity. <b>Changed recently</b> is the one that needs acting on today; <b>ongoing</b> has been
-    at this level for weeks and is already known. The grey line is the raw measurement, for whoever picks it up next.
+    Grouped by cause, worst first, because several checks usually point at one problem.
+    <b>Changed recently</b> is what needs acting on today; <b>ongoing</b> has been at this level for weeks
+    and is already known. The grey line is the raw measurement, for whoever picks it up next.
   </div>
   {'<table style="width:100%;border-collapse:collapse">' + items + '</table>' if items
    else '<div style="background:#F1F3E7;border-left:3px solid #6F7A1A;padding:12px 14px;font-size:13px">Nothing is failing. All ' + str(n_ok) + ' checks passed.</div>'}
 
   <div style="margin-top:22px;padding-top:10px;border-top:1px solid #ECEBE4;font-size:11px;color:#8E8D83">
-    {n_crit} serious &middot; {n_warn} to look at &middot; {n_ok} passed &middot; {n_moving} changed recently, out of {len(by_check)} checks across bronze, silver and gold.
+    {n_crit} serious &middot; {n_warn} to look at &middot; {n_ok} passed &middot; {n_moving} changed recently,
+    out of {len(by_check)} checks across bronze, silver and gold, tracing back to {len(order)} distinct cause{'s' if len(order) != 1 else ''}.
     Nothing was written: this notebook creates only temporary views. Full detail in the grid above.
   </div>
 </div>

@@ -421,6 +421,14 @@ to three figures turns three tiles red at once. That is the blanket-banner
 problem from BRD §8.0 reappearing one level down, so the mapping in
 `dq_check_affects` has to stay narrow and honest.
 
+**Several checks usually mean one problem.** The first production run produced
+twelve findings that traced back to four causes, and eight of the twelve were the
+one incident already under investigation. Twelve red rows read as twelve
+problems; a responder either panics or stops looking. The board therefore groups
+findings by cause, states what the cause is in two sentences, and lists the
+checks underneath. A check with no cause assigned appears on its own, which is
+the correct treatment for something genuinely new.
+
 **New matters more than bad.** A check failing at the same level for weeks is a
 known condition; one that moved this week is today's news. The board separates
 them with an *ongoing* or *changed recently* chip, derived from the seven-day
