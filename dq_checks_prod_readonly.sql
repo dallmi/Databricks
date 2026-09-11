@@ -37,6 +37,58 @@
 
 
 -- ----------------------------------------------------------------------------
+-- CELL 0 — PRE-FLIGHT. Run this first. It reads nothing but schemas.
+--
+-- Every column this notebook touches, checked in one go. Two runs were lost to
+-- single wrong column names taken from documentation rather than from the
+-- workspace: `user_gpn` which is really `GPN`, and `referenceapplicationid`
+-- which is really `referrerapplicationid`. This cell surfaces all of them at
+-- once instead of one failure per attempt.
+--
+-- If anything prints as MISSING, fix the name in the cells below before running
+-- them, and correct docs/dq_blocks_engineering_notes.md too — the table cards
+-- were transcribed from photographs and are still wrong in the same places.
+-- ----------------------------------------------------------------------------
+%python
+REQUIRED = {
+  "sharepoint_bronze.pageviews": [
+      "id","timestamp","gmdp_timestamp","ingestiontime","session_Id","user_Id",
+      "user_AuthenticatedId","GPN","Email","pageId","PageURL","GICTrackingID",
+      "sdkVersion","itemCount","iKey","appId","client_Browser","client_OS","client_Type"],
+  "sharepoint_bronze.customevents": ["timestamp","name","user_Id","session_Id","GPN"],
+  "sharepoint_bronze.pages":        ["PageURL"],
+  "sharepoint_silver.pageviewed":   ["timestamp","contactId","visitorId","sessionId",
+                                     "marketingPageId","visitorReturningStatus"],
+  "sharepoint_gold.pbi_db_interactions_metrics": [
+      "visitdatekey","marketingpageid","viewingcontactid","referrerapplicationid",
+      "views","visits","durationsum","durationavg"],
+  "imep_bronze.tbl_hr_employee":    ["WORKER_ID"],
+}
+
+problems = 0
+for table, cols in REQUIRED.items():
+    try:
+        have = {f.name.lower() for f in spark.table(table).schema.fields}
+    except Exception as e:
+        problems += 1
+        print(f"UNREADABLE  {table}  ->  {type(e).__name__}: {str(e)[:110]}")
+        continue
+    missing = [c for c in cols if c.lower() not in have]
+    if missing:
+        problems += len(missing)
+        print(f"MISSING     {table}")
+        for m in missing:
+            near = sorted(h for h in have if m.lower()[:5] in h or h[:5] in m.lower())[:4]
+            print(f"              {m:<24} closest: {near if near else 'nothing similar'}")
+    else:
+        print(f"ok          {table}  ({len(cols)} columns)")
+
+print()
+print("PRE-FLIGHT CLEAR — run cells 1 to 11" if problems == 0
+      else f"{problems} problem(s). Fix the names above before running cell 1.")
+
+
+-- ----------------------------------------------------------------------------
 -- CELL 1 — the working slice (70 days), then cache it
 -- ----------------------------------------------------------------------------
 %sql
@@ -508,7 +560,7 @@ s2 AS (
 ),
 -- G1 grain uniqueness on gold
 g1k AS (
-  SELECT marketingpageid, viewingcontactid, referenceapplicationid, COUNT(*) AS n
+  SELECT marketingpageid, viewingcontactid, referrerapplicationid, COUNT(*) AS n
   FROM sharepoint_gold.pbi_db_interactions_metrics gm JOIN p ON gm.visitdatekey = date_format(p.d, 'yyyyMMdd')
   GROUP BY 1,2,3
 ),

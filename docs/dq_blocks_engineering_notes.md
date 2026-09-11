@@ -45,6 +45,20 @@ breaks several blocks.
 | Page | `pageId` | **INT**, while the inventory keys on a GUID. BRD OP-04. |
 | Ingestion | `gmdp_timestamp`, `ingestiontime` | Two stamps, relationship unconfirmed. BRD OP-05. |
 
+### Gold columns, corrected against the workspace
+
+| Documented as | Actually | Found by |
+|---|---|---|
+| `referenceapplicationid` | **`referrerapplicationid`** | Cell 9 failing on G1, 2026-09-11 |
+| `commentss` | **`comments`** | Block 0 probe |
+| `marketingPageId` | **`marketingpageid`**, lowercase | Block 0 probe |
+
+The April table cards were transcribed from photographs of Genie output, so a
+column name taken from them and not from a live `DESCRIBE` is a guess. Block 0
+probes the columns it was told to look for; it does not catch a name nobody
+thought to ask about. When a check fails on an unknown column, correct it here
+as well as in the SQL, because the table card is still wrong.
+
 ---
 
 ## Run order

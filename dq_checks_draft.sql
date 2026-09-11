@@ -1227,11 +1227,11 @@ FROM dq.sv_daily sv JOIN params p ON sv.view_date = p.check_date CROSS JOIN base
 -- inconsistent row makes visits and duration disagree with views.
 -- ----------------------------------------------------------------------------
 -- G1 — grain uniqueness. Documented PK: marketingpageid x visitdatekey x
--- viewingcontactid x referenceapplicationid. A duplicate doubles the KPI.
+-- viewingcontactid x referrerapplicationid. A duplicate doubles the KPI.
 INSERT INTO dq.dq_check_result
 WITH params AS (SELECT date_sub(current_date(), 1) AS check_date),
 g AS (
-  SELECT marketingpageid, viewingcontactid, referenceapplicationid, COUNT(*) AS n
+  SELECT marketingpageid, viewingcontactid, referrerapplicationid, COUNT(*) AS n
   FROM   sharepoint_gold.pbi_db_interactions_metrics gm JOIN params p
          ON gm.visitdatekey = date_format(p.check_date, 'yyyyMMdd')
   GROUP  BY 1, 2, 3
