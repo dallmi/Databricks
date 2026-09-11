@@ -2,7 +2,12 @@
 
 **Audience:** Head Engineer and anyone maintaining the checks
 **Companion to:** [`BRD_data_integrity_monitoring.md`](BRD_data_integrity_monitoring.md)
-**Implements:** [`../dq_checks_draft.sql`](../dq_checks_draft.sql)
+**Implements:** [`../dq_checks_draft.sql`](../dq_checks_draft.sql) — the persistent
+edition, for Dev then pre-prod then PROD
+**Read-only twin:** [`../dq_checks_prod_readonly.sql`](../dq_checks_prod_readonly.sql)
+— identical logic using temporary views only, safe to run on PROD today. Same
+conventions, same thresholds; it writes nothing and keeps no history, so it
+answers "is the data sound right now" rather than "when did this start".
 **Date:** 2026-09-11 · **Status:** Draft, blocks 0–0c executed, 1–9 not yet run
 
 Each section answers three questions in order: what the block is trying to

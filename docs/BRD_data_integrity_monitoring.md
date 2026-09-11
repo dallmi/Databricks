@@ -221,6 +221,8 @@ and each hop is reconciled.
 | NFR-02 | Range predicates must remain file-skippable; no predicate wrapped in `CAST` | Must |
 | NFR-03 | Compatible with the Hive Metastore; `information_schema` is not available | Must |
 | NFR-04 | Read-only against source tables; writes confined to the `dq` schema | Must |
+| NFR-07 | A read-only edition must exist that runs anywhere without creating a single persistent object | Must |
+| NFR-08 | No object is created in PROD before the same change has run in Dev and pre-prod | Must |
 | NFR-05 | Total daily runtime under 15 minutes | Should |
 | NFR-06 | No employee number, e-mail or page-level personal data in an alert payload | Must |
 
@@ -408,12 +410,37 @@ a prerequisite for phase 1, not an enhancement.
 
 ---
 
+## 10.4 Environments and the read-only edition
+
+Nothing is created in PROD before it has been through Dev and pre-prod. Until
+then the same checks run in a read-only edition that persists nothing, so the
+current state of PROD can still be observed without changing it.
+
+| Edition | File | Creates | Where |
+|---|---|---|---|
+| Read-only | [`../dq_checks_prod_readonly.sql`](../dq_checks_prod_readonly.sql) | Temporary views only, session-scoped, plus one cached slice released at the end | PROD, today |
+| Persistent | [`../dq_checks_draft.sql`](../dq_checks_draft.sql) | A `dq` schema with result and definition tables | Dev, then pre-prod, then PROD |
+
+The read-only edition issues no `CREATE SCHEMA`, `CREATE TABLE`, `INSERT`,
+`MERGE`, `DELETE` or `UPDATE`. A temporary view is a query definition held in one
+session; it is invisible to others and disappears on detach. `CACHE TABLE`
+materialises into cluster memory and spilled local disk, never into the
+lakehouse, and the final cell releases it.
+
+**What the read-only edition cannot do**, and why the persistent one is still the
+target: no history, so no trending and no baseline drift detection over time; no
+alerting, since there is no table for an alert to watch; no hands-off Health
+Overview, because someone has to run the notebook; and no record of what was
+judged when, which is exactly the evidence an incident needs afterwards. It
+answers "is the data sound right now", not "when did this start".
+
 ## 11. Delivery plan
 
 | Phase | Weeks | Content | Outcome |
 |---|---|---|---|
 | 0 | — | Blocks 0, 0b, 0c: probe columns, calibrate, date the incident | **Complete, 2026-09-11** |
-| 1 | 1–2 | B1, B3, B4, A1, A2, A4, A6, C3; result table; one alert; holiday calendar | The eight checks that catch an April-class defect on day one |
+| 0b | — | Read-only edition runnable against PROD, persisting nothing | **Available now** — observe PROD without changing it |
+| 1 | 1–2 | B1, B3, B4, A1, A2, A4, A6, C3; result table; one alert; holiday calendar. **Built in Dev, promoted through pre-prod** | The eight checks that catch an April-class defect on day one |
 | 2 | 3–4 | B2, B5, B7, C1, C2, C5, D1, D5, D8, S1–S3 | Full identity family, silver family, row-level expectations, report tie-out, data-health page |
 | 3 | 5–6 | Remaining A, C, D checks; G1–G3; banner driven by `dq.v_affected_dates`; data-health page | Operating model complete |
 
