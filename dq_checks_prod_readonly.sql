@@ -19,7 +19,9 @@
 --     disk, never into the lakehouse. The last cell releases it.
 --
 -- HOW TO RUN
---   Cells 1 to 9 in order, then cell 10 for the result. Cell 11 cleans up.
+--   Cell 0 first: it checks every column against the live schema and costs
+--   nothing. Then cells 1 to 9 in order, cell 10 for the result, cell 11 to
+--   clean up. Cell 11 is safe to run at any point, including after a failure.
 --   Each cell is one statement. To run the lot from a single cell instead, see
 --   the note at the foot of the file.
 --
@@ -630,18 +632,79 @@ ORDER BY severity, r.check_id;
 
 
 -- ----------------------------------------------------------------------------
--- CELL 11 — cleanup. Optional: detaching the notebook does the same thing.
+-- CELL 11 — CLEANUP. Releases the cache, drops every temporary view, and proves
+-- that nothing persistent was left behind.
+--
+-- Detaching the notebook would do the same thing on its own, but on a shared
+-- production cluster the cache holds memory until then, and "it will sort itself
+-- out eventually" is a poor thing to rely on. Run this when you are done.
+--
+-- Safe to run at any point, including after a failed cell or twice in a row.
+-- Every step is individually guarded, so one missing object does not stop the
+-- rest, and dropping something that is not there is not an error.
 -- ----------------------------------------------------------------------------
-%sql
-UNCACHE TABLE dq_pv_window;
+%python
+# Reverse creation order, so dependents go before the views they read.
+VIEWS = [
+    "dq_r_explicit", "dq_r_corridor",
+    "dq_check_affects", "dq_check_def",
+    "dq_metric_baseline", "dq_metric_daily",
+    "dq_sv_daily", "dq_gold_daily", "dq_pv_daily",
+    "dq_pv_window",
+]
 
--- DROP VIEW IF EXISTS is not needed for temporary views; they are session-scoped
--- and vanish on detach. Run these only if you want the session clean immediately:
--- DROP VIEW IF EXISTS dq_pv_window; DROP VIEW IF EXISTS dq_pv_daily;
--- DROP VIEW IF EXISTS dq_gold_daily; DROP VIEW IF EXISTS dq_sv_daily;
--- DROP VIEW IF EXISTS dq_metric_daily; DROP VIEW IF EXISTS dq_metric_baseline;
--- DROP VIEW IF EXISTS dq_check_def; DROP VIEW IF EXISTS dq_check_affects;
--- DROP VIEW IF EXISTS dq_r_corridor; DROP VIEW IF EXISTS dq_r_explicit;
+# --- 1. prove that everything about to be dropped is temporary ---------------
+# A temporary view exists only in this session. If anything below reports
+# PERSISTENT, stop: this notebook was never meant to create such a thing, and it
+# would need removing deliberately rather than by a cleanup cell.
+existing = {t.name: t.isTemporary for t in spark.catalog.listTables() if t.name in VIEWS}
+persistent = [n for n, is_temp in existing.items() if not is_temp]
+if persistent:
+    print("STOP — these are NOT temporary and will not be touched:", persistent)
+else:
+    print(f"all {len(existing)} object(s) found are temporary, safe to drop")
+
+# --- 2. release the cache ----------------------------------------------------
+try:
+    if spark.catalog.isCached("dq_pv_window"):
+        spark.catalog.uncacheTable("dq_pv_window")
+        print("uncached  dq_pv_window")
+    else:
+        print("uncached  dq_pv_window (was not cached)")
+except Exception as e:
+    print(f"uncached  dq_pv_window — skipped ({type(e).__name__})")
+
+# --- 3. drop the views -------------------------------------------------------
+dropped, failed = [], []
+for v in VIEWS:
+    if v in persistent:
+        continue
+    try:
+        spark.sql(f"DROP VIEW IF EXISTS {v}")
+        dropped.append(v)
+    except Exception as e:
+        failed.append((v, f"{type(e).__name__}: {str(e)[:80]}"))
+print(f"dropped   {len(dropped)} view(s): {', '.join(dropped) if dropped else 'none'}")
+for v, err in failed:
+    print(f"FAILED    {v} -> {err}")
+
+# --- 4. prove the session is clean -------------------------------------------
+left = sorted(t.name for t in spark.catalog.listTables() if t.name.startswith("dq_"))
+still_cached = []
+try:
+    still_cached = [v for v in VIEWS if spark.catalog.isCached(v)]
+except Exception:
+    pass   # isCached raises once the view is gone, which is the outcome we want
+
+print()
+if not left and not still_cached and not failed and not persistent:
+    print("CLEAN — no dq_ objects remain in the session and nothing is cached.")
+    print("Nothing was written to storage or the metastore at any point.")
+else:
+    print("NOT CLEAN:")
+    if left:         print("  views remaining :", left)
+    if still_cached: print("  still cached    :", still_cached)
+    if persistent:   print("  persistent      :", persistent, "<- investigate, this notebook does not create these")
 
 
 -- ============================================================================
@@ -654,7 +717,7 @@ UNCACHE TABLE dq_pv_window;
 --   for s in stmts[:-1]:
 --       spark.sql(s)
 --   display(spark.sql(stmts[-1]))
---   spark.sql("UNCACHE TABLE dq_pv_window")
+--   # then run cell 11 as-is; it is already Python and cleans up on its own
 --
 -- WHAT TO DO WITH THE OUTPUT
 --   Export the grid to CSV from the result toolbar if you want a record. Nothing
