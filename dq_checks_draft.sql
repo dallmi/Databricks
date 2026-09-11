@@ -279,18 +279,27 @@ CREATE OR REPLACE TABLE dq.check_def (
 INSERT INTO dq.check_def VALUES
   ('A1','completeness','bronze','views',                 NULL, NULL, NULL, NULL, 0.25, 0.50, NULL, NULL, 'daily page views vs same-weekday 8-week median'),
   ('A4','completeness','staging','sampling_factor',      NULL, NULL, 1.001, 1.001, NULL, NULL, NULL, NULL, 'sum(itemCount)/count(*) must be 1.00'),
-  -- MEASURED, not guessed. Block 0b, 2-15 March 2026 (2.86M views, pre-incident):
-  --   views_per_session 2.231 | browser_ids_per_person 1.71 | single-view share 0.584
-  --   identified_share 1.000  | 115,298 people behind 197,107 browser identities
-  -- For 13-26 April the same numbers read 1.062 / 20.004 / 0.939, and the most
-  -- recent fortnight 1.157 / 17.342 / 0.888 — improved but far from healthy.
-  -- These thresholds describe HEALTHY data, so B1, B4 and B5 fire today by design
-  -- and keep firing until the source is fixed. Do not retune them to the broken
-  -- state; that would define the incident away.
-  ('B1','identity','bronze','views_per_session',         1.50, 1.90, NULL, NULL, NULL, NULL, 0.10, 0.25, 'page views per visit; measured healthy 2.23'),
+  -- MEASURED PER DAY by Block 0c, 25 Mar - 23 Apr 2026. Use the DAILY figures:
+  -- Block 0b pooled a fortnight, which inflates any per-person identity count
+  -- because browser ids do not recur across days while people do. Pooled, the
+  -- broken state reads 20.0 browser ids per person; per day it reads about 3.9.
+  -- The checks run daily, so the daily numbers are the ones that belong here.
+  --
+  --                        healthy weekday | healthy weekend | broken (from 8 Apr)
+  --   views_per_session          1.94-2.35 |       1.59-1.71 | 1.05-1.08
+  --   browser_ids_per_person     1.11-1.15 |       1.06-1.08 | 3.70-4.15
+  --   single_view_session_share  0.54-0.65 |       0.73-0.76 | 0.93-0.95
+  --   identified_share                1.00 |            1.00 | 1.00
+  --
+  -- Absolute bounds sit BELOW the healthy weekend, not below the healthy weekday,
+  -- or every Saturday would raise a warning. The same-weekday corridor in Block 4
+  -- does the fine-grained work; these bounds only catch the gross break.
+  -- They describe HEALTHY data, so B1, B4 and B5 fire today by design and keep
+  -- firing until the source is fixed. Do not retune them to the broken state.
+  ('B1','identity','bronze','views_per_session',         1.30, 1.50, NULL, NULL, NULL, NULL, 0.10, 0.25, 'page views per visit; healthy 1.94-2.35 weekday, broken 1.06'),
   ('B2','identity','bronze','sessions_per_browser_7d',   1.02, 1.10, NULL, NULL, NULL, NULL, 0.15, 0.30, 'visits per browser identity over a rolling week; not yet measured'),
-  ('B4','identity','bronze','browser_ids_per_person',    NULL, NULL, 3.0, 6.0, NULL, NULL, 0.15, 0.30, 'distinct user_Id per GPN; measured healthy 1.71'),
-  ('B5','identity','bronze','single_view_session_share', NULL, NULL, 0.70, 0.85, NULL, NULL, 0.10, 0.20, 'share of sessions with exactly one view; measured healthy 0.584'),
+  ('B4','identity','bronze','browser_ids_per_person',    NULL, NULL, 1.5, 2.5, NULL, NULL, 0.15, 0.30, 'distinct user_Id per GPN per DAY; healthy 1.06-1.15, broken 3.7-4.15'),
+  ('B5','identity','bronze','single_view_session_share', NULL, NULL, 0.80, 0.90, NULL, NULL, 0.10, 0.20, 'share of single-view sessions; healthy 0.54-0.76, broken 0.93-0.95'),
   ('B8','identity','bronze','identified_share',          0.90, 0.97, NULL, NULL, NULL, NULL, 0.05, 0.15, 'views with a valid GPN; measured 1.000, every row carries a GPN'),
   ('C8','schema','silver','double_fire_share',           NULL, NULL, 0.10, 0.25, NULL, NULL, 0.05, NULL, 'same person, same page, < 1 s apart'),
   ('D1a','plausibility','gold','gold_views',             NULL, NULL, NULL, NULL, 0.25, 0.50, NULL, NULL, 'gold views per day corridor'),
@@ -744,11 +753,14 @@ LEFT JOIN mix y ON y.sdk_version = t.sdk_version AND y.view_date = date_sub(p.ch
 LEFT JOIN known k ON k.sdk_version = t.sdk_version
 GROUP BY p.check_date;
 -- Incident forensics: did the version mix change around 8 April 2026?
--- ANSWERED 2026-09-11 by Block 0b. The SDK mix changed at the incident, but in
--- the opposite direction to the one this check was written to expect: version
--- `javascript:3.3.6` is present 2-15 March and ABSENT from 13-26 April onward.
--- 2.8.16 and 2.7.4 remain in both windows. A version DISAPPEARING is as much a
--- signal as a new one arriving, so C3 alerts on any change to the version set.
+-- ANSWERED 2026-09-11, then CORRECTED by Block 0c. Version `javascript:3.3.6` is
+-- present 2-15 March and absent from 13-26 April, which first looked like the
+-- cause. The daily series refutes that: its share is already 0.0000 on 25 March
+-- and on every day after, so the version disappeared roughly two to three weeks
+-- BEFORE the identity break on 7-8 April. The two are not the same event. They
+-- may still be related, and the window 16-24 March is where that gets settled.
+-- A version disappearing is as much a signal as a new one arriving, so C3 alerts
+-- on any change to the version set, in either direction.
 -- SELECT CAST(CAST(`timestamp` AS TIMESTAMP) AS DATE) d, sdkVersion, COUNT(*)
 -- FROM sharepoint_bronze.pageviews
 -- WHERE CAST(`timestamp` AS TIMESTAMP) BETWEEN '2026-03-25' AND '2026-04-20'

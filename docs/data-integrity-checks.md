@@ -360,10 +360,11 @@ Five conclusions.
    person (20.004) and sessions per person (20.005) are the same number to three
    decimals, and page views per session is 1.06. Effectively a fresh identity per
    view.
-3. **The SDK version set changed at the incident, by losing a version.** Version
-   `javascript:3.3.6` is present before and absent from the April window onward.
-   The check was written expecting a new version to appear; a version vanishing is
-   the same signal. This is the most concrete lead for the vendor investigation.
+3. ~~**The SDK version set changed at the incident.**~~ **Superseded by the daily
+   series above.** Version `javascript:3.3.6` is present in the March fortnight and
+   absent in the April one, which looked like the cause. Day by day its share is
+   already zero on 25 March, two to three weeks before the break. Not the same
+   event. A version vanishing is still a signal worth alerting on, so C3 keeps it.
 4. **The healthy baselines are not what the documentation assumed.** Page views
    per session was 2.23, not 1.1–1.2, and browser identities per person was 1.71,
    not near 1. The figure of 1.1–1.2 quoted at the outset most likely came from the
@@ -380,6 +381,55 @@ away.
 
 **Every row carries a GPN** (share 1.000 in all three windows), so the
 person-based route is fully available whenever the visit definition is revisited.
+
+### The incident day by day, 25 March to 23 April
+
+Block 0c, one row per day. This is the transition itself, which the three
+fortnights of Block 0b deliberately stepped around.
+
+| Day | Views per session | Browser ids per person | Single-view share | People | Browser ids |
+|---|---|---|---|---|---|
+| Tue 31 Mar | 2.272 | 1.13 | 0.555 | 56,081 | 63,234 |
+| Wed 1 Apr | 2.018 | 1.12 | 0.629 | 56,677 | 63,426 |
+| Thu 2 Apr | 1.941 | 1.11 | 0.650 | 51,017 | 56,694 |
+| Mon 6 Apr | 1.755 | 1.15 | 0.710 | 34,041 | 38,989 |
+| **Tue 7 Apr** | **1.665** | **1.66** | 0.737 | 59,684 | **98,861** |
+| **Wed 8 Apr** | **1.059** | **3.98** | **0.943** | 54,849 | **218,078** |
+| Thu 9 Apr | 1.081 | 3.96 | 0.926 | 52,969 | 209,839 |
+| Thu 23 Apr | 1.058 | 3.84 | 0.944 | 56,559 | 217,020 |
+
+**It began on 7 April, not 8 April.** On the 7th the browser identities per
+person move first, from 1.15 to 1.66, and the identity count jumps from 39k to
+99k while the number of people does not move. On the 8th it completes: 3.98
+identities per person, 218k identities, and views per session collapses to 1.06.
+
+**Two days, then a plateau.** From 8 April every weekday sits between 3.70 and
+4.15 identities per person with no further drift. A two-day ramp followed by a
+stable plateau reads as a staged rollout, not as a single switch being flipped.
+
+**The population never moved.** People stay between 49k and 70k across the whole
+month, and page views between 193k and 316k. Only the identifiers changed. This
+is the clearest possible confirmation that page views and unique visitors were
+never affected.
+
+**Correction: the SDK version change is not the same event.** The share of
+`javascript:3.3.6` is 0.0000 on 25 March and on every day after, so the version
+had already disappeared two to three weeks before the identity break. The
+earlier conclusion drawn from the fortnight comparison was wrong. The two may
+still be connected, but they are not simultaneous, and the window of 16 to 24
+March is where that question gets settled.
+
+**Correction: pooled and daily figures are not interchangeable.** Block 0b pooled
+a fortnight and reported 20.0 browser identities per person for the broken state.
+Per day the same state reads about 3.9. Pooling inflates any per-person identity
+count, because browser identities do not recur across days while people do. The
+checks run daily, so the daily figures are the ones in `dq.check_def`.
+
+**Easter shows why the holiday calendar matters.** Good Friday on 3 April drew
+29,845 views against roughly 220,000 on a normal Friday, and Easter Monday 108,580
+against roughly 316,000. Without a holiday calendar, check A1 would raise a
+blocker on both days every year. This closes open decision 4 as necessary rather
+than optional.
 
 ### Integrity per medallion layer
 
