@@ -97,7 +97,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
 <div class="legend">
   <div class="k">Highlighted cells</div><div class="v">The values the check actually reads. Everything else is context.</div>
   <div class="k">The line below</div><div class="v">The number the check computes from exactly those cells, and the verdict it produces.</div>
-  <div class="k">Severity</div><div class="v">Warning keeps publishing and notifies the data owner. Blocker holds the refresh and shows a banner in the report.</div>
+  <div class="k">Severity</div><div class="v">Nothing is ever held back. Warning badges the KPI and notifies the data owner; Critical adds a banner naming the affected dates. The numbers publish either way.</div>
   <div class="k">Row counts</div><div class="v">Three or four rows stand in for a day of traffic, so the arithmetic stays checkable by eye. Thresholds apply at real volume.</div>
 </div>
 <div class="trip">
@@ -129,7 +129,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <tr><td class="b">8</td><td>Plausibility from the outside, including the recount of gold against the raw events.</td><td class="c">D3 D5 D6 D8</td></tr>
       <tr><td class="b">8b</td><td>Silver only: did the person resolution survive, and did every row get its derived keys.</td><td class="c">S1 S2 S3</td></tr>
       <tr><td class="b">8c</td><td>Gold only: is the grain unique, is each row internally consistent, does the aggregate tie back to silver.</td><td class="c">G1 G2 G3</td></tr>
-      <tr class="setup"><td class="b">9</td><td>What happens with the verdicts: the alert, the hold that stops publishing, the page the report shows.</td><td class="c">&ndash;</td></tr>
+      <tr class="setup"><td class="b">9</td><td>What happens with the verdicts: the alert, the banner naming the affected dates, the page the report shows. No job branches on a result.</td><td class="c">&ndash;</td></tr>
     </tbody>
   </table>
 </div>
@@ -154,7 +154,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>Day</th><th>Weekday</th><th>Page views</th></tr></thead><tbody><tr><td class="">Mon 24 Aug</td><td class="">Mon</td><td class="">41,020</td></tr><tr><td class="">Mon 31 Aug</td><td class="">Mon</td><td class="">39,880</td></tr><tr><td class="">Mon 7 Sep</td><td class="">Mon</td><td class="hi bad">12,450</td></tr></tbody></table>
       <div class="calc">Today is <b>69 % below</b> the median of the same weekday.</div>
-      <div class="verdict">Blocker, export stalled mid-run</div>
+      <div class="verdict">Critical, export stalled mid-run</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> Half a day of traffic silently missing from every report.</footer>
@@ -178,7 +178,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>Event</th><th>itemCount</th></tr></thead><tbody><tr><td class="">view 1</td><td class="hi bad">1</td></tr><tr><td class="">view 2</td><td class="hi bad">3</td></tr><tr><td class="">view 3</td><td class="hi bad">2</td></tr></tbody></table>
       <div class="calc">sum(itemCount) ÷ count(*) = 6 ÷ 3 = <b>2.00</b></div>
-      <div class="verdict">Blocker, only every other event is stored</div>
+      <div class="verdict">Critical, only every other event is stored</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> Counts understate reality by the sampling factor, and nothing in the data says so.</footer>
@@ -202,7 +202,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>Time</th><th>Browser</th><th>Session</th><th>Page</th></tr></thead><tbody><tr><td class="">09:14:02</td><td class="">a7f3</td><td class="">s-11</td><td class="">/news/q1</td></tr><tr><td class="">09:14:02</td><td class="">a7f3</td><td class="">s-11</td><td class="hi bad">/news/q1</td></tr></tbody></table>
       <div class="calc">Identical on the composite key. Duplicate rate <b>50 %</b>.</div>
-      <div class="verdict">Blocker, an overlapping load ran twice</div>
+      <div class="verdict">Critical, an overlapping load ran twice</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> Page views inflate, and the inflation looks like real growth.</footer>
@@ -226,7 +226,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>Layer</th><th>Rows for 7 Sep</th></tr></thead><tbody><tr><td class="">Bronze</td><td class="">40,310</td></tr><tr><td class="">Silver</td><td class="">40,310</td></tr><tr><td class="">Gold (sum of views)</td><td class="hi bad">38,902</td></tr></tbody></table>
       <div class="calc">Gold lost <b>1,408 views</b> with no documented filter.</div>
-      <div class="verdict">Blocker, publishing is held</div>
+      <div class="verdict">Critical, publishing is held</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> Power BI shows fewer views than actually happened, with no trace of where they went.</footer>
@@ -252,7 +252,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>View</th><th>Session id</th></tr></thead><tbody><tr><td class="">view 1</td><td class="hi bad">s-11</td></tr><tr><td class="">view 2</td><td class="hi bad">s-12</td></tr><tr><td class="">view 3</td><td class="hi bad">s-13</td></tr><tr><td class="">view 4</td><td class="hi bad">s-14</td></tr></tbody></table>
       <div class="calc">4 views ÷ 4 sessions = <b>1.00</b>. Every view is its own visit.</div>
-      <div class="verdict">Blocker, day one of the April change</div>
+      <div class="verdict">Critical, day one of the April change</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> Visits inflate, pages per visit and time on page collapse to their floor.</footer>
@@ -276,7 +276,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>GPN</th><th>Browser id (user_Id)</th></tr></thead><tbody><tr><td class="">00100200</td><td class="hi bad">a7f3</td></tr><tr><td class="">00100200</td><td class="hi bad">91c2</td></tr><tr><td class="">00100200</td><td class="hi bad">04be</td></tr></tbody></table>
       <div class="calc">3 browser ids ÷ 1 person = <b>3.0</b>, equal to the view count.</div>
-      <div class="verdict">Blocker, the cookie is not persisting</div>
+      <div class="verdict">Critical, the cookie is not persisting</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> The strongest test we have, because the employee number comes from the server and not from the cookie.</footer>
@@ -300,7 +300,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>Browser id</th><th>Seen in the last 28 days</th></tr></thead><tbody><tr><td class="">k92x</td><td class="hi bad">no</td></tr><tr><td class="">p11q</td><td class="hi bad">no</td></tr><tr><td class="">z04b</td><td class="hi bad">no</td></tr></tbody></table>
       <div class="calc">0 of 3 recur. Recurring share <b>0 %</b>.</div>
-      <div class="verdict">Blocker, every browser is brand new</div>
+      <div class="verdict">Critical, every browser is brand new</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> The most direct test of whether the identifier persists at all.</footer>
@@ -324,7 +324,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>Same person</th><th>Gap</th><th>Session id</th></tr></thead><tbody><tr><td class="">view 1</td><td class="">–</td><td class="hi bad">s-11</td></tr><tr><td class="">view 2</td><td class="">5 min</td><td class="hi bad">s-12</td></tr><tr><td class="">view 3</td><td class="">45 min</td><td class="">s-13</td></tr></tbody></table>
       <div class="calc">Even a 5-minute gap starts a new session. P(same) <b>near 0</b>.</div>
-      <div class="verdict">Blocker, the session id means nothing</div>
+      <div class="verdict">Critical, the session id means nothing</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> Time on page becomes unmeasurable, because it needs two views inside one group.</footer>
@@ -424,7 +424,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>Week</th><th>Visits</th><th>Unique visitors</th></tr></thead><tbody><tr><td class="">W35</td><td class="">31,400</td><td class="hi bad">22,900</td></tr><tr><td class="">W36</td><td class="">30,880</td><td class="hi bad">22,750</td></tr><tr><td class="">W37</td><td class="hi bad">58,600</td><td class="hi bad">22,880</td></tr></tbody></table>
       <div class="calc">Visits <b>+90 %</b> while unique visitors stay flat.</div>
-      <div class="verdict">Blocker, and the pattern names the cause</div>
+      <div class="verdict">Critical, and the pattern names the cause</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> This exact divergence is the April fingerprint: visits explode, people do not.</footer>
@@ -448,7 +448,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>Measure</th><th>Gold</th><th>Recount from bronze</th></tr></thead><tbody><tr><td class="">Views</td><td class="">9,801</td><td class="hi bad">9,801</td></tr><tr><td class="">Visits</td><td class="hi bad">9,780</td><td class="hi bad">4,613</td></tr><tr><td class="">People</td><td class="">3,079</td><td class="hi bad">3,079</td></tr></tbody></table>
       <div class="calc">Visits diverge, <b>people agree</b>.</div>
-      <div class="verdict">Blocker, and the fault is localised to the session cookie</div>
+      <div class="verdict">Critical, and the fault is localised to the session cookie</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> Tells you which of the three numbers to distrust, instead of distrusting the whole report.</footer>
@@ -474,7 +474,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>Layer</th><th>Distinct people</th></tr></thead><tbody><tr><td class="">Bronze, distinct GPN</td><td class="">3,079</td></tr><tr><td class="">Silver, distinct contactId</td><td class="hi bad">412</td></tr></tbody></table>
       <div class="calc">Ratio <b>0.13</b>. People are collapsing into each other.</div>
-      <div class="verdict">Blocker, unique visitors are wrong</div>
+      <div class="verdict">Critical, unique visitors are wrong</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> This is the only check that guards the unique-visitor number. Every bronze check stays green while it fails.</footer>
@@ -498,7 +498,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>Row</th><th>contactId</th><th>marketingPageId</th></tr></thead><tbody><tr><td class="">1</td><td class="hi bad">c-8841</td><td class="hi bad">p-04b2</td></tr><tr><td class="">2</td><td class="hi bad">null</td><td class="hi bad">null</td></tr></tbody></table>
       <div class="calc">Fill rate <b>50 %</b>. Half the rows carry no person and no page.</div>
-      <div class="verdict">Blocker below 80 %</div>
+      <div class="verdict">Critical below 80 %</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> Rows survive the count but drop out of every breakdown, so totals and details stop matching.</footer>
@@ -522,7 +522,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>Page</th><th>Day</th><th>Contact</th><th>Views</th></tr></thead><tbody><tr><td class="">p-04b2</td><td class="">20260907</td><td class="hi bad">c-8841</td><td class="">3</td></tr><tr><td class="">p-04b2</td><td class="">20260907</td><td class="hi bad">c-8841</td><td class="">3</td></tr></tbody></table>
       <div class="calc">Same key twice. Total <b>6 views</b> for the same 3.</div>
-      <div class="verdict">Blocker, every KPI on this page is doubled</div>
+      <div class="verdict">Critical, every KPI on this page is doubled</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> A duplicated grain multiplies the numbers and stays inside every corridor, so no other check sees it.</footer>
@@ -546,7 +546,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="pane-hd"><span class="dot"></span>Broken</div>
       <table class="mini"><thead><tr><th>Page</th><th>Views</th><th>Visits</th><th>durationavg</th></tr></thead><tbody><tr><td class="">p-04b2</td><td class="">6</td><td class="hi bad">9</td><td class="hi bad">7.7</td></tr><tr><td class="">p-771a</td><td class="">1</td><td class="hi bad">1</td><td class="hi bad">410.0</td></tr></tbody></table>
       <div class="calc"><b>9 visits from 6 views</b> is impossible, and the average does not reconcile.</div>
-      <div class="verdict">Blocker, the aggregation is wrong</div>
+      <div class="verdict">Critical, the aggregation is wrong</div>
     </div>
       </div>
       <footer class="cost"><b>Without it:</b> Impossible rows pass every corridor because each number alone looks normal.</footer>

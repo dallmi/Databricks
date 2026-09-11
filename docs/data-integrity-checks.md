@@ -53,9 +53,11 @@ unit for engagement — see `scripts/flatten_appinsights.py` and
    calendar table. No alerting before 4 weeks of history exist.
 4. **Step change beats point outlier.** For ratios, compare the 7-day mean with
    the prior 28-day mean; a persistent shift is the signal, one noisy day is not.
-5. **Three severities, three actions.** Info (annotate the day), Warning (notify
-   the data owner, keep publishing, badge in Power BI), Blocker (hold the Gold /
-   semantic refresh, banner in Power BI, open an incident).
+5. **Three severities, and publishing never stops.** Info (annotate the day),
+   Warning (notify the data owner, badge the KPI), Critical (banner naming the
+   affected dates, mark the KPI, open an incident). A failing check labels data;
+   it never withholds it. A stale report is silent about being stale, whereas a
+   labelled number lets the reader judge for themselves.
 6. **Check at the earliest layer that can answer.** Sampling and schema at
    Staging, volume and nulls at Bronze, identity ratios at Silver, plausibility
    and reconciliation at Gold, tie-out at the semantic layer.
@@ -93,19 +95,19 @@ unit for engagement — see `scripts/flatten_appinsights.py` and
 
 ## 4. Check catalogue
 
-Severity legend: **I** Info · **W** Warning · **B** Blocker. "April?" = would
+Severity legend: **I** Info · **W** Warning · **C** Critical. "April?" = would
 this check have detected the 8 April identity change, and how fast.
 
 ### A. Completeness & freshness — "Did everything arrive?"
 
 | ID | Check | Formula / rule | Fields | Layer | Threshold | Sev | April? |
 |---|---|---|---|---|---|---|---|
-| A1 | Daily volume corridor | `count(*)` per day vs median of the same weekday over the trailing 8 weeks | `timestamp` | Bronze | outside ±25 % → W; outside ±50 % → B | W/B | No — volume looked normal |
-| A2 | Freshness per layer | `now() − max(timestamp)` and `now() − max(ingested_at)` per table | `timestamp`, ingestion ts | every layer | > 24 h → W; > 48 h → B | W/B | No |
+| A1 | Daily volume corridor | `count(*)` per day vs median of the same weekday over the trailing 8 weeks | `timestamp` | Bronze | outside ±25 % → W; outside ±50 % → C | W/C | No — volume looked normal |
+| A2 | Freshness per layer | `now() − max(timestamp)` and `now() − max(ingested_at)` per table | `timestamp`, ingestion ts | every layer | > 24 h → W; > 48 h → C | W/C | No |
 | A3 | Hourly arrival profile | share of views per hour-of-day vs 8-week baseline; flags partial-day loads | `timestamp` | Bronze | any hour < 30 % of baseline on a business day → W | W | No |
-| A4 | Sampling factor | `sum(itemCount) ÷ count(*)` | `itemCount` | Staging | ≠ 1.00 → B (adaptive sampling switched on; counts understate) | B | No |
-| A5 | Duplicate rate | share of rows repeated on the composite key | `timestamp`, `user_Id`, `session_Id`, `PageURL` | Staging → Bronze | > 1 % → W; > 5 % → B | W/B | No |
-| A6 | Layer tie-out | `count(Bronze) = count(Staging) − documented filters`; `sum(Gold.views) = count(Silver)` per day; semantic measure = Gold | row counts | every hop | any difference → B | B | No |
+| A4 | Sampling factor | `sum(itemCount) ÷ count(*)` | `itemCount` | Staging | ≠ 1.00 → B (adaptive sampling switched on; counts understate) | C | No |
+| A5 | Duplicate rate | share of rows repeated on the composite key | `timestamp`, `user_Id`, `session_Id`, `PageURL` | Staging → Bronze | > 1 % → W; > 5 % → C | W/C | No |
+| A6 | Layer tie-out | `count(Bronze) = count(Staging) − documented filters`; `sum(Gold.views) = count(Silver)` per day; semantic measure = Gold | row counts | every hop | any difference → C | C | No |
 | A7 | Late-arrival drift | recount of day D after 3 days vs first load | `timestamp` | Bronze | > 2 % growth → W (backfill window too short) | W | No |
 
 ### B. Identity & sessionisation — "Do we still recognise people?"
@@ -116,24 +118,24 @@ stay correct even when every signal below breaks; visits (on `session_Id`) do no
 
 | ID | Check | Formula / rule | Fields | Layer | Threshold | Sev | April? |
 |---|---|---|---|---|---|---|---|
-| B1 | **Page views per visit** | `count(*) ÷ count(distinct session_Id)` per day | `session_Id` | Silver | baseline 1.1–1.2; < 1.05 → W; ≤ 1.02 → B; 7-day mean shift > 10 % vs prior 28 days → W | W/B | **Yes — day 1** |
-| B2 | Visits per browser identity (7-day) | `count(distinct session_Id) ÷ count(distinct user_Id)` over a rolling week | `session_Id`, `user_Id` | Silver | → 1.00 → B; shift > 15 % → W | W/B | Yes — day 1–2 |
-| B3 | **Recurring browser-identity rate** | share of today's distinct `user_Id` seen in the previous 28 days | `user_Id`, `timestamp` | Silver | drop > 20 pp vs baseline → B | B | **Yes — day 1**, the most direct test of cookie persistence |
-| B4 | **Devices per person** | `count(distinct user_Id) ÷ count(distinct GPN)` per day, views with GPN only | `user_Id`, `GPN` | Silver | baseline ≈ 1.0–1.3 (laptop + phone); > 2 → W; ≈ views per person → B | W/B | **Yes — day 1**; unique to our setup because GPN is server-side ground truth |
-| B5 | Single-view session share | sessions with exactly one view ÷ all sessions | `session_Id` | Silver | shift > 10 pp → W; > 98 % → B | W/B | Yes — day 1 (reads as bounce rate for the business) |
-| B6 | Session timeout behaviour | `P(same session_Id \| gap to the same person's previous view < 30 min)` | `session_Id`, `person_id`, `timestamp` | Silver | < 50 % → B | B | Yes; existing script `detect_session_timeout.py` |
-| B7 | Official vs reconstructed visits | `count(distinct session_Id) ÷ count(distinct visit_id)` (person + 30-min rule) | `session_Id`, `visit_id` | Silver | baseline ≈ 1.0–1.3; > 1.5 → W; > 2 → B | W/B | Yes — day 1; uses the pipeline's own capability |
-| B8 | Identified share | views with a valid GPN ÷ all views | `GPN` | Bronze | drop > 5 pp → W; > 15 pp → B | W/B | No, but a drop degrades every person-based metric |
+| B1 | **Page views per visit** | `count(*) ÷ count(distinct session_Id)` per day | `session_Id` | Silver | baseline 1.1–1.2; < 1.05 → W; ≤ 1.02 → C; 7-day mean shift > 10 % vs prior 28 days → W | W/C | **Yes — day 1** |
+| B2 | Visits per browser identity (7-day) | `count(distinct session_Id) ÷ count(distinct user_Id)` over a rolling week | `session_Id`, `user_Id` | Silver | → 1.00 → C; shift > 15 % → W | W/C | Yes — day 1–2 |
+| B3 | **Recurring browser-identity rate** | share of today's distinct `user_Id` seen in the previous 28 days | `user_Id`, `timestamp` | Silver | drop > 20 pp vs baseline → C | C | **Yes — day 1**, the most direct test of cookie persistence |
+| B4 | **Devices per person** | `count(distinct user_Id) ÷ count(distinct GPN)` per day, views with GPN only | `user_Id`, `GPN` | Silver | baseline ≈ 1.0–1.3 (laptop + phone); > 2 → W; ≈ views per person → C | W/C | **Yes — day 1**; unique to our setup because GPN is server-side ground truth |
+| B5 | Single-view session share | sessions with exactly one view ÷ all sessions | `session_Id` | Silver | shift > 10 pp → W; > 98 % → C | W/C | Yes — day 1 (reads as bounce rate for the business) |
+| B6 | Session timeout behaviour | `P(same session_Id \| gap to the same person's previous view < 30 min)` | `session_Id`, `person_id`, `timestamp` | Silver | < 50 % → C | C | Yes; existing script `detect_session_timeout.py` |
+| B7 | Official vs reconstructed visits | `count(distinct session_Id) ÷ count(distinct visit_id)` (person + 30-min rule) | `session_Id`, `visit_id` | Silver | baseline ≈ 1.0–1.3; > 1.5 → W; > 2 → C | W/C | Yes — day 1; uses the pipeline's own capability |
+| B8 | Identified share | views with a valid GPN ÷ all views | `GPN` | Bronze | drop > 5 pp → W; > 15 pp → C | W/C | No, but a drop degrades every person-based metric |
 
 ### C. Schema & field validity — "Does the data still look like the data?"
 
 | ID | Check | Formula / rule | Fields | Layer | Threshold | Sev | April? |
 |---|---|---|---|---|---|---|---|
-| C1 | Schema drift | set of top-level columns and `CustomProps` keys vs the registered contract | `customDimensions` | Staging | new key → I; missing key → B | I/B | No |
-| C2 | Null rate per critical field | null share per day vs baseline for `session_Id`, `user_Id`, `GPN`, `PageURL`, `PageId`, `SiteID`, `PublishingDate`, `CammsTrackingID` | listed | Bronze | +5 pp → W; `session_Id` / `user_Id` / `PageURL` > 1 % null → B | W/B | No |
+| C1 | Schema drift | set of top-level columns and `CustomProps` keys vs the registered contract | `customDimensions` | Staging | new key → I; missing key → C | I/C | No |
+| C2 | Null rate per critical field | null share per day vs baseline for `session_Id`, `user_Id`, `GPN`, `PageURL`, `PageId`, `SiteID`, `PublishingDate`, `CammsTrackingID` | listed | Bronze | +5 pp → W; `session_Id` / `user_Id` / `PageURL` > 1 % null → C | W/C | No |
 | C3 | **SDK version watch** | distribution of `sdkVersion` per day; new value or share shift | `sdkVersion` | Staging | new version → I + annotate the day; share shift > 20 % in a day → W | I/W | **Likely, as a leading indicator** — check whether a version change coincides with 8 April |
-| C4 | Instrumentation key constant | `count(distinct iKey)`, `count(distinct appId)` per day | `iKey`, `appId` | Staging | any value outside the known set → B | B | Possibly |
-| C5 | Format validity | GPN = 8 digits; `CammsTrackingID` = 5 segments; `PublishingDate ≤ timestamp`; `timestamp` inside the load window; `PageURL` parseable and on the known host | listed | Staging (DLT expectations) | > 0.5 % invalid → W; > 5 % → B | W/B | No |
+| C4 | Instrumentation key constant | `count(distinct iKey)`, `count(distinct appId)` per day | `iKey`, `appId` | Staging | any value outside the known set → C | C | Possibly |
+| C5 | Format validity | GPN = 8 digits; `CammsTrackingID` = 5 segments; `PublishingDate ≤ timestamp`; `timestamp` inside the load window; `PageURL` parseable and on the known host | listed | Staging (DLT expectations) | > 0.5 % invalid → W; > 5 % → C | W/C | No |
 | C6 | Referential integrity | `PageId` found in the page inventory; `SiteID` in sites; GPN found in the month's HR snapshot (HR hit rate) | `PageId`, `SiteID`, `GPN` | Silver | hit rate drop > 5 pp → W | W | No |
 | C7 | Client mix drift | shares of `client_Browser` / `client_OS` / `client_Type` vs 4-week baseline | `client_*` | Bronze | shift > 15 pp → I/W | I/W | Possibly — a browser or policy roll-out that blocks cookies shows here |
 | C8 | Double-fire rate | pairs of views of the same page by the same person < 1 s apart ÷ views | `person_id`, `PageURL`, `timestamp` | Silver | rise > 5 pp → W | W | No |
@@ -142,14 +144,14 @@ stay correct even when every signal below breaks; visits (on `session_Id`) do no
 
 | ID | Check | Formula / rule | Fields | Layer | Threshold | Sev | April? |
 |---|---|---|---|---|---|---|---|
-| D1 | KPI corridors | views, visits, unique visitors, pages per visit, avg time on page, bounce rate — each vs 8-week same-weekday median ± 3·MAD, plus 7-day-vs-28-day step change | Gold KPIs | Gold | outside corridor → W; step change > 25 % → B | W/B | Yes — visits jumped and engagement collapsed while views and unique visitors stayed flat; that pattern alone points at the session id |
+| D1 | KPI corridors | views, visits, unique visitors, pages per visit, avg time on page, bounce rate — each vs 8-week same-weekday median ± 3·MAD, plus 7-day-vs-28-day step change | Gold KPIs | Gold | outside corridor → W; step change > 25 % → C | W/C | Yes — visits jumped and engagement collapsed while views and unique visitors stayed flat; that pattern alone points at the session id |
 | D2 | Weekday pattern | weekend ÷ weekday volume ratio vs baseline | `timestamp` | Gold | shift > 50 % → I | I | No |
 | D3 | Top-page stability | Jaccard overlap of the top-50 pages with the prior week | `PageURL` | Gold | < 0.5 → W (URL scheme or tagging change) | W | No |
 | D4 | Tracking coverage | views with `CammsTrackingID` ÷ views; tracked pages ÷ pages | `CammsTrackingID` | Gold | drop > 5 pp → W | W | No |
-| D5 | **Gold matches a fresh recount from bronze** | per page-day for the top pages: `sharepoint_gold.pbi_db_interactions_metrics` (`views`, `visits`, distinct `viewingcontactid`) vs a recount on `sharepoint_bronze.pageviews` (`count(*)`, distinct `session_Id`, distinct `user_gpn`) joined on `marketingPageId = pageId` | bronze + gold | Gold | ratio outside 0.8–1.25 → W; visits ratio > 2 or people ratio outside → B | W/B | **Yes — day 1** as a pattern: visits diverge while people agree, which localises the fault to the session cookie. Gold is derived from the same App Insights bronze, so this is a transformation tie-out, not an independent collector |
+| D5 | **Gold matches a fresh recount from bronze** | per page-day for the top pages: `sharepoint_gold.pbi_db_interactions_metrics` (`views`, `visits`, distinct `viewingcontactid`) vs a recount on `sharepoint_bronze.pageviews` (`count(*)`, distinct `session_Id`, distinct `user_gpn`) joined on `marketingPageId = pageId` | bronze + gold | Gold | ratio outside 0.8–1.25 → W; visits ratio > 2 or people ratio outside → C | W/C | **Yes — day 1** as a pattern: visits diverge while people agree, which localises the fault to the session cookie. Gold is derived from the same App Insights bronze, so this is a transformation tie-out, not an independent collector |
 | D6 | Funnel plausibility | for tracked packs: intranet views on the landing page ≥ email clicks to that page (order of magnitude) | `CammsTrackingID`, iMEP clicks | Gold | views < 50 % of clicks → W | W | No |
 | D7 | Clicks per view | `customEvents` clicks ÷ `pageViews` per day | both streams | Gold | shift > 25 % → W | W | No — but separates "views dropped" from "clicks dropped" |
-| D8 | Power BI tie-out | KPI value in the semantic layer vs Gold for the same day (control measure or dataset query) | Gold, dataset | semantic | any difference → B | B | No |
+| D8 | Power BI tie-out | KPI value in the semantic layer vs Gold for the same day (control measure or dataset query) | Gold, dataset | semantic | any difference → C | C | No |
 
 ---
 
@@ -180,7 +182,7 @@ Ten signals, one line each. These are the rows on the one-pager.
 |---|---|---|---|
 | Info | continues | none; the day is annotated in the check table | none |
 | Warning | continues | badge on the Data Health page and on the affected KPI card | data owner notified (Databricks SQL alert) |
-| Blocker | **Gold / semantic refresh held** for the affected date range | banner "Data under review since <date>" on every report page | data owner + product owner notified, incident opened |
+| Critical | **continues** | banner "Data under review since <date>" on every report page, plus the affected KPI marked | data owner + product owner notified, incident opened |
 
 ### Result table
 
@@ -194,7 +196,7 @@ CREATE TABLE gold.dq_check_result (
   baseline     DOUBLE,
   lower_bound  DOUBLE,
   upper_bound  DOUBLE,
-  status       STRING,      -- ok | info | warning | blocker
+  status       STRING,      -- ok | info | warning | critical
   note         STRING,
   computed_at  TIMESTAMP
 );
@@ -207,11 +209,11 @@ all read from this table; no check result lives only in a log.
 
 | Family | Mechanism |
 |---|---|
-| Row-level rules (C2, C5) | Delta Live Tables expectations (`expect` for Warning, `expect_or_fail` for Blocker) on the Staging → Bronze step |
+| Row-level rules (C2, C5) | Delta Live Tables expectations, **`expect` only** — never `expect_or_drop` or `expect_or_fail`, both of which withhold rows |
 | Aggregate ratios (A, B, D) | one daily SQL/notebook job after the Silver refresh, writing `gold.dq_check_result` |
 | Drift (C7, D1) | optional: Lakehouse Monitoring on the Silver fact with custom metrics for the ratios |
-| Notification | Databricks SQL alerts on `status IN ('warning','blocker')`; a Power BI Data Health page on the same table |
-| Hold | the Gold job reads yesterday's `blocker` rows and skips publishing the affected range |
+| Notification | Databricks SQL alerts on `status IN ('warning','critical')`; a Power BI Data Health page on the same table |
+| Banner | the report reads `dq.v_affected_dates` and names the affected dates. No job branches on a check result |
 | SQL drafts | [`dq_checks_draft.sql`](../dq_checks_draft.sql): BLOCK 0 column probes, BLOCK 1 result table + check catalogue, BLOCK 2–3 daily metrics and same-weekday baseline, BLOCK 4 generic corridor engine, BLOCK 5–8 explicit checks, BLOCK 9 alert query, hold view, DLT expectations |
 
 ### Make the KPI robust, not only monitored
@@ -236,7 +238,7 @@ report both with a clear label.
 |---|---|---|---|
 | 1 | 1–2 | B1, B3, B4, A1, A2, A4, A6, C3 | the eight checks that catch an April-type change on day one plus basic completeness; result table and one SQL alert |
 | 2 | 3–4 | B2, B5, B7, C1, C2, C5, D1, D5, D8 | full identity family, row-level expectations, cross-collector reconciliation, Power BI tie-out and Data Health page |
-| 3 | 5–6 | remaining A, C, D checks; Blocker hold in the Gold job; banner in Power BI | operating model complete |
+| 3 | 5–6 | remaining A, C, D checks; banner driven by `dq.v_affected_dates`; data-health page | operating model complete |
 
 Before phase 1: calibrate every baseline on the store (at least 8 weeks before
 8 April for the "healthy" values), and confirm on `sdkVersion` whether a version
@@ -251,7 +253,7 @@ change coincides with the incident.
    See §6.
 2. Threshold values above are starting points; calibrate on the store and
    review after 4 weeks of running.
-3. Owner of alerts and of the Blocker hold (product owner vs. data engineer).
+3. Owner of alerts, and who owns the banner wording on a critical result.
 4. Holiday calendar source for the baseline.
 5. Whether `customEvents` gets the same identity checks (same fields, separate
    stream) in phase 2 or 3.
@@ -377,7 +379,7 @@ Five conclusions.
    April on every ratio and still far from March.
 
 Thresholds in `dq.check_def` now hold these measured values. B1, B4 and B5
-therefore fire today by design and will keep firing until the source is fixed.
+therefore flag today by design and will keep flagging until the source is fixed.
 They must not be retuned to the current state, which would define the incident
 away.
 
@@ -430,7 +432,7 @@ checks run daily, so the daily figures are the ones in `dq.check_def`.
 **Easter shows why the holiday calendar matters.** Good Friday on 3 April drew
 29,845 views against roughly 220,000 on a normal Friday, and Easter Monday 108,580
 against roughly 316,000. Without a holiday calendar, check A1 would raise a
-blocker on both days every year. This closes open decision 4 as necessary rather
+critical on both days every year. This closes open decision 4 as necessary rather
 than optional.
 
 ### Integrity per medallion layer

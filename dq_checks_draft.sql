@@ -428,7 +428,7 @@ CREATE TABLE IF NOT EXISTS dq.dq_check_result (
   baseline     DOUBLE,
   lower_bound  DOUBLE,
   upper_bound  DOUBLE,
-  status       STRING,      -- ok | info | warning | blocker
+  status       STRING,      -- ok | info | warning | critical
   note         STRING,
   computed_at  TIMESTAMP
 ) USING DELTA;
@@ -462,7 +462,7 @@ INSERT INTO dq.check_def VALUES
   -- Absolute bounds sit BELOW the healthy weekend, not below the healthy weekday,
   -- or every Saturday would raise a warning. The same-weekday corridor in Block 4
   -- does the fine-grained work; these bounds only catch the gross break.
-  -- They describe HEALTHY data, so B1, B4 and B5 fire today by design and keep
+  -- They describe HEALTHY data, so B1, B4 and B5 flag today by design and keep
   -- firing until the source is fixed. Do not retune them to the broken state.
   ('B1','identity','bronze','views_per_session',         1.30, 1.50, NULL, NULL, NULL, NULL, 0.10, 0.25, 'page views per visit; healthy 1.94-2.35 weekday, broken 1.06'),
   ('B2','identity','bronze','sessions_per_browser_7d',   1.02, 1.10, NULL, NULL, NULL, NULL, 0.15, 0.30, 'visits per browser identity over a rolling week; not yet measured'),
@@ -680,10 +680,10 @@ SELECT
   COALESCE(d.abs_warn_high, b.corr_high)         AS upper_bound,
   CASE
     WHEN b.n_hist < 4                                                                   THEN 'info'
-    WHEN d.abs_block_low  IS NOT NULL AND b.value <= d.abs_block_low                    THEN 'blocker'
-    WHEN d.abs_block_high IS NOT NULL AND b.value >= d.abs_block_high                   THEN 'blocker'
-    WHEN d.rel_block_pct  IS NOT NULL AND ABS(b.value - b.baseline) / NULLIF(b.baseline,0) > d.rel_block_pct THEN 'blocker'
-    WHEN d.step_block_pct IS NOT NULL AND ABS(b.step_pct) > d.step_block_pct            THEN 'blocker'
+    WHEN d.abs_block_low  IS NOT NULL AND b.value <= d.abs_block_low                    THEN 'critical'
+    WHEN d.abs_block_high IS NOT NULL AND b.value >= d.abs_block_high                   THEN 'critical'
+    WHEN d.rel_block_pct  IS NOT NULL AND ABS(b.value - b.baseline) / NULLIF(b.baseline,0) > d.rel_block_pct THEN 'critical'
+    WHEN d.step_block_pct IS NOT NULL AND ABS(b.step_pct) > d.step_block_pct            THEN 'critical'
     WHEN d.abs_warn_low   IS NOT NULL AND b.value <  d.abs_warn_low                     THEN 'warning'
     WHEN d.abs_warn_high  IS NOT NULL AND b.value >  d.abs_warn_high                    THEN 'warning'
     WHEN d.rel_warn_pct   IS NOT NULL AND ABS(b.value - b.baseline) / NULLIF(b.baseline,0) > d.rel_warn_pct  THEN 'warning'
@@ -706,7 +706,7 @@ JOIN params p       ON b.view_date = p.check_date;
 INSERT INTO dq.dq_check_result
 SELECT date_sub(current_date(), 1), 'A2', 'completeness', layer,
        age_h, NULL, NULL, 24,
-       CASE WHEN age_h > 48 THEN 'blocker' WHEN age_h > 24 THEN 'warning' ELSE 'ok' END,
+       CASE WHEN age_h > 48 THEN 'critical' WHEN age_h > 24 THEN 'warning' ELSE 'ok' END,
        CONCAT('newest event ', CAST(max_ts AS STRING)), current_timestamp()
 FROM (
   SELECT 'bronze' AS layer, MAX(view_ts) AS max_ts,
@@ -736,7 +736,7 @@ k AS (
 )
 SELECT p.check_date, 'A5', 'completeness', 'bronze',
        SUM(n - 1) / SUM(n) AS dup_share, NULL, NULL, 0.01,
-       CASE WHEN SUM(n - 1) / SUM(n) > 0.05 THEN 'blocker'
+       CASE WHEN SUM(n - 1) / SUM(n) > 0.05 THEN 'critical'
             WHEN SUM(n - 1) / SUM(n) > 0.01 THEN 'warning' ELSE 'ok' END,
        CONCAT(SUM(n - 1), ' duplicate rows of ', SUM(n)), current_timestamp()
 FROM k CROSS JOIN params p
@@ -752,7 +752,7 @@ g AS (SELECT SUM(views) AS n FROM sharepoint_gold.pbi_db_interactions_metrics gm
       ON gm.visitdatekey = date_format(p.check_date, 'yyyyMMdd'))
 SELECT p.check_date, 'A6', 'completeness', 'every hop',
        g.n / NULLIF(b.n, 0) AS gold_over_bronze, 1.0, 0.999, 1.001,
-       CASE WHEN b.n = s.n AND s.n = g.n THEN 'ok' ELSE 'blocker' END,
+       CASE WHEN b.n = s.n AND s.n = g.n THEN 'ok' ELSE 'critical' END,
        CONCAT('bronze ', b.n, ' | silver ', s.n, ' | gold ', g.n,
               ' — document intentional filters (bots, test sites) as the tolerated difference'),
        current_timestamp()
@@ -793,7 +793,7 @@ base AS (                                     -- same ratio 4 weeks earlier as t
 )
 SELECT p.check_date, 'B3', 'identity', 'silver',
        COUNT(pr.browser_id) / COUNT(*) AS recurring_share, base.r, base.r - 0.20, NULL,
-       CASE WHEN COUNT(pr.browser_id) / COUNT(*) < base.r - 0.20 THEN 'blocker' ELSE 'ok' END,
+       CASE WHEN COUNT(pr.browser_id) / COUNT(*) < base.r - 0.20 THEN 'critical' ELSE 'ok' END,
        CONCAT(COUNT(pr.browser_id), ' of ', COUNT(*), ' browser ids seen in the prior 28 days'),
        current_timestamp()
 FROM today t LEFT JOIN prior pr ON pr.browser_id = t.browser_id
@@ -812,7 +812,7 @@ pairs AS (
 )
 SELECT p.check_date, 'B6', 'identity', 'silver',
        AVG(CASE WHEN session_id = prev_session THEN 1.0 ELSE 0.0 END) AS p_same, NULL, 0.50, NULL,
-       CASE WHEN AVG(CASE WHEN session_id = prev_session THEN 1.0 ELSE 0.0 END) < 0.50 THEN 'blocker' ELSE 'ok' END,
+       CASE WHEN AVG(CASE WHEN session_id = prev_session THEN 1.0 ELSE 0.0 END) < 0.50 THEN 'critical' ELSE 'ok' END,
        CONCAT(COUNT(*), ' consecutive same-person pairs under 30 min'), current_timestamp()
 FROM pairs JOIN params p ON pairs.view_date = p.check_date
 WHERE gap_min IS NOT NULL AND gap_min < 30
@@ -838,7 +838,7 @@ INSERT INTO dq.dq_check_result
 WITH params AS (SELECT date_sub(current_date(), 1) AS check_date)
 SELECT p.check_date, 'B7', 'identity', 'silver',
        COUNT(DISTINCT session_id) / COUNT(DISTINCT visit_id) AS official_over_reconstructed, NULL, NULL, 1.5,
-       CASE WHEN COUNT(DISTINCT session_id) / COUNT(DISTINCT visit_id) > 2.0 THEN 'blocker'
+       CASE WHEN COUNT(DISTINCT session_id) / COUNT(DISTINCT visit_id) > 2.0 THEN 'critical'
             WHEN COUNT(DISTINCT session_id) / COUNT(DISTINCT visit_id) > 1.5 THEN 'warning' ELSE 'ok' END,
        CONCAT(COUNT(DISTINCT session_id), ' official sessions vs ', COUNT(DISTINCT visit_id),
               ' reconstructed visits for ', COUNT(DISTINCT person_id), ' persons'),
@@ -870,7 +870,7 @@ missing AS (SELECT c.* FROM dq.schema_contract c ANTI JOIN cur USING (table_sche
 added   AS (SELECT c.* FROM cur c ANTI JOIN dq.schema_contract USING (table_schema, table_name, column_name))
 SELECT date_sub(current_date(), 1), 'C1', 'schema', 'staging',
        (SELECT COUNT(*) FROM missing) + (SELECT COUNT(*) FROM added), 0, NULL, 0,
-       CASE WHEN (SELECT COUNT(*) FROM missing) > 0 THEN 'blocker'
+       CASE WHEN (SELECT COUNT(*) FROM missing) > 0 THEN 'critical'
             WHEN (SELECT COUNT(*) FROM added)   > 0 THEN 'info' ELSE 'ok' END,
        CONCAT('missing: ', (SELECT COALESCE(concat_ws(', ', collect_list(column_name)), '-') FROM missing),
               ' | added: ',  (SELECT COALESCE(concat_ws(', ', collect_list(column_name)), '-') FROM added)),
@@ -895,7 +895,7 @@ nulls AS (
   FROM dq.pv_window GROUP BY view_date
 )
 SELECT p.check_date, 'C2', 'schema', 'bronze', t.null_rate, y.null_rate, NULL, y.null_rate + 0.05,
-       CASE WHEN t.field IN ('session_id','browser_id','page_id') AND t.null_rate > 0.01 THEN 'blocker'
+       CASE WHEN t.field IN ('session_id','browser_id','page_id') AND t.null_rate > 0.01 THEN 'critical'
             WHEN t.null_rate > y.null_rate + 0.05 THEN 'warning' ELSE 'ok' END,
        CONCAT('field ', t.field), current_timestamp()
 FROM nulls t JOIN params p ON t.view_date = p.check_date
@@ -939,7 +939,7 @@ INSERT INTO dq.dq_check_result
 WITH params AS (SELECT date_sub(current_date(), 1) AS check_date)
 SELECT p.check_date, 'C4', 'schema', 'staging',
        COUNT(DISTINCT ikey) + COUNT(DISTINCT app_id), 2, NULL, 2,
-       CASE WHEN COUNT(DISTINCT ikey) > 1 OR COUNT(DISTINCT app_id) > 1 THEN 'blocker' ELSE 'ok' END,
+       CASE WHEN COUNT(DISTINCT ikey) > 1 OR COUNT(DISTINCT app_id) > 1 THEN 'critical' ELSE 'ok' END,
        CONCAT('ikeys: ', COUNT(DISTINCT ikey), ' | app ids: ', COUNT(DISTINCT app_id)), current_timestamp()
 FROM dq.pv_window w JOIN params p ON w.view_date = p.check_date
 GROUP BY p.check_date;
@@ -958,7 +958,7 @@ v AS (
 )
 SELECT p.check_date, 'C5', 'schema', 'staging',
        GREATEST(bad_gpn, bad_tid, bad_ts), 0, NULL, 0.005,
-       CASE WHEN GREATEST(bad_gpn, bad_tid, bad_ts) > 0.05 THEN 'blocker'
+       CASE WHEN GREATEST(bad_gpn, bad_tid, bad_ts) > 0.05 THEN 'critical'
             WHEN GREATEST(bad_gpn, bad_tid, bad_ts) > 0.005 THEN 'warning' ELSE 'ok' END,
        CONCAT('invalid gpn ', ROUND(100 * bad_gpn, 2), ' % | invalid tracking id ', ROUND(100 * bad_tid, 2),
               ' % | timestamp out of window ', ROUND(100 * bad_ts, 2), ' %'),
@@ -990,7 +990,7 @@ r AS (
 )
 SELECT p.check_date, 'C6', 'schema', 'bronze',
        LEAST(page_hit, hr_hit), NULL, 0.95, NULL,
-       CASE WHEN LEAST(page_hit, hr_hit) < 0.90 THEN 'blocker'
+       CASE WHEN LEAST(page_hit, hr_hit) < 0.90 THEN 'critical'
             WHEN LEAST(page_hit, hr_hit) < 0.95 THEN 'warning' ELSE 'ok' END,
        CONCAT('page inventory hit ', ROUND(100 * page_hit, 1),
               ' % | HR hit ', ROUND(100 * hr_hit, 1), ' %'),
@@ -1048,7 +1048,7 @@ g AS (
 top AS (SELECT page_id FROM b ORDER BY views DESC LIMIT 200)
 SELECT p.check_date, 'D5', 'plausibility', 'gold',
        SUM(g.visits) / NULLIF(SUM(b.visits), 0) AS visits_ratio, SUM(g.people) / NULLIF(SUM(b.people), 0) AS people_ratio, 0.8, 1.25,
-       CASE WHEN SUM(g.visits) / SUM(b.visits) > 2.0 OR SUM(g.people) / SUM(b.people) NOT BETWEEN 0.8 AND 1.25 THEN 'blocker'
+       CASE WHEN SUM(g.visits) / SUM(b.visits) > 2.0 OR SUM(g.people) / SUM(b.people) NOT BETWEEN 0.8 AND 1.25 THEN 'critical'
             WHEN SUM(g.visits) / SUM(b.visits) NOT BETWEEN 0.8 AND 1.25 THEN 'warning' ELSE 'ok' END,
        CONCAT('top-200 pages: gold/bronze views ', ROUND(SUM(g.views) / SUM(b.views), 3),
               ' | visits ', ROUND(SUM(g.visits) / SUM(b.visits), 3), ' | people ', ROUND(SUM(g.people) / SUM(b.people), 3)),
@@ -1132,7 +1132,7 @@ b AS (SELECT COUNT(DISTINCT gpn) AS n FROM dq.pv_window w JOIN params p ON w.vie
 v AS (SELECT sv_contacts AS n FROM dq.sv_daily sv JOIN params p ON sv.view_date = p.check_date)
 SELECT p.check_date, 'S1', 'identity', 'silver',
        v.n / NULLIF(b.n, 0), 1.0, 0.9, 1.1,
-       CASE WHEN v.n / NULLIF(b.n, 0) NOT BETWEEN 0.75 AND 1.35 THEN 'blocker'
+       CASE WHEN v.n / NULLIF(b.n, 0) NOT BETWEEN 0.75 AND 1.35 THEN 'critical'
             WHEN v.n / NULLIF(b.n, 0) NOT BETWEEN 0.90 AND 1.10 THEN 'warning' ELSE 'ok' END,
        CONCAT('bronze distinct GPN ', b.n, ' vs silver distinct contactId ', v.n,
               ' — a ratio far below 1 means people are collapsing, far above means they are splitting'),
@@ -1144,7 +1144,7 @@ INSERT INTO dq.dq_check_result
 WITH params AS (SELECT date_sub(current_date(), 1) AS check_date)
 SELECT p.check_date, 'S2', 'schema', 'silver',
        LEAST(contact_resolution_rate, visitor_id_rate, page_guid_rate), NULL, 0.95, NULL,
-       CASE WHEN LEAST(contact_resolution_rate, visitor_id_rate, page_guid_rate) < 0.80 THEN 'blocker'
+       CASE WHEN LEAST(contact_resolution_rate, visitor_id_rate, page_guid_rate) < 0.80 THEN 'critical'
             WHEN LEAST(contact_resolution_rate, visitor_id_rate, page_guid_rate) < 0.95 THEN 'warning' ELSE 'ok' END,
        CONCAT('contactId ', ROUND(100 * contact_resolution_rate, 1),
               ' % | visitorId ', ROUND(100 * visitor_id_rate, 1),
@@ -1162,7 +1162,7 @@ base AS (SELECT AVG(returning_share) AS r FROM dq.sv_daily sv JOIN params p
 SELECT p.check_date, 'S3', 'identity', 'silver',
        sv.returning_share, base.r, base.r - 0.20, base.r + 0.20,
        CASE WHEN base.r IS NULL THEN 'info'
-            WHEN sv.returning_share < base.r - 0.20 THEN 'blocker'
+            WHEN sv.returning_share < base.r - 0.20 THEN 'critical'
             WHEN ABS(sv.returning_share - base.r) > 0.10 THEN 'warning' ELSE 'ok' END,
        CONCAT('returning ', ROUND(100 * sv.returning_share, 1), ' % vs 4-week baseline ',
               ROUND(100 * base.r, 1), ' % | anonymous ', ROUND(100 * sv.anonymous_share, 1), ' %'),
@@ -1189,7 +1189,7 @@ g AS (
 )
 SELECT p.check_date, 'G1', 'plausibility', 'gold',
        SUM(CASE WHEN n > 1 THEN n - 1 ELSE 0 END) / SUM(n), 0, NULL, 0,
-       CASE WHEN SUM(CASE WHEN n > 1 THEN 1 ELSE 0 END) > 0 THEN 'blocker' ELSE 'ok' END,
+       CASE WHEN SUM(CASE WHEN n > 1 THEN 1 ELSE 0 END) > 0 THEN 'critical' ELSE 'ok' END,
        CONCAT(SUM(CASE WHEN n > 1 THEN 1 ELSE 0 END), ' duplicated grain keys of ', COUNT(*)),
        current_timestamp()
 FROM g CROSS JOIN params p;
@@ -1209,7 +1209,7 @@ g AS (
 )
 SELECT p.check_date, 'G2', 'plausibility', 'gold',
        GREATEST(visits_gt_views, negatives, avg_mismatch), 0, NULL, 0.001,
-       CASE WHEN GREATEST(visits_gt_views, negatives) > 0 THEN 'blocker'
+       CASE WHEN GREATEST(visits_gt_views, negatives) > 0 THEN 'critical'
             WHEN avg_mismatch > 0.001 THEN 'warning' ELSE 'ok' END,
        CONCAT('visits > views ', ROUND(100 * visits_gt_views, 3),
               ' % | negative metrics ', ROUND(100 * negatives, 3),
@@ -1228,7 +1228,7 @@ g AS (SELECT SUM(views) AS views, COUNT(DISTINCT viewingcontactid) AS contacts
 SELECT p.check_date, 'G3', 'completeness', 'gold',
        g.views / NULLIF(v.sv_rows, 0), 1.0, 0.99, 1.01,
        CASE WHEN g.views / NULLIF(v.sv_rows, 0) NOT BETWEEN 0.95 AND 1.05
-             OR g.contacts / NULLIF(v.sv_contacts, 0) NOT BETWEEN 0.95 AND 1.05 THEN 'blocker'
+             OR g.contacts / NULLIF(v.sv_contacts, 0) NOT BETWEEN 0.95 AND 1.05 THEN 'critical'
             WHEN g.views / NULLIF(v.sv_rows, 0) NOT BETWEEN 0.99 AND 1.01 THEN 'warning' ELSE 'ok' END,
        CONCAT('views gold/silver ', ROUND(g.views / NULLIF(v.sv_rows, 0), 4),
               ' | contacts gold/silver ', ROUND(g.contacts / NULLIF(v.sv_contacts, 0), 4),
@@ -1240,16 +1240,23 @@ FROM params p CROSS JOIN v CROSS JOIN g;
 -- ----------------------------------------------------------------------------
 -- BLOCK 9 — Alerting, Power BI feed, DLT expectations, daily job order
 -- ----------------------------------------------------------------------------
--- Databricks SQL alert query (fires when any warning/blocker exists for yesterday)
+-- Databricks SQL alert query (fires when any warning/critical exists for yesterday)
 SELECT check_id, family, layer, status, ROUND(metric_value, 4) AS value, ROUND(baseline, 4) AS baseline, note
 FROM   dq.dq_check_result
-WHERE  check_date = date_sub(current_date(), 1) AND status IN ('warning', 'blocker')
-ORDER  BY CASE status WHEN 'blocker' THEN 0 ELSE 1 END, check_id;
+WHERE  check_date = date_sub(current_date(), 1) AND status IN ('warning', 'critical')
+ORDER  BY CASE status WHEN 'critical' THEN 0 ELSE 1 END, check_id;
 
--- Hold flag the Gold job reads before publishing a date range
-CREATE OR REPLACE VIEW dq.v_publish_hold AS
-SELECT check_date, collect_set(check_id) AS blocking_checks
-FROM   dq.dq_check_result WHERE status = 'blocker'
+-- Affected dates, for the banner in the report.
+--
+-- POLICY (2026-09-11): numbers are NEVER held back. A failing check labels the
+-- data, it never gates it. A stale report is the worse outcome, because
+-- staleness is silent while a banner is not. This view feeds a banner; nothing
+-- reads it as a gate, and no job branches on it.
+CREATE OR REPLACE VIEW dq.v_affected_dates AS
+SELECT check_date,
+       collect_set(check_id)                     AS critical_checks,
+       collect_set(CONCAT(check_id, ': ', note)) AS detail
+FROM   dq.dq_check_result WHERE status = 'critical'
 GROUP  BY check_date;
 
 -- Power BI Data Health page: last 90 days, latest computation per day × check
@@ -1263,8 +1270,11 @@ SELECT * FROM (
 -- import dlt
 -- from pyspark.sql import functions as F
 -- @dlt.table(name="pageviews")
--- @dlt.expect_or_fail("session id present",  "session_Id IS NOT NULL")
--- @dlt.expect_or_fail("browser id present",  "user_Id IS NOT NULL")
+-- Only @dlt.expect (warn and keep). Never expect_or_drop or expect_or_fail:
+-- dropping or failing a row withholds data, which the policy above forbids at
+-- row level just as much as at day level.
+-- @dlt.expect("session id present",           "session_Id IS NOT NULL")
+-- @dlt.expect("browser id present",           "user_Id IS NOT NULL")
 -- @dlt.expect("gpn well-formed",             "GPN IS NULL OR GPN RLIKE '^[0-9]{8}$'")
 -- @dlt.expect("tracking id well-formed",     "GICTrackingID IS NULL OR GICTrackingID RLIKE '^[A-Z0-9]{5}-[A-Z0-9]{7}-[0-9]{6}-[A-Z0-9]{7}-[A-Z]{3}$'")
 -- @dlt.expect("timestamp parses",            "CAST(`timestamp` AS TIMESTAMP) IS NOT NULL")
@@ -1275,6 +1285,7 @@ SELECT * FROM (
 -- Daily job (after the silver refresh, before gold publishes):
 --   1. BLOCK 2  dq.pv_window            2. BLOCK 3  pv_daily, gold_daily, metric_daily, metric_baseline
 --   3. BLOCK 4  corridor checks         4. BLOCKS 5-8 explicit checks
---   5. alert query; gold job reads dq.v_publish_hold for yesterday
+--   5. alert query; the report reads dq.v_affected_dates to drive its banner.
+--      No job branches on a check result — publishing is never gated.
 -- Idempotency: DELETE FROM dq.dq_check_result WHERE check_date = date_sub(current_date(), 1) before step 3,
 -- or MERGE on (check_date, check_id).

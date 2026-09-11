@@ -327,7 +327,7 @@
       <div class="stage ours"><div class="box">Gold<span>KPIs</span></div>
         <ul><li>KPI corridors and step changes</li><li class="hot">Gold vs raw recount</li><li>Top pages, tracking coverage</li><li>Row-count tie-out</li></ul></div>
       <div class="stage ours"><div class="box">Semantic layer<span>measures</span></div>
-        <ul><li>Measure equals Gold</li><li>Refresh held on a blocker</li></ul></div>
+        <ul><li>Measure equals Gold</li><li>Banner names the affected dates</li></ul></div>
       <div class="stage"><div class="box">Power BI<span>reports</span></div>
         <ul><li>Data-health page</li><li>Banner while under review</li></ul></div>
     </div>
@@ -341,7 +341,7 @@
     <div class="sev">
       <div class="i"><h3>Info</h3><p>The day is annotated in the check table, for example when a new tracking-software version appears. Nothing else changes.</p></div>
       <div class="w"><h3>Warning</h3><p>Reports keep refreshing. The affected KPI card and the data-health page show a badge, and the data owner is notified the same morning.</p></div>
-      <div class="b"><h3>Blocker</h3><p>The Gold and semantic refresh is held for the affected dates. Every report page shows "Data under review since …", and an incident is opened.</p></div>
+      <div class="b"><h3>Critical</h3><p>The numbers still publish. Every report page shows "Data under review since …" and the affected figure is marked, and an incident is opened. Data is never held back, because a stale report is silent about being stale while a labelled one is not.</p></div>
     </div>
   </section>
 

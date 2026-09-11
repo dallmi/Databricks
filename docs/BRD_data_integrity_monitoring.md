@@ -23,7 +23,7 @@ employees did not move at all. Nothing in the platform was watching that ratio.
 This document specifies the monitoring that closes the gap. It defines 37 checks
 across four question families and three medallion layers, the thresholds
 calibrated on real pre-incident data, the severity model that decides whether a
-refresh is held, and the delivery plan. The implementation exists as a reviewed
+data is labelled, and the delivery plan. The implementation exists as a reviewed
 SQL draft; this BRD is the specification it is measured against.
 
 **The ask:** approve the requirements in §6, the operating model in §8, and the
@@ -36,7 +36,7 @@ phasing in §11, and resolve the open points in §13.
 | # | Goal | Metric |
 |---|---|---|
 | G1 | An identity-class defect is detected on the day it starts, not weeks later | Time from onset to alert < 24 h |
-| G2 | No number reaches a report from a day that failed a blocking check | 100 % of blocker days withheld or banner-flagged |
+| G2 | No number is read without its known defects being visible at the same time | 100 % of affected days visibly labelled in the report |
 | G3 | Stakeholders can see the health of the data behind a number | Data-health page live in the report |
 | G4 | Every layer of the pipeline carries its own integrity, not inherited trust | ≥ 3 checks owned by each of bronze, silver, gold |
 | G5 | Thresholds are measured, not assumed | 100 % of identity thresholds calibrated on pre-incident data |
@@ -97,8 +97,8 @@ result was stored anywhere a person or an alert could read it.
 - The `pageViews` and `customEvents` telemetry from the source platform, through
   bronze, silver and gold, to the semantic layer consumed by the report.
 - Completeness, identity, schema and plausibility checks on that path.
-- Storage of every check result, alerting, and the hold that stops a bad day from
-  publishing.
+- Storage of every check result, alerting, and the labelling that makes a
+  defective day visible at the point of consumption.
 - A data-health surface in the report.
 
 ### 4.2 Out of scope (this phase)
@@ -130,8 +130,7 @@ flowchart LR
   SLV -. "S family" .-> DQ
   GLD -. "G · D families" .-> DQ
   SEM -. "D8 tie-out" .-> DQ
-  DQ -- "blocker holds the refresh" --> GLD
-  DQ -- "data-health page" --> RPT
+  DQ -- "banner and data-health page" --> RPT
 
   classDef store fill:#ECEBE4,stroke:#8E8D83,color:#404040;
   classDef res fill:#F5F0E1,stroke:#B98E2C,color:#404040;
@@ -195,12 +194,13 @@ and each hop is reconciled.
 
 | # | Requirement | Priority |
 |---|---|---|
-| FR-RSP-01 | Three severities: Info, Warning, Blocker, per §8.1 | Must |
-| FR-RSP-02 | A blocker withholds the gold and semantic refresh for the affected dates | Must |
-| FR-RSP-03 | A blocker shows a banner naming the affected date range in the report | Must |
+| FR-RSP-01 | Three severities: Info, Warning, Critical, per §8.1 | Must |
+| FR-RSP-02 | **Data is never withheld.** No check result may gate, delay, drop or filter a refresh, a row or a date. A failing check labels data; it never removes it | Must |
+| FR-RSP-03 | A critical result shows a banner naming the affected date range on every report page, and marks the affected KPI itself | Must |
 | FR-RSP-04 | A warning notifies the data owner the same morning and badges the affected KPI | Must |
-| FR-RSP-05 | A data-health page exposes the last 90 days of results to report consumers | Should |
+| FR-RSP-05 | A data-health page exposes the last 90 days of results to report consumers | **Must** — the compensating control for FR-RSP-02 |
 | FR-RSP-06 | An info-level event annotates the day without notifying anyone | Should |
+| FR-RSP-07 | Row-level rules warn and keep. No expectation may drop or reject a row | Must |
 
 ### 6.4 Calibration — `FR-CAL`
 
@@ -265,11 +265,21 @@ Ten signals, the subset a non-specialist should be able to read.
 
 ### 8.1 Severity and response
 
+**Publishing always continues.** Severity changes how loudly a defect is
+announced, never whether the data appears. Withholding a number is itself a
+failure mode: a stale report is silent about its staleness, while a published
+number carrying a visible warning lets the reader judge for themselves. The
+labelling in the right-hand column is therefore mandatory, not decorative. It is
+what earns the right to keep publishing.
+
 | Severity | Publishing | Report | People |
 |---|---|---|---|
 | Info | Continues | Day annotated in the result table | Nobody |
-| Warning | Continues | Badge on the data-health page and the affected KPI | Data owner, same morning |
-| Blocker | **Held for the affected dates** | Banner naming the date range | Data owner and product owner, incident opened |
+| Warning | Continues | Badge on the data-health page and on the affected KPI | Data owner, same morning |
+| Critical | **Continues** | Banner naming the affected dates on every page, plus the KPI marked | Data owner and product owner, incident opened |
+
+Renamed from *Critical* on 2026-09-11. Under this policy the level never blocked a
+refresh, and a name implying otherwise would mislead whoever maintains it.
 
 ### 8.2 Escalation path
 
@@ -279,29 +289,27 @@ flowchart TD
   EVAL -->|ok| PUB[Gold and semantic refresh proceeds]
   EVAL -->|info| ANN[Annotate the day] --> PUB
   EVAL -->|warning| BADGE[Badge the KPI<br/>notify the data owner] --> PUB
-  EVAL -->|blocker| HOLD[Withhold the affected dates<br/>banner in the report<br/>open an incident]
-  HOLD --> TRIAGE{Cause in our pipeline?}
-  TRIAGE -->|yes| FIX[Fix, re-run the day, release the hold]
+  EVAL -->|critical| LABEL[Publish as normal<br/>banner naming the dates<br/>mark the KPI<br/>open an incident]
+  LABEL --> TRIAGE{Cause in our pipeline?}
+  TRIAGE -->|yes| FIX[Fix, re-run the day<br/>the banner clears itself]
   TRIAGE -->|no, upstream| VENDOR[Raise with the source owner<br/>evidence from dq.dq_check_result]
-  VENDOR --> ACCEPT{Accept a degraded period?}
-  ACCEPT -->|yes| DOC[Document the period<br/>keep the banner, release the hold]
-  ACCEPT -->|no| HOLD
+  VENDOR --> KEEP[Banner stays until the source is repaired<br/>numbers keep flowing throughout]
 
   classDef ok fill:#F0F2E6,stroke:#6F7A1A,color:#404040;
   classDef warn fill:#FDF6E3,stroke:#E4A911,color:#404040;
   classDef bad fill:#FBE6E7,stroke:#BD000C,color:#404040;
   class PUB,FIX ok;
-  class BADGE,ANN,DOC warn;
-  class HOLD,VENDOR bad;
+  class BADGE,ANN warn;
+  class LABEL,VENDOR,KEEP bad;
 ```
 
 ### 8.3 Roles
 
 | Role | Responsibility |
 |---|---|
-| Data owner | First responder on a warning; triages a blocker |
-| Product owner | Decides whether a degraded period is published with a banner |
-| Data engineer | Maintains the checks, re-runs a held day after a fix |
+| Data owner | First responder on a warning; triages a critical result |
+| Product owner | Owns the banner wording and the incident |
+| Data engineer | Maintains the checks, re-runs an affected day after a fix |
 | Report consumer | Reads the data-health page; no action required |
 
 ---
@@ -320,7 +328,7 @@ reconstruction all read this single table.
 | `metric_value` | DOUBLE | What was measured |
 | `baseline` | DOUBLE | What was expected |
 | `lower_bound` / `upper_bound` | DOUBLE | The corridor applied |
-| `status` | STRING | ok · info · warning · blocker |
+| `status` | STRING | ok · info · warning · critical |
 | `note` | STRING | Human-readable, carries the evidence |
 | `computed_at` | TIMESTAMP | When the judgement was made |
 
@@ -339,8 +347,8 @@ From Block 0c, 25 March to 23 April 2026, daily grain.
 | Single-view session share | 0.54–0.65 | 0.73–0.76 | 0.93–0.95 |
 | Views carrying an employee number | 1.00 | 1.00 | 1.00 |
 
-Because these describe healthy data, checks B1, B4 and B5 fail today by design
-and will keep failing until the source is repaired. Retuning them to the current
+Because these describe healthy data, checks B1, B4 and B5 flag today by design
+and will keep flagging until the source is repaired. Retuning them to the current
 state would define the incident away and is explicitly forbidden by FR-CAL-03.
 
 ### 10.2 Daily, never pooled
@@ -354,7 +362,7 @@ days while people do. The checks run daily, so the daily figures govern.
 
 Good Friday on 3 April drew 29,845 page views against roughly 220,000 on a normal
 Friday, and Easter Monday 108,580 against roughly 316,000. Without a holiday
-calendar, check A1 raises a blocker on both days every year. A calendar table is
+calendar, check A1 raises a critical result on both days every year. A calendar table is
 a prerequisite for phase 1, not an enhancement.
 
 ---
@@ -366,7 +374,7 @@ a prerequisite for phase 1, not an enhancement.
 | 0 | — | Blocks 0, 0b, 0c: probe columns, calibrate, date the incident | **Complete, 2026-09-11** |
 | 1 | 1–2 | B1, B3, B4, A1, A2, A4, A6, C3; result table; one alert; holiday calendar | The eight checks that catch an April-class defect on day one |
 | 2 | 3–4 | B2, B5, B7, C1, C2, C5, D1, D5, D8, S1–S3 | Full identity family, silver family, row-level expectations, report tie-out, data-health page |
-| 3 | 5–6 | Remaining A, C, D checks; G1–G3; blocker hold in the gold job; report banner | Operating model complete |
+| 3 | 5–6 | Remaining A, C, D checks; G1–G3; banner driven by `dq.v_affected_dates`; data-health page | Operating model complete |
 
 ---
 
@@ -374,10 +382,10 @@ a prerequisite for phase 1, not an enhancement.
 
 | # | Criterion |
 |---|---|
-| AC-01 | Replaying 1 March to 30 April 2026 raises a blocker on 7 or 8 April and none on 1–6 April |
+| AC-01 | Replaying 1 March to 30 April 2026 raises a critical result on 7 or 8 April and none on 1–6 April |
 | AC-02 | No check raises a warning on a healthy weekend in the replay |
-| AC-03 | Good Friday and Easter Monday raise no volume blocker |
-| AC-04 | A blocker demonstrably withholds the affected date from the semantic layer |
+| AC-03 | Good Friday and Easter Monday raise no volume critical result |
+| AC-04 | A critical result publishes as normal **and** the affected date is visibly labelled; no code path exists that can withhold a date |
 | AC-05 | Re-running a day produces one result row per check, not two |
 | AC-06 | The data-health page renders the last 90 days from `dq.dq_check_result` |
 | AC-07 | Full daily runtime stays under 15 minutes on the production cluster |
@@ -390,8 +398,8 @@ a prerequisite for phase 1, not an enhancement.
   company standard since 2026-07-13, or a person-based visit from the employee
   number plus a 30-minute inactivity rule. Changing it restates history. Unique
   visitors are unaffected either way, as they already rest on the contact id.
-- **OP-02** (owner) Who receives a warning, and who is authorised to release a
-  blocker hold.
+- **OP-02** (owner) Who receives a warning, and who owns the banner wording on a
+  critical result.
 - **OP-03** (dependency) Source of the public-holiday calendar, per §10.3.
 - **OP-04** (data) The relationship between bronze `pageId`, an INT, and the page
   inventory key `pageUUID`, a GUID string. Check C6 currently joins on the URL as

@@ -63,7 +63,7 @@ flowchart TD
     B4[Block 4<br/>corridor engine]
     B5[Blocks 5-8<br/>explicit checks]
     B8b[8b silver · 8c gold]
-    B9[Block 9<br/>alert · hold]
+    B9[Block 9<br/>alert · banner]
   end
   B0 --> B0b --> B0c --> B1
   B0c -.-> B0d --> B0e --> B0f
@@ -373,13 +373,13 @@ because the aggregate is still in range. Only a row-level rule catches it.
 
 ---
 
-## Block 9 — Alerting, hold and consumption
+## Block 9 — Alerting, labelling and consumption
 
 **Intent.** Turn stored verdicts into action. BRD §8.
 
-**What it contains.** The alert query that fires on any warning or blocker for
-the previous day, ordered so blockers appear first. The view `dq.v_publish_hold`,
-which the gold job reads before publishing a date range. The view
+**What it contains.** The alert query that fires on any warning or critical result for
+the previous day, ordered so critical results appear first. The view
+`dq.v_affected_dates`, which the report reads to drive its banner. The view
 `dq.v_data_health`, which de-duplicates to the latest computation per day and
 check and feeds the report page. The DLT expectations for row-level rules, as a
 commented Python cell. The daily job order.
@@ -388,8 +388,20 @@ commented Python cell. The daily job order.
 Either delete the day before re-inserting, or merge on day and check. The block
 documents both; pick one and make the job do it unconditionally.
 
-**On the hold.** The hold is a view, not a mechanism. The gold job has to read it
-and act. That integration is phase 3 and is not implemented here.
+**Policy: numbers are never held back.** No check result gates, delays, drops or
+filters anything. `dq.v_affected_dates` feeds a banner, not a gate, and no job
+branches on it. Withholding is itself a failure mode: a stale report is silent
+about being stale, while a published number carrying a visible warning lets the
+reader judge for themselves. BRD FR-RSP-02.
+
+The same rule applies at row level, which is why only `@dlt.expect` appears in
+the commented expectations and never `expect_or_drop` or `expect_or_fail`. Both
+withhold rows. BRD FR-RSP-07.
+
+The compensating control is that the labelling has to actually reach the reader,
+so the banner and the data-health page are both Must, not Should. Without them
+the policy degrades into publishing defects silently, which is worse than either
+alternative.
 
 ---
 

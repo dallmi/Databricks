@@ -326,7 +326,7 @@ The following points are to be clarified **before** implementation starts, with 
 
 ## Appendix A — iMEP Genie Code Reference Patterns
 
-Source: Databricks Genie notebook (cells 6/7/24/25). Screenshots: `Bilder/16. April 2026/IMG_7331..7334.jpeg`.
+Source: Databricks Genie notebook (cells 6/7/24/25). Screenshots: `pictures/16. April 2026/IMG_7331..7334.jpeg`.
 
 ### Table overview
 
