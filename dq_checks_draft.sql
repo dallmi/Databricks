@@ -246,6 +246,174 @@ ORDER BY b.d;
 --   weekday is printed next to the date.
 
 
+-- ============================================================================
+-- BLOCKS 0d - 0f — ROOT CAUSE. Read-only. Not part of the daily run.
+-- These do not monitor anything; they narrow down what changed on 7-8 April.
+-- Each is one cell, one result grid. See BRD §13, OP-07 and OP-08.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- BLOCK 0d — Is there still a stable identity in the data?
+--
+-- Bronze carries three identity columns, and only one of them is known broken:
+--   user_Id              the SDK's own cookie — the one that stopped persisting
+--   user_AuthenticatedId set by the application when it knows who is logged in
+--   user_AccountId       the SDK's account slot, also application-supplied
+-- Every row carries an employee number, so the application always knows the
+-- person. If either application-supplied column survived 7 April, that is both a
+-- diagnostic (the cookie broke, not the instrumentation) and a candidate
+-- replacement key. If all three broke together, the fault is in SDK setup.
+--
+-- The second half asks what the new identifiers LOOK like. The SDK cookie has a
+-- documented shape; a change in length or in the presence of its separator means
+-- the value is being minted fresh rather than read back.
+-- ----------------------------------------------------------------------------
+%sql
+WITH base AS (
+  SELECT CASE WHEN `timestamp` < '2026-04-07' THEN '1 before' ELSE '2 after' END AS period,
+         CAST(CAST(`timestamp` AS TIMESTAMP) AS DATE) AS d,
+         user_Id, user_AuthenticatedId, user_AccountId, GPN, session_Id
+  FROM   sharepoint_bronze.pageviews
+  WHERE (`timestamp` >= '2026-03-25' AND `timestamp` < '2026-04-04')
+     OR (`timestamp` >= '2026-04-09' AND `timestamp` < '2026-04-19')
+),
+recur AS (   -- does one identifier ever appear on more than one day?
+  SELECT period, user_Id, COUNT(DISTINCT d) AS days_seen
+  FROM   base WHERE user_Id IS NOT NULL GROUP BY period, user_Id
+)
+SELECT
+  b.period,
+  COUNT(*)                                                            AS views,
+  COUNT(DISTINCT b.GPN)                                               AS persons,
+  -- fill rates: is the application even supplying the other two columns?
+  ROUND(COUNT(b.user_AuthenticatedId) / COUNT(*), 4)                  AS auth_id_fill_rate,
+  ROUND(COUNT(b.user_AccountId)       / COUNT(*), 4)                  AS account_id_fill_rate,
+  -- the decisive comparison: identifiers per person, one column against the other
+  ROUND(COUNT(DISTINCT b.user_Id)              / COUNT(DISTINCT b.GPN), 2) AS cookie_ids_per_person,
+  ROUND(COUNT(DISTINCT b.user_AuthenticatedId) / COUNT(DISTINCT b.GPN), 2) AS auth_ids_per_person,
+  ROUND(COUNT(DISTINCT b.user_AccountId)       / COUNT(DISTINCT b.GPN), 2) AS account_ids_per_person,
+  -- shape of the cookie value
+  ROUND(AVG(LENGTH(b.user_Id)), 2)                                    AS cookie_len_avg,
+  COUNT(DISTINCT LENGTH(b.user_Id))                                   AS cookie_len_variants,
+  ROUND(AVG(CASE WHEN b.user_Id LIKE '%|%' THEN 1.0 ELSE 0.0 END), 4) AS cookie_has_separator,
+  MIN(b.user_Id)                                                      AS cookie_sample,
+  -- persistence: share of identifiers that are ever seen on a second day
+  ROUND(MAX(r.multi_day_share), 4)                                    AS ids_seen_on_2plus_days
+FROM base b
+LEFT JOIN (SELECT period, AVG(CASE WHEN days_seen > 1 THEN 1.0 ELSE 0.0 END) AS multi_day_share
+           FROM recur GROUP BY period) r ON r.period = b.period
+GROUP BY b.period
+ORDER BY b.period;
+
+-- Reading it: auth_ids_per_person staying near 1 across both periods means the
+-- authenticated identity survived and can carry visits today. All three rising
+-- together points at SDK initialisation. cookie_has_separator or
+-- cookie_len_variants changing means the value's format changed, i.e. it is being
+-- generated rather than read. ids_seen_on_2plus_days near 0 after means no
+-- persistence across days at all.
+
+
+-- ----------------------------------------------------------------------------
+-- BLOCK 0e — Which subset flipped first?
+--
+-- A two-day ramp almost always has a dimension it was rolled out along. This
+-- compares the same weekday before and after, per dimension value, so a subset
+-- that moved early or moved alone becomes visible.
+--   Wed 1 Apr  vs  Wed 8 Apr   the completed break, like for like
+--   Tue 31 Mar vs  Tue 7 Apr   the onset day, where only part had flipped
+-- Easter is deliberately avoided: 3 and 6 April are holidays (BRD §10.3).
+--
+-- If one site, browser or SDK version moves a day before the rest, that is the
+-- rollout path. If every value moves together, the change was central.
+-- ----------------------------------------------------------------------------
+%sql
+WITH base AS (
+  SELECT CAST(CAST(`timestamp` AS TIMESTAMP) AS DATE) AS d,
+         user_Id, GPN, SiteName, client_Browser, client_OS, client_Type, sdkVersion
+  FROM   sharepoint_bronze.pageviews
+  WHERE  `timestamp` >= '2026-03-31' AND `timestamp` < '2026-04-09'
+    AND  CAST(CAST(`timestamp` AS TIMESTAMP) AS DATE)
+         IN (DATE '2026-03-31', DATE '2026-04-01', DATE '2026-04-07', DATE '2026-04-08')
+),
+long AS (
+  SELECT d, user_Id, GPN, 'site'    AS dim, COALESCE(SiteName, '(null)')      AS val FROM base
+  UNION ALL SELECT d, user_Id, GPN, 'browser', COALESCE(client_Browser,'(null)') FROM base
+  UNION ALL SELECT d, user_Id, GPN, 'os',      COALESCE(client_OS,'(null)')      FROM base
+  UNION ALL SELECT d, user_Id, GPN, 'type',    COALESCE(client_Type,'(null)')    FROM base
+  UNION ALL SELECT d, user_Id, GPN, 'sdk',     COALESCE(sdkVersion,'(null)')     FROM base
+)
+SELECT
+  dim, val,
+  COUNT(CASE WHEN d = DATE '2026-04-08' THEN 1 END)                        AS views_08apr,
+  ROUND(COUNT(DISTINCT CASE WHEN d = DATE '2026-03-31' THEN user_Id END)
+      / NULLIF(COUNT(DISTINCT CASE WHEN d = DATE '2026-03-31' THEN GPN END), 0), 2) AS bpp_tue_31mar,
+  ROUND(COUNT(DISTINCT CASE WHEN d = DATE '2026-04-07' THEN user_Id END)
+      / NULLIF(COUNT(DISTINCT CASE WHEN d = DATE '2026-04-07' THEN GPN END), 0), 2) AS bpp_tue_07apr,
+  ROUND(COUNT(DISTINCT CASE WHEN d = DATE '2026-04-01' THEN user_Id END)
+      / NULLIF(COUNT(DISTINCT CASE WHEN d = DATE '2026-04-01' THEN GPN END), 0), 2) AS bpp_wed_01apr,
+  ROUND(COUNT(DISTINCT CASE WHEN d = DATE '2026-04-08' THEN user_Id END)
+      / NULLIF(COUNT(DISTINCT CASE WHEN d = DATE '2026-04-08' THEN GPN END), 0), 2) AS bpp_wed_08apr
+FROM long
+GROUP BY dim, val
+HAVING COUNT(CASE WHEN d = DATE '2026-04-08' THEN 1 END) > 500   -- drop long-tail noise
+ORDER BY dim, views_08apr DESC;
+
+-- Reading it: compare bpp_tue_31mar with bpp_tue_07apr first. Any value already
+-- elevated on the 7th was in the first wave. Then bpp_wed_01apr against
+-- bpp_wed_08apr for the completed picture. A value that stays near 1 in all four
+-- columns was never affected, and is the most interesting row on the grid.
+
+
+-- ----------------------------------------------------------------------------
+-- BLOCK 0f — The hour it started, and whether the second stream broke too.
+--
+-- Part 1 resolves 7 April to the hour. A deployment shows a sharp edge at one
+-- hour boundary, which is the single most useful fact for searching a change
+-- record. A gradual climb across the day points at caches or staged traffic.
+--
+-- Part 2 asks whether customEvents broke on the same day. Both streams come from
+-- the same SDK on the same pages. If clicks broke too, the fault is SDK-wide; if
+-- only page views broke, it sits in page-view tracking specifically, which is a
+-- much narrower place to look.
+-- ----------------------------------------------------------------------------
+%sql
+-- Part 1: hour by hour, 6-8 April
+SELECT
+  CAST(CAST(`timestamp` AS TIMESTAMP) AS DATE)        AS day,
+  HOUR(CAST(`timestamp` AS TIMESTAMP))                AS hour_utc,
+  COUNT(*)                                            AS views,
+  COUNT(DISTINCT GPN)                                 AS persons,
+  COUNT(DISTINCT user_Id)                             AS browser_ids,
+  ROUND(COUNT(DISTINCT user_Id) / NULLIF(COUNT(DISTINCT GPN), 0), 2) AS browser_ids_per_person,
+  ROUND(COUNT(*) / NULLIF(COUNT(DISTINCT session_Id), 0), 3)         AS views_per_session
+FROM   sharepoint_bronze.pageviews
+WHERE  `timestamp` >= '2026-04-06' AND `timestamp` < '2026-04-09'
+GROUP  BY 1, 2
+HAVING COUNT(*) > 200          -- ignore the quiet night hours
+ORDER  BY 1, 2;
+
+%sql
+-- Part 2: the same ratios on the customEvents stream, day by day.
+-- customEvents has no `id` column; identity columns are the same ones.
+SELECT
+  CAST(CAST(`timestamp` AS TIMESTAMP) AS DATE)        AS day,
+  date_format(CAST(`timestamp` AS TIMESTAMP), 'E')    AS dow,
+  COUNT(*)                                            AS events,
+  COUNT(DISTINCT GPN)                                 AS persons,
+  COUNT(DISTINCT user_Id)                             AS browser_ids,
+  ROUND(COUNT(DISTINCT user_Id) / NULLIF(COUNT(DISTINCT GPN), 0), 2) AS browser_ids_per_person,
+  ROUND(COUNT(*) / NULLIF(COUNT(DISTINCT session_Id), 0), 3)         AS events_per_session
+FROM   sharepoint_bronze.customevents
+WHERE  `timestamp` >= '2026-03-31' AND `timestamp` < '2026-04-16'
+  AND  name = 'click_event'
+GROUP  BY 1, 2
+ORDER  BY 1;
+
+-- Reading it: if customEvents shows the same jump on the same day, one SDK-level
+-- change affected both streams. If it stays flat, page-view tracking alone
+-- changed, and the click stream is a usable control group for everything after.
+
+
 -- ----------------------------------------------------------------------------
 -- BLOCK 1 — Result table + check catalogue
 -- ----------------------------------------------------------------------------
