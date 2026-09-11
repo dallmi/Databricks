@@ -1,8 +1,12 @@
 # Data Integrity Checks — Intranet Telemetry Pipeline
 
-Status: **proposal**, 2026-09-09. Companion one-pager for non-experts:
-[`data-integrity-checks.html`](data-integrity-checks.html). SQL draft per check:
-[`../dq_checks_draft.sql`](../dq_checks_draft.sql) (table map in §9).
+Status: **proposal**, 2026-09-09, revised 2026-09-11 against the workspace.
+
+| Companion | What it is for |
+|---|---|
+| [`data-integrity-checks.html`](data-integrity-checks.html) | Executive one-pager: the April incident and the ratio watchlist |
+| [`integrity-checks-by-example.html`](integrity-checks-by-example.html) | **Each check on a worked example**, healthy data beside the failure it catches. Read this to understand what a check means without reading SQL |
+| [`../dq_checks_draft.sql`](../dq_checks_draft.sql) | The SQL per check. Table map in §9 |
 
 Scope: the `pageViews` (and, where noted, `customEvents`) telemetry that flows
 Application Insights → Staging → Bronze → Silver → Gold → semantic layer → Power BI.
