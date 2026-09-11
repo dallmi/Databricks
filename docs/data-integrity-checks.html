@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Telemetry Integrity Checks</title>
+<style>
+  :root {
+    color-scheme: light;
+    --white: #FFFFFF; --black: #000000;
+    --ink: #404040; --ink-2: #5A5D5C; --muted: #7A7870; --mid: #8E8D83;
+    --rule: #CCCABC; --pastel: #ECEBE4; --pastel-2: #F5F0E1; --row-alt: #F8F7F2;
+    --red: #E60000; --bordeaux: #BD000C; --bronze: #B98E2C;
+    --ok: #6F7A1A; --warn: #E4A911; --crit: #BD000C;
+    --font: "Frutiger 45 Light", "Frutiger", "Helvetica Neue", Helvetica, Arial, "Segoe UI", system-ui, sans-serif;
+  }
+  html { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  body { margin: 0; background: var(--white); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  *, *::before, *::after { box-sizing: border-box; }
+  .page { max-width: 1140px; margin: 0; padding: 40px 48px 56px; }
+  h1, h2, h3 { color: var(--black); margin: 0; text-wrap: balance; }
+  h1 { font-size: 40px; font-weight: 300; line-height: 1.1; letter-spacing: -0.01em; }
+  h2 { font-size: 18px; font-weight: 600; line-height: 1.3; }
+  h3 { font-size: 15px; font-weight: 600; line-height: 1.3; }
+  p { margin: 0; }
+  b, strong { font-weight: 600; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .caption { font-size: 11px; color: var(--muted); line-height: 1.4; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* header */
+  .head { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: start; padding-bottom: 20px; border-bottom: 2px solid var(--red); }
+  .head .sub { margin-top: 12px; max-width: 62ch; font-size: 15px; color: var(--muted); }
+  .corner { background: var(--pastel); padding: 8px 14px; font-size: 12px; color: var(--ink); white-space: nowrap; }
+  .corner b { display: block; }
+
+  /* sections */
+  section { margin-top: 48px; }
+  .sec-head { display: grid; grid-template-columns: 1fr; gap: 6px; margin-bottom: 18px; }
+  .sec-head .lead { max-width: 72ch; color: var(--ink); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
+  @media (max-width: 860px) { .two { grid-template-columns: 1fr; } .page { padding: 28px 20px 40px; } h1 { font-size: 32px; } }
+
+  /* identity model illustration */
+  .idm { display: grid; grid-template-columns: 130px 1.5fr auto 0.8fr auto 1.2fr; column-gap: 10px; row-gap: 14px; align-items: center; margin-top: 8px; }
+  .idm-hdr { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+  .idm-lab { font-size: 13px; font-weight: 600; color: var(--black); }
+  .idm-lab span { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+  .idm-person { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+  .idm-person svg { width: 22px; height: 22px; stroke: var(--ink); fill: none; stroke-width: 1.6; }
+  .arrow { width: 22px; height: 12px; }
+  .arrow line { stroke: var(--mid); stroke-width: 1.2; }
+  .arrow path { fill: var(--mid); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { border: 1px solid var(--mid); padding: 3px 8px; font-size: 12px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--ink); background: var(--white); }
+  .chip.bad { border-color: var(--bordeaux); color: var(--bordeaux); }
+  .pv { display: inline-block; width: 30px; height: 36px; border: 1px solid var(--ink-2); background: var(--white); position: relative; }
+  .pv::before, .pv::after { content: ""; position: absolute; left: 6px; right: 6px; height: 1px; background: var(--rule); }
+  .pv::before { top: 10px; } .pv::after { top: 16px; }
+  .views { display: flex; gap: 6px; }
+  .res { font-size: 13px; }
+  .res b { font-size: 20px; font-weight: 300; color: var(--black); margin-right: 2px; }
+  .res .bad b { color: var(--bordeaux); font-weight: 400; }
+  .idm-note { grid-column: 1 / -1; padding-top: 10px; border-top: 1px solid var(--rule); font-size: 13px; max-width: 80ch; }
+
+  /* charts */
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  @media (max-width: 860px) { .charts { grid-template-columns: 1fr; } }
+  .chart { position: relative; }
+  .chart h3 { margin-bottom: 2px; }
+  .chart .caption { margin-bottom: 8px; }
+  .chart svg { width: 100%; height: auto; display: block; }
+  .chart text { font-family: var(--font); font-size: 11px; fill: var(--muted); }
+  .chart .ax { stroke: var(--black); stroke-width: 1; }
+  .chart .band { fill: var(--pastel); }
+  .chart .ok-line { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; }
+  .chart .bad-line { fill: none; stroke: var(--bordeaux); stroke-width: 2; stroke-linejoin: round; }
+  .chart .marker { stroke: var(--ink-2); stroke-width: 1.25; stroke-dasharray: 4 3; }
+  .chart .lbl-dark { fill: var(--black); font-weight: 600; }
+  .chart .lbl-bad { fill: var(--bordeaux); font-weight: 600; }
+  .chart .dot { fill: var(--bordeaux); stroke: var(--white); stroke-width: 2; }
+  .chart .hover { fill: transparent; cursor: crosshair; }
+  .chart .xh { stroke: var(--mid); stroke-width: 1; pointer-events: none; }
+  .tip { position: absolute; pointer-events: none; background: var(--white); border: 1px solid var(--rule); padding: 4px 8px; font-size: 12px; color: var(--ink); white-space: nowrap; transform: translate(-50%, -100%); margin-top: -8px; display: none; }
+  .tip b { color: var(--black); }
+
+  /* question cards */
+  .qgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  @media (max-width: 1000px) { .qgrid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .qgrid { grid-template-columns: 1fr; } }
+  .q { border: 1px solid var(--rule); border-top: 3px solid var(--mid); background: var(--white); padding: 16px 18px 14px; display: grid; grid-template-rows: auto auto 1fr auto; gap: 10px; }
+  .q.april { border-top-color: var(--bordeaux); }
+  .q .why { font-size: 13px; color: var(--muted); }
+  .q ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+  .q li { font-size: 13px; padding-left: 12px; position: relative; }
+  .q li::before { content: ""; position: absolute; left: 0; top: 8px; width: 5px; height: 5px; background: var(--mid); }
+  .q li .tag { font-size: 10.5px; color: var(--muted); margin-left: 4px; white-space: nowrap; }
+  .q .foot { font-size: 12px; color: var(--ink); padding-top: 10px; border-top: 1px solid var(--rule); }
+  .q.april .foot { color: var(--bordeaux); font-weight: 600; }
+
+  /* watchlist table */
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { text-align: left; font-weight: 600; color: var(--black); padding: 8px 10px; border-bottom: 1px solid var(--black); font-size: 12px; vertical-align: bottom; }
+  tbody td { padding: 8px 10px; border-bottom: 1px solid var(--pastel); vertical-align: top; }
+  tbody tr:nth-child(even) td { background: var(--row-alt); }
+  tbody tr:last-child td { border-bottom: 1px solid var(--black); }
+  td.sig { font-weight: 600; color: var(--black); white-space: nowrap; }
+  td.sig span { display: block; font-weight: 400; color: var(--muted); font-size: 11px; }
+  td.yes { font-weight: 600; color: var(--black); white-space: nowrap; }
+  td.yes::before, td.lead::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; vertical-align: 0; }
+  td.yes::before { background: var(--bordeaux); }
+  td.lead::before { background: var(--bronze); }
+  td.no { color: var(--muted); }
+  .broken { color: var(--bordeaux); }
+
+  /* pipeline strip */
+  .pipe { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0; align-items: start; }
+  @media (max-width: 900px) { .pipe { grid-template-columns: repeat(4, 1fr); row-gap: 20px; } }
+  .stage { padding: 0 8px; position: relative; }
+  .stage .box { border: 1px solid var(--mid); background: var(--white); padding: 8px 10px; font-size: 13px; font-weight: 600; color: var(--black); text-align: left; position: relative; }
+  .stage .box span { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
+  .stage.ours .box { background: var(--pastel); border-color: var(--pastel); }
+  .stage .box::after { content: ""; position: absolute; right: -17px; top: 50%; width: 16px; height: 1px; background: var(--mid); }
+  .stage:last-child .box::after { display: none; }
+  @media (max-width: 900px) { .stage .box::after { display: none; } }
+  .stage ul { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 4px; }
+  .stage li { font-size: 12px; color: var(--ink); padding-left: 10px; position: relative; line-height: 1.35; }
+  .stage li::before { content: ""; position: absolute; left: 0; top: 7px; width: 4px; height: 4px; background: var(--mid); }
+  .stage li.hot::before { background: var(--bordeaux); }
+
+  /* severity */
+  .sev { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 760px) { .sev { grid-template-columns: 1fr; } }
+  .sev div { border-left: 3px solid var(--mid); padding: 4px 0 4px 14px; }
+  .sev .w { border-left-color: var(--warn); } .sev .b { border-left-color: var(--crit); } .sev .i { border-left-color: var(--mid); }
+  .sev h3 { margin-bottom: 4px; }
+  .sev p { font-size: 13px; }
+
+  /* callout */
+  .callout { background: var(--pastel); border-left: 3px solid var(--bronze); padding: 16px 20px; max-width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 860px) { .callout { grid-template-columns: 1fr; } }
+  .callout h3 { margin-bottom: 6px; }
+  .callout p { font-size: 13px; }
+
+  footer { margin-top: 56px; padding-top: 14px; border-top: 1px solid var(--black); display: grid; grid-template-columns: 1fr auto; gap: 16px; font-size: 11px; color: var(--muted); }
+  footer p { max-width: 90ch; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.92em; color: var(--ink); }
+
+  @media print {
+    .page { padding: 0; max-width: none; }
+    section { break-inside: auto; }
+    .q, .chart, .callout, .stage, .sev div, tr { break-inside: avoid; }
+    h2 { break-after: avoid; }
+    .tip, .hover, .xh { display: none !important; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <div class="head">
+    <div>
+      <h1>Telemetry Integrity Checks</h1>
+      <p class="sub">Ten signals that tell us whether the intranet numbers in Power&nbsp;BI can be trusted, and a check catalogue that would have caught the April identity change on day one.</p>
+    </div>
+    <div class="corner"><b>Proposal</b>September 2026 · Analytics pipeline</div>
+  </div>
+
+  <!-- 1. What happened -->
+  <section>
+    <div class="sec-head">
+      <h2>What happened on 8 April</h2>
+      <p class="lead">The browser identifier that ties page views to a person stopped persisting. Every page view arrived with a new browser identity and therefore a new visit. Page view totals were correct, and unique visitors were unaffected because they are counted on the employee identifier, so nothing looked wrong at first glance.</p>
+    </div>
+
+    <div class="idm">
+      <div class="idm-hdr"></div>
+      <div class="idm-hdr">Browser identity</div>
+      <div class="idm-hdr"></div>
+      <div class="idm-hdr">Page views</div>
+      <div class="idm-hdr"></div>
+      <div class="idm-hdr">What we report</div>
+
+      <div class="idm-lab">Before<span>one employee, three pages</span></div>
+      <div class="chips"><span class="chip">user a7f3</span></div>
+      <svg class="arrow" viewBox="0 0 22 12" aria-hidden="true"><line x1="0" y1="6" x2="15" y2="6"/><path d="M14 2 L21 6 L14 10 Z"/></svg>
+      <div class="views"><span class="pv"></span><span class="pv"></span><span class="pv"></span></div>
+      <svg class="arrow" viewBox="0 0 22 12" aria-hidden="true"><line x1="0" y1="6" x2="15" y2="6"/><path d="M14 2 L21 6 L14 10 Z"/></svg>
+      <div class="res"><b class="num">3</b> page views &nbsp;·&nbsp; <b class="num">1</b> visit &nbsp;·&nbsp; <b class="num">1</b> visitor</div>
+
+      <div class="idm-lab">Since 8 April<span>same employee, same pages</span></div>
+      <div class="chips"><span class="chip bad">user a7f3</span><span class="chip bad">user 91c2</span><span class="chip bad">user 04be</span></div>
+      <svg class="arrow" viewBox="0 0 22 12" aria-hidden="true"><line x1="0" y1="6" x2="15" y2="6"/><path d="M14 2 L21 6 L14 10 Z"/></svg>
+      <div class="views"><span class="pv"></span><span class="pv"></span><span class="pv"></span></div>
+      <svg class="arrow" viewBox="0 0 22 12" aria-hidden="true"><line x1="0" y1="6" x2="15" y2="6"/><path d="M14 2 L21 6 L14 10 Z"/></svg>
+      <div class="res"><b class="num">3</b> page views &nbsp;·&nbsp; <span class="bad"><b class="num">3</b> visits</span> &nbsp;·&nbsp; <b class="num">1</b> visitor</div>
+
+      <p class="idm-note"><b>Consequence.</b> Visits inflated, and pages per visit and time on page collapsed to their floor. Unique visitors stayed correct: they are counted on the employee identifier and e-mail from the telemetry, matched to HR data and transformed to a contact ID, not on the browser identity. The change was found by people weeks later, not by the pipeline. The vendor is investigating the cause; this page is about what we can do on our side regardless of the outcome.</p>
+    </div>
+  </section>
+
+  <!-- 2. The signal we missed -->
+  <section>
+    <div class="sec-head">
+      <h2>The signal we missed</h2>
+      <p class="lead">Absolute counts move with the business calendar. Ratios between fields do not, so they break sharply when the data model breaks. Two of them would have fired on the first day.</p>
+    </div>
+    <div class="charts">
+      <div class="chart" id="c1">
+        <h3>Page views per visit</h3>
+        <p class="caption">Daily, page views ÷ visits. Expected corridor from the trailing eight weeks.</p>
+      </div>
+      <div class="chart" id="c2">
+        <h3>Browser identities per employee</h3>
+        <p class="caption">Daily, distinct browser identities ÷ distinct employee identifiers, on views that carry an employee identifier.</p>
+      </div>
+    </div>
+    <p class="caption" style="margin-top:10px">Illustrative curves: the shape follows the observed incident (ratio 1.1–1.2 before, 1.0 after); exact values and corridor widths are to be calibrated on the stored data.</p>
+  </section>
+
+  <!-- 3. Four questions -->
+  <section>
+    <div class="sec-head">
+      <h2>Four questions the pipeline asks every morning</h2>
+      <p class="lead">Every check answers exactly one of them. Results are stored per day and per check, so an alert, the Power&nbsp;BI data-health page and the incident history all read the same table.</p>
+    </div>
+    <div class="qgrid">
+      <div class="q">
+        <h3>Did everything arrive?</h3>
+        <p class="why">Completeness and freshness of each layer.</p>
+        <ul>
+          <li>Daily volume inside the same-weekday corridor <span class="tag">Bronze</span></li>
+          <li>Newest event no older than 24 hours, per layer <span class="tag">all layers</span></li>
+          <li>Every event recorded, none sampled away <span class="tag">Staging</span></li>
+          <li>Row counts tie out from Staging to Gold to Power BI <span class="tag">every hop</span></li>
+        </ul>
+        <p class="foot">Catches: stalled exports, partial days, silent sampling, lost rows.</p>
+      </div>
+      <div class="q april">
+        <h3>Do we still recognise people?</h3>
+        <p class="why">Identity and visit grouping, the family that broke in April.</p>
+        <ul>
+          <li>Page views per visit stays at 1.1–1.2 <span class="tag">Silver</span></li>
+          <li>Browser identities recur from day to day <span class="tag">Silver</span></li>
+          <li>About one browser identity per employee and day <span class="tag">Silver</span></li>
+          <li>Cookie-based visits agree with employee-based visits <span class="tag">Silver</span></li>
+        </ul>
+        <p class="foot">Would have caught 8 April on day one.</p>
+      </div>
+      <div class="q">
+        <h3>Does the data still look like the data?</h3>
+        <p class="why">Schema, formats and the tracking software itself.</p>
+        <ul>
+          <li>Same columns and property keys as the contract <span class="tag">Staging</span></li>
+          <li>Empty-value share per key field unchanged <span class="tag">Bronze</span></li>
+          <li>Tracking-software version unchanged, or the day is annotated <span class="tag">Staging</span></li>
+          <li>Employee IDs, tracking IDs and dates well-formed; pages exist in the inventory <span class="tag">Silver</span></li>
+        </ul>
+        <p class="foot">Catches: releases and configuration changes before they reach a KPI.</p>
+      </div>
+      <div class="q">
+        <h3>Do the numbers make sense?</h3>
+        <p class="why">Plausibility of the KPIs and agreement between independent sources.</p>
+        <ul>
+          <li>Each headline KPI inside its corridor, no step change <span class="tag">Gold</span></li>
+          <li>Gold visits and people equal a fresh recount from the raw events <span class="tag">Gold</span></li>
+          <li>Top pages and tracking coverage stable week over week <span class="tag">Gold</span></li>
+          <li>The number in Power BI equals the number in Gold <span class="tag">Semantic</span></li>
+        </ul>
+        <p class="foot">Catches: anything the first three missed, from the outside.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. Watchlist -->
+  <section>
+    <div class="sec-head">
+      <h2>The ratio watchlist</h2>
+      <p class="lead">Ten signals on one page. The first six are identity checks on the raw browser and session identifiers; they are monitoring signals, not reported KPIs. Unique visitors are counted on the contact ID and stay correct even when these signals break.</p>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Signal</th>
+            <th>What it tells us</th>
+            <th>Healthy</th>
+            <th>Broken looks like</th>
+            <th>Catches 8 April?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="sig">Page views per visit<span>views ÷ visits</span></td><td>How many pages one visit contains</td><td class="num">1.1–1.2, stable</td><td class="broken num">exactly 1.0</td><td class="yes">Yes, day 1</td></tr>
+          <tr><td class="sig">Recurring browser identities<span>seen in the last 28 days</span></td><td>Whether yesterday's browsers show up again today</td><td>high and stable</td><td class="broken">near 0 %</td><td class="yes">Yes, day 1</td></tr>
+          <tr><td class="sig">Devices per employee<span>browser IDs ÷ employee IDs</span></td><td>Browser identities behind one employee identifier and day</td><td class="num">about 1</td><td class="broken">equals page views</td><td class="yes">Yes, day 1</td></tr>
+          <tr><td class="sig">Visits per browser identity<span>weekly</span></td><td>How many visits one browser accumulates in a week</td><td>clearly above 1</td><td class="broken num">exactly 1.0</td><td class="yes">Yes, day 1–2</td></tr>
+          <tr><td class="sig">Cookie visits vs employee visits<span>session ID ÷ reconstructed visit</span></td><td>Whether the two ways of counting a visit agree</td><td class="num">about 1</td><td class="broken">inflates</td><td class="yes">Yes, day 1</td></tr>
+          <tr><td class="sig">Gold matches a fresh recount<span>gold vs raw events, per page and day</span></td><td>Visits and people in Gold equal a recount from the raw events</td><td class="num">about 1</td><td class="broken">visits diverge, people agree</td><td class="yes">Yes, day 1</td></tr>
+          <tr><td class="sig">Software version watch<span>tracking SDK</span></td><td>Whether the tracking software changed</td><td>unchanged</td><td class="broken">new version appears</td><td class="lead">Leading indicator</td></tr>
+          <tr><td class="sig">Arrival volume<span>vs same weekday</span></td><td>Whether today's data arrived in the expected amount</td><td class="num">within ±25 %</td><td class="broken">outside the corridor</td><td class="no">No, volume looked normal</td></tr>
+          <tr><td class="sig">Sampling factor<span>recorded ÷ counted</span></td><td>Whether every event is stored or only a sample</td><td class="num">exactly 1.00</td><td class="broken num">above 1.00</td><td class="no">No</td></tr>
+          <tr><td class="sig">Layer tie-out<span>Power BI = Gold = Silver = Bronze</span></td><td>Nothing is lost or doubled between layers</td><td>exact</td><td class="broken">any gap</td><td class="no">No</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 5. Where the checks run -->
+  <section>
+    <div class="sec-head">
+      <h2>Where each check runs</h2>
+      <p class="lead">Each check sits at the earliest layer that can answer it, so a problem is stopped before it reaches a report. Identity checks marked in red are the April family.</p>
+    </div>
+    <div class="pipe">
+      <div class="stage"><div class="box">App Insights<span>source telemetry</span></div>
+        <ul><li>Vendor-side: session and user cookie behaviour</li></ul></div>
+      <div class="stage ours"><div class="box">Staging<span>raw export</span></div>
+        <ul><li>Schema and property keys</li><li>Sampling factor</li><li>Duplicates</li><li>SDK version and key</li></ul></div>
+      <div class="stage ours"><div class="box">Bronze<span>flattened events</span></div>
+        <ul><li>Daily volume corridor</li><li>Freshness</li><li>Empty-value shares</li><li>Format validity</li></ul></div>
+      <div class="stage ours"><div class="box">Silver<span>person and visit</span></div>
+        <ul><li class="hot">Views per visit</li><li class="hot">Recurring browser IDs</li><li class="hot">Devices per employee</li><li class="hot">Cookie vs employee visits</li><li>Page and HR references</li></ul></div>
+      <div class="stage ours"><div class="box">Gold<span>KPIs</span></div>
+        <ul><li>KPI corridors and step changes</li><li class="hot">Gold vs raw recount</li><li>Top pages, tracking coverage</li><li>Row-count tie-out</li></ul></div>
+      <div class="stage ours"><div class="box">Semantic layer<span>measures</span></div>
+        <ul><li>Measure equals Gold</li><li>Banner names the affected dates</li></ul></div>
+      <div class="stage"><div class="box">Power BI<span>reports</span></div>
+        <ul><li>Data-health page</li><li>Banner while under review</li></ul></div>
+    </div>
+  </section>
+
+  <!-- 6. What happens -->
+  <section>
+    <div class="sec-head">
+      <h2>What happens when a check fails</h2>
+    </div>
+    <div class="sev">
+      <div class="i"><h3>Info</h3><p>The day is annotated in the check table, for example when a new tracking-software version appears. Nothing else changes.</p></div>
+      <div class="w"><h3>Warning</h3><p>Reports keep refreshing. The affected KPI card and the data-health page show a badge, and the data owner is notified the same morning.</p></div>
+      <div class="b"><h3>Critical</h3><p>The numbers still publish. Every report page shows "Data under review since …" and the affected figure is marked, and an incident is opened. Data is never held back, because a stale report is silent about being stale while a labelled one is not.</p></div>
+    </div>
+  </section>
+
+  <!-- 7. Robust by design -->
+  <section>
+    <div class="callout">
+      <div>
+        <h3>Robust by design, not only monitored</h3>
+        <p>Unique visitors are already robust: the employee identifier and e-mail from the telemetry are matched to HR data and transformed to a contact ID, so the April change did not touch them. Visits are not: they count the cookie session identifier. The pipeline already derives a visit from the person plus a 30-minute inactivity rule. Recommendation: apply the same principle to visits, and keep the cookie-based counts as monitored signals.</p>
+      </div>
+      <div>
+        <h3>Decision needed</h3>
+        <p>The current standard counts visits on the cookie session identifier (set July 2026). Changing the definition changes reported history: either restate past figures or report both with a clear label. Thresholds on this page are starting points to be calibrated on at least eight weeks of pre-April data.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>Source: analytics pipeline documentation and the July 2026 session-versus-visit reconciliation on the stored data. Notes: 1. Chart curves are illustrative. 2. Full catalogue with formulas, fields, thresholds and phasing: <code>docs/data-integrity-checks.md</code>; SQL draft per check: <code>dq_checks_draft.sql</code>. 3. Layers: Staging, Bronze, Silver, Gold are the pipeline's own tables; the semantic layer feeds Power&nbsp;BI.</p>
+    <p>Draft for discussion</p>
+  </footer>
+</div>
+
+<script>
+(function () {
+  // deterministic pseudo-random so the illustration is stable across loads
+  function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; var t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+  var start = new Date(2026, 0, 5), end = new Date(2026, 5, 30), breakDay = new Date(2026, 3, 8);
+  var days = []; for (var d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) days.push(new Date(d));
+  var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun"];
+
+  function series(seed, healthy, broken, wkEff, noiseH, noiseB) {
+    var r = rng(seed);
+    return days.map(function (d) {
+      var wk = d.getDay() === 0 || d.getDay() === 6;
+      if (d < breakDay) return healthy + (wk ? wkEff : 0) + (r() - 0.5) * 2 * noiseH;
+      return broken + (r() - 0.5) * 2 * noiseB;
+    });
+  }
+
+  function draw(id, opts) {
+    var host = document.getElementById(id);
+    var W = 540, H = 250, mL = 40, mR = 14, mT = 22, mB = 30;
+    var x0 = mL, x1 = W - mR, y0 = H - mB, y1 = mT;
+    var xs = function (i) { return x0 + (x1 - x0) * i / (days.length - 1); };
+    var ys = function (v) { return y0 - (y0 - y1) * (v - opts.min) / (opts.max - opts.min); };
+    var bi = days.findIndex(function (d) { return d >= breakDay; });
+    var vals = opts.values;
+    var pathOf = function (from, to) { var s = ""; for (var i = from; i < to; i++) s += (i === from ? "M" : "L") + xs(i).toFixed(1) + " " + ys(vals[i]).toFixed(1); return s; };
+
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + opts.aria + '">';
+    svg += '<rect class="band" x="' + x0 + '" y="' + ys(opts.bandHi).toFixed(1) + '" width="' + (x1 - x0) + '" height="' + (ys(opts.bandLo) - ys(opts.bandHi)).toFixed(1) + '"/>';
+    svg += '<text x="' + (x0 + 6) + '" y="' + (ys(opts.bandHi) + (opts.bandLabelAbove ? -5 : 12)).toFixed(1) + '">' + opts.bandLabel + '</text>';
+    // y ticks (labels only, no y-axis line)
+    opts.ticks.forEach(function (t) { svg += '<text x="' + (x0 - 6) + '" y="' + (ys(t) + 4).toFixed(1) + '" text-anchor="end">' + opts.fmt(t) + '</text>'; });
+    // x axis baseline + month labels
+    svg += '<line class="ax" x1="' + x0 + '" y1="' + y0 + '" x2="' + x1 + '" y2="' + y0 + '"/>';
+    days.forEach(function (d, i) { if (d.getDate() === 1) svg += '<text x="' + xs(i).toFixed(1) + '" y="' + (y0 + 16) + '" text-anchor="middle">' + months[d.getMonth()] + '</text>'; });
+    // marker at 8 April
+    svg += '<line class="marker" x1="' + xs(bi).toFixed(1) + '" y1="' + (y1 - 6) + '" x2="' + xs(bi).toFixed(1) + '" y2="' + y0 + '"/>';
+    svg += '<text x="' + (xs(bi) + 5).toFixed(1) + '" y="' + (y1 + 2) + '" class="lbl-dark">8 April</text>';
+    // series
+    svg += '<path class="ok-line" d="' + pathOf(0, bi) + '"/>';
+    svg += '<path class="bad-line" d="' + pathOf(bi, vals.length) + '"/>';
+    // direct labels
+    var lastOk = vals[bi - 1], lastBad = vals[vals.length - 1];
+    svg += '<text x="' + (xs(bi) - 6).toFixed(1) + '" y="' + (ys(opts.bandHi) - 8).toFixed(1) + '" text-anchor="end" class="lbl-dark">before ' + opts.fmt(opts.healthy) + '</text>';
+    svg += '<text x="' + x1 + '" y="' + (ys(lastBad) + (opts.labelBelow ? 16 : -8)).toFixed(1) + '" text-anchor="end" class="lbl-bad">since 8 April ' + opts.fmt(opts.broken) + '</text>';
+    // first broken point + annotation
+    svg += '<circle class="dot" cx="' + xs(bi).toFixed(1) + '" cy="' + ys(vals[bi]).toFixed(1) + '" r="4.5"/>';
+    svg += '<text x="' + (xs(bi) + 9).toFixed(1) + '" y="' + (ys(vals[bi]) + (opts.annBelow ? 18 : -10)).toFixed(1) + '" class="lbl-bad">alert fires here</text>';
+    // hover layer
+    svg += '<line class="xh" id="' + id + '-xh" x1="0" y1="' + y1 + '" x2="0" y2="' + y0 + '" style="display:none"/>';
+    svg += '<rect class="hover" x="' + x0 + '" y="' + y1 + '" width="' + (x1 - x0) + '" height="' + (y0 - y1) + '"/>';
+    svg += '</svg><div class="tip" id="' + id + '-tip"></div>';
+    host.insertAdjacentHTML("beforeend", svg);
+
+    var svgEl = host.querySelector("svg"), tip = document.getElementById(id + "-tip"), xh = document.getElementById(id + "-xh");
+    var hover = host.querySelector(".hover");
+    function move(ev) {
+      var r = svgEl.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width;
+      var i = Math.round((sx - x0) / (x1 - x0) * (days.length - 1)); if (i < 0) i = 0; if (i > days.length - 1) i = days.length - 1;
+      xh.setAttribute("x1", xs(i)); xh.setAttribute("x2", xs(i)); xh.style.display = "";
+      var d = days[i];
+      tip.innerHTML = d.getDate() + " " + months[d.getMonth()] + " 2026 · <b>" + opts.fmt(vals[i]) + "</b>";
+      tip.style.left = (xs(i) * r.width / W) + "px"; tip.style.top = (ys(vals[i]) * r.height / H + (svgEl.offsetTop)) + "px"; tip.style.display = "block";
+    }
+    hover.addEventListener("mousemove", move);
+    hover.addEventListener("mouseleave", function () { tip.style.display = "none"; xh.style.display = "none"; });
+  }
+
+  draw("c1", {
+    values: series(7, 1.15, 1.005, -0.03, 0.025, 0.004),
+    min: 0.95, max: 1.30, ticks: [1.0, 1.1, 1.2, 1.3], fmt: function (v) { return v.toFixed(2); },
+    bandLo: 1.08, bandHi: 1.22, bandLabel: "expected corridor 1.08–1.22",
+    healthy: 1.15, broken: 1.0, labelBelow: true, annBelow: true,
+    aria: "Page views per visit, daily, January to June 2026, dropping from about 1.15 to 1.0 on 8 April"
+  });
+  draw("c2", {
+    values: series(11, 1.12, 3.2, -0.08, 0.05, 0.12),
+    min: 0, max: 4.0, ticks: [1, 2, 3, 4], fmt: function (v) { return v.toFixed(1); },
+    bandLo: 1.0, bandHi: 1.3, bandLabel: "expected corridor 1.0–1.3", bandLabelAbove: true,
+    healthy: 1.1, broken: 3.2, labelBelow: true, annBelow: true,
+    aria: "Browser identities per employee, daily, January to June 2026, jumping from about 1.1 to about 3.2 on 8 April"
+  });
+})();
+</script>
+</body>
+</html>

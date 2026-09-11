@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Integrity Checks by Example</title>
+<style>
+:root{color-scheme:light;
+--white:#FFFFFF;--black:#000000;--ink:#404040;--ink2:#5A5D5C;--muted:#7A7870;--mid:#8E8D83;
+--rule:#CCCABC;--pastel:#ECEBE4;--rowalt:#F8F7F2;--red:#E60000;--bordeaux:#BD000C;--bronze:#B98E2C;
+--ok:#6F7A1A;--okbg:#F1F3E7;--badbg:#FBEDEE;
+--font:"Frutiger 45 Light","Frutiger","Helvetica Neue",Helvetica,Arial,"Segoe UI",system-ui,sans-serif;
+--mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;}
+html{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--white);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.page{max-width:1180px;margin:0;padding:40px 48px 56px}
+h1,h2,h3{color:var(--black);margin:0;text-wrap:balance}
+h1{font-size:40px;font-weight:300;line-height:1.1;letter-spacing:-.01em}
+h2{font-size:20px;font-weight:600;line-height:1.3}
+h3{font-size:15px;font-weight:600;line-height:1.3}
+p{margin:0}
+.head{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:start;padding-bottom:20px;border-bottom:2px solid var(--red)}
+.head .sub{margin-top:12px;max-width:64ch;font-size:15px;color:var(--muted)}
+.corner{background:var(--pastel);padding:8px 14px;font-size:12px;white-space:nowrap}
+.corner b{display:block}
+.legend{margin-top:28px;background:var(--pastel);padding:16px 20px;display:grid;grid-template-columns:auto 1fr;gap:10px 18px;align-items:center;max-width:none}
+.legend .k{font-size:12px;font-weight:600;color:var(--black);white-space:nowrap}
+.legend .v{font-size:13px}
+section{margin-top:44px}
+.sec-hd{border-top:1px solid var(--black);padding-top:12px;margin-bottom:20px;display:grid;gap:6px}
+.sec-hd p{max-width:78ch;color:var(--ink);font-size:13.5px}
+.cards{display:grid;gap:18px}
+@media(min-width:1000px){.cards{grid-template-columns:1fr 1fr}}
+.card{border:1px solid var(--rule);background:var(--white);display:grid;grid-template-rows:auto 1fr auto}
+.card-hd{padding:14px 16px 10px;display:grid;grid-template-columns:auto 1fr;gap:4px 10px;align-items:baseline}
+.chip{grid-row:span 2;align-self:start;font-family:var(--mono);font-size:11px;font-weight:600;color:var(--white);background:var(--ink);padding:3px 7px;letter-spacing:.02em}
+.card-hd h3{align-self:center}
+.card-hd{grid-template-columns:auto 1fr auto}
+.blk{font-size:10.5px;font-weight:600;color:var(--bronze);border:1px solid var(--bronze);padding:2px 6px;white-space:nowrap;align-self:center}
+.q{grid-column:2/span 2;font-size:13px;color:var(--muted)}
+.plain{margin:0 16px 12px;padding:9px 12px;background:#F5F0E1;font-size:12.5px;color:var(--ink)}
+.plain span{display:block;font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--bronze);margin-bottom:3px}
+.card{grid-template-rows:auto auto auto 1fr auto}
+.trip{margin-top:28px;border:1px solid var(--rule);padding:20px 24px}
+.trip h2{margin-bottom:8px}
+.trip .lead{max-width:80ch;font-size:13.5px;margin-bottom:16px;color:var(--ink)}
+.trip-grid{display:grid;gap:14px}
+@media(min-width:820px){.trip-grid{grid-template-columns:repeat(5,1fr)}}
+.trip-col{border-top:2px solid var(--bronze);padding-top:9px}
+.trip-col b{display:block;font-size:12.5px;color:var(--black);margin-bottom:4px}
+.trip-col span{font-size:12px;color:var(--muted)}
+.flow{margin-top:34px}
+.flow-lead{max-width:80ch;font-size:13.5px;margin:8px 0 14px;color:var(--ink)}
+.flow table{width:100%;border-collapse:collapse;font-size:12.5px}
+.flow th{text-align:left;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:0 10px 6px 0;border-bottom:1px solid var(--black)}
+.flow td{padding:7px 10px 7px 0;border-bottom:1px solid var(--pastel);vertical-align:top}
+.flow tr:last-child td{border-bottom:1px solid var(--black)}
+.flow td.b{font-family:var(--mono);font-size:11.5px;font-weight:600;color:var(--bronze);white-space:nowrap}
+.flow td.c{font-family:var(--mono);font-size:11.5px;color:var(--ink2)}
+.flow tr.setup td{color:var(--muted)}
+.panes{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--rule);border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+@media(max-width:620px){.panes{grid-template-columns:1fr}}
+.pane{background:var(--white);padding:12px 14px 14px;display:grid;grid-template-rows:auto auto 1fr auto;gap:8px}
+.pane-hd{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;display:flex;align-items:center;gap:6px}
+.pane .dot{width:8px;height:8px;display:inline-block}
+.pane.healthy .pane-hd{color:var(--ok)}.pane.healthy .dot{background:var(--ok)}
+.pane.broken .pane-hd{color:var(--bordeaux)}.pane.broken .dot{background:var(--bordeaux)}
+table.mini{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11.5px}
+table.mini th{text-align:left;font-weight:600;color:var(--muted);font-family:var(--font);font-size:10.5px;letter-spacing:.03em;text-transform:uppercase;padding:0 6px 4px 0;border-bottom:1px solid var(--rule);white-space:nowrap}
+table.mini td{padding:3px 6px 3px 0;border-bottom:1px solid var(--rowalt);white-space:nowrap;color:var(--ink2)}
+table.mini tr:last-child td{border-bottom:none}
+td.hi{font-weight:600}
+td.hi.ok{color:var(--ok);background:var(--okbg)}
+td.hi.bad{color:var(--bordeaux);background:var(--badbg)}
+.calc{font-size:12px;color:var(--ink);padding-top:2px;border-top:1px dotted var(--rule)}
+.calc b{font-weight:600;color:var(--black)}
+.verdict{font-size:12px;font-weight:600}
+.pane.healthy .verdict{color:var(--ok)}
+.pane.broken .verdict{color:var(--bordeaux)}
+.cost{padding:11px 16px;font-size:12.5px;color:var(--muted);background:var(--rowalt)}
+.cost b{color:var(--black);font-weight:600}
+footer.pg{margin-top:52px;padding-top:14px;border-top:1px solid var(--black);font-size:11px;color:var(--muted);display:grid;grid-template-columns:1fr auto;gap:16px}
+footer.pg p{max-width:92ch}
+code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
+@media print{.page{padding:0;max-width:none}.card,.legend{break-inside:avoid}h2{break-after:avoid}.cards{grid-template-columns:1fr 1fr}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="page">
+<div class="head">
+  <div><h1>Integrity Checks by Example</h1>
+  <p class="sub">Every check on one small table of rows. The left side is what healthy data looks like, the right side is the failure the check exists to catch.</p></div>
+  <div class="corner"><b>Companion</b>September 2026 · Analytics pipeline</div>
+</div>
+<div class="legend">
+  <div class="k">Highlighted cells</div><div class="v">The values the check actually reads. Everything else is context.</div>
+  <div class="k">The line below</div><div class="v">The number the check computes from exactly those cells, and the verdict it produces.</div>
+  <div class="k">Severity</div><div class="v">Nothing is ever held back. Warning badges the KPI and notifies the data owner; Critical adds a banner naming the affected dates. The numbers publish either way.</div>
+  <div class="k">Row counts</div><div class="v">Three or four rows stand in for a day of traffic, so the arithmetic stays checkable by eye. Thresholds apply at real volume.</div>
+</div>
+<div class="trip">
+  <h2>The whole thing as a school trip</h2>
+  <p class="lead">Three hundred children visit a museum. Every check on this page is something a teacher would check anyway, and the failure of 8 April is one of them exactly.</p>
+  <div class="trip-grid">
+    <div class="trip-col"><b>The bus</b><span>Did everyone who got on get off again? Counting, nothing else.</span></div>
+    <div class="trip-col"><b>The name tags</b><span>One child, one tag, all day. This is the one that broke.</span></div>
+    <div class="trip-col"><b>The worksheet</b><span>The same boxes as always, filled in the way we expect.</span></div>
+    <div class="trip-col"><b>The totals</b><span>Three hundred children, nine hundred lunches. Something is off.</span></div>
+    <div class="trip-col"><b>Three teachers</b><span>One counts at the bus, one at the door, one on the summary sheet. All three must reach the same number.</span></div>
+  </div>
+</div>
+
+<div class="flow">
+  <h2>How the file runs</h2>
+  <p class="flow-lead">The blocks run top to bottom once a day, after the silver refresh and before gold publishes. The first four set the table, the rest produce verdicts.</p>
+  <table>
+    <thead><tr><th>Block</th><th>What it does</th><th>Checks it produces</th></tr></thead>
+    <tbody>
+      <tr class="setup"><td class="b">0 / 0b</td><td>Probes the real column names, then measures the healthy ratios on a window before 8 April so the thresholds stop being guesses. Read-only, run once.</td><td class="c">&ndash;</td></tr>
+      <tr class="setup"><td class="b">1</td><td>Creates the result table and the small catalogue that holds every threshold.</td><td class="c">&ndash;</td></tr>
+      <tr class="setup"><td class="b">2</td><td>Cuts one 70-day slice out of the 173 million bronze rows, so no check ever scans the whole table.</td><td class="c">&ndash;</td></tr>
+      <tr class="setup"><td class="b">3</td><td>Turns that slice into one number per day per metric, and builds the same-weekday baseline behind every corridor.</td><td class="c">&ndash;</td></tr>
+      <tr><td class="b">4</td><td>The corridor engine. One piece of SQL evaluates every check whose rule is simply "stay inside a band".</td><td class="c">A1 A4 B1 B2 B4 B5 B8 C8 D1 D4 D7</td></tr>
+      <tr><td class="b">5</td><td>Arrival: freshness, duplicates, the layer tie-out, late-arriving rows.</td><td class="c">A2 A5 A6 A7</td></tr>
+      <tr><td class="b">6</td><td>The identity questions a corridor cannot answer, because they compare one day against the 28 before it.</td><td class="c">B3 B6 B7</td></tr>
+      <tr><td class="b">7</td><td>Shape: columns, empty values, software version, formats, references, client mix.</td><td class="c">C1 C2 C3 C4 C5 C6 C7</td></tr>
+      <tr><td class="b">8</td><td>Plausibility from the outside, including the recount of gold against the raw events.</td><td class="c">D3 D5 D6 D8</td></tr>
+      <tr><td class="b">8b</td><td>Silver only: did the person resolution survive, and did every row get its derived keys.</td><td class="c">S1 S2 S3</td></tr>
+      <tr><td class="b">8c</td><td>Gold only: is the grain unique, is each row internally consistent, does the aggregate tie back to silver.</td><td class="c">G1 G2 G3</td></tr>
+      <tr class="setup"><td class="b">9</td><td>What happens with the verdicts: the alert, the banner naming the affected dates, the page the report shows. No job branches on a result.</td><td class="c">&ndash;</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<section><div class="sec-hd"><h2>Did everything arrive?</h2><p>Every row the source produced reaches every layer exactly once. These checks never look at meaning, only at counts and freshness.</p></div><div class="cards">
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">A1</span>
+        <h3>Daily volume corridor</h3>
+        <span class="blk">Block 4</span>
+        <p class="q">Did roughly as much arrive today as on the same weekday before?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>Count the children getting on the bus. Today far fewer got on than on any other Monday.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Day</th><th>Weekday</th><th>Page views</th></tr></thead><tbody><tr><td class="">Mon 24 Aug</td><td class="">Mon</td><td class="">41,020</td></tr><tr><td class="">Mon 31 Aug</td><td class="">Mon</td><td class="">39,880</td></tr><tr><td class="">Mon 7 Sep</td><td class="">Mon</td><td class="hi ok">40,310</td></tr></tbody></table>
+      <div class="calc">Median of the same weekday is <b>40,450</b>. Today is 0.4 % off.</div>
+      <div class="verdict">OK, inside ±25 %</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Day</th><th>Weekday</th><th>Page views</th></tr></thead><tbody><tr><td class="">Mon 24 Aug</td><td class="">Mon</td><td class="">41,020</td></tr><tr><td class="">Mon 31 Aug</td><td class="">Mon</td><td class="">39,880</td></tr><tr><td class="">Mon 7 Sep</td><td class="">Mon</td><td class="hi bad">12,450</td></tr></tbody></table>
+      <div class="calc">Today is <b>69 % below</b> the median of the same weekday.</div>
+      <div class="verdict">Critical, export stalled mid-run</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> Half a day of traffic silently missing from every report.</footer>
+    </article>
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">A4</span>
+        <h3>Sampling factor</h3>
+        <span class="blk">Block 4</span>
+        <p class="q">Is every single event stored, or only a sample of them?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>Only every second child was written down, so the list says half the class stayed home.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Event</th><th>itemCount</th></tr></thead><tbody><tr><td class="">view 1</td><td class="hi ok">1</td></tr><tr><td class="">view 2</td><td class="hi ok">1</td></tr><tr><td class="">view 3</td><td class="hi ok">1</td></tr></tbody></table>
+      <div class="calc">sum(itemCount) ÷ count(*) = 3 ÷ 3 = <b>1.00</b></div>
+      <div class="verdict">OK, nothing sampled away</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Event</th><th>itemCount</th></tr></thead><tbody><tr><td class="">view 1</td><td class="hi bad">1</td></tr><tr><td class="">view 2</td><td class="hi bad">3</td></tr><tr><td class="">view 3</td><td class="hi bad">2</td></tr></tbody></table>
+      <div class="calc">sum(itemCount) ÷ count(*) = 6 ÷ 3 = <b>2.00</b></div>
+      <div class="verdict">Critical, only every other event is stored</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> Counts understate reality by the sampling factor, and nothing in the data says so.</footer>
+    </article>
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">A5</span>
+        <h3>Duplicate rate</h3>
+        <span class="blk">Block 5</span>
+        <p class="q">Did the same event land twice?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>The same child was ticked off twice, so the list says there is one child too many.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Time</th><th>Browser</th><th>Session</th><th>Page</th></tr></thead><tbody><tr><td class="">09:14:02</td><td class="">a7f3</td><td class="">s-11</td><td class="">/news/q1</td></tr><tr><td class="">09:14:40</td><td class="">a7f3</td><td class="">s-11</td><td class="hi ok">/news/q2</td></tr></tbody></table>
+      <div class="calc">Two different events. Duplicate rate <b>0 %</b>.</div>
+      <div class="verdict">OK</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Time</th><th>Browser</th><th>Session</th><th>Page</th></tr></thead><tbody><tr><td class="">09:14:02</td><td class="">a7f3</td><td class="">s-11</td><td class="">/news/q1</td></tr><tr><td class="">09:14:02</td><td class="">a7f3</td><td class="">s-11</td><td class="hi bad">/news/q1</td></tr></tbody></table>
+      <div class="calc">Identical on the composite key. Duplicate rate <b>50 %</b>.</div>
+      <div class="verdict">Critical, an overlapping load ran twice</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> Page views inflate, and the inflation looks like real growth.</footer>
+    </article>
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">A6</span>
+        <h3>Layer tie-out</h3>
+        <span class="blk">Block 5</span>
+        <p class="q">Does every layer hold the same day?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>Three teachers count at three different points. They must all reach the same number.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Layer</th><th>Rows for 7 Sep</th></tr></thead><tbody><tr><td class="">Bronze</td><td class="">40,310</td></tr><tr><td class="">Silver</td><td class="">40,310</td></tr><tr><td class="">Gold (sum of views)</td><td class="hi ok">40,310</td></tr></tbody></table>
+      <div class="calc">All three agree exactly.</div>
+      <div class="verdict">OK</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Layer</th><th>Rows for 7 Sep</th></tr></thead><tbody><tr><td class="">Bronze</td><td class="">40,310</td></tr><tr><td class="">Silver</td><td class="">40,310</td></tr><tr><td class="">Gold (sum of views)</td><td class="hi bad">38,902</td></tr></tbody></table>
+      <div class="calc">Gold lost <b>1,408 views</b> with no documented filter.</div>
+      <div class="verdict">Critical, publishing is held</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> Power BI shows fewer views than actually happened, with no trace of where they went.</footer>
+    </article>
+</div></section>
+<section><div class="sec-hd"><h2>Do we still recognise people?</h2><p>This is the family that broke on 8 April. It reads the raw browser and session identifiers on bronze. These are monitoring signals, not reported numbers: unique visitors are counted on the contact id and stayed correct.</p></div><div class="cards">
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">B1</span>
+        <h3>Page views per visit</h3>
+        <span class="blk">Block 4</span>
+        <p class="q">Does one visit still hold several pages?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>One child walks through several rooms. If every room reports a brand new visitor, the museum thinks four children came instead of one.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>View</th><th>Session id</th></tr></thead><tbody><tr><td class="">view 1</td><td class="hi ok">s-11</td></tr><tr><td class="">view 2</td><td class="hi ok">s-11</td></tr><tr><td class="">view 3</td><td class="hi ok">s-12</td></tr><tr><td class="">view 4</td><td class="hi ok">s-12</td></tr></tbody></table>
+      <div class="calc">4 views ÷ 2 sessions = <b>2.0</b>, in the 1.1–1.2 range at scale.</div>
+      <div class="verdict">OK</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>View</th><th>Session id</th></tr></thead><tbody><tr><td class="">view 1</td><td class="hi bad">s-11</td></tr><tr><td class="">view 2</td><td class="hi bad">s-12</td></tr><tr><td class="">view 3</td><td class="hi bad">s-13</td></tr><tr><td class="">view 4</td><td class="hi bad">s-14</td></tr></tbody></table>
+      <div class="calc">4 views ÷ 4 sessions = <b>1.00</b>. Every view is its own visit.</div>
+      <div class="verdict">Critical, day one of the April change</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> Visits inflate, pages per visit and time on page collapse to their floor.</footer>
+    </article>
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">B4</span>
+        <h3>Browser identities per person</h3>
+        <span class="blk">Block 4</span>
+        <p class="q">Does one employee still look like one person?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>One child, one name tag. If the same child gets a new tag in every room, we count them as three children.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>GPN</th><th>Browser id (user_Id)</th></tr></thead><tbody><tr><td class="">00100200</td><td class="hi ok">a7f3</td></tr><tr><td class="">00100200</td><td class="hi ok">a7f3</td></tr><tr><td class="">00100200</td><td class="hi ok">a7f3</td></tr></tbody></table>
+      <div class="calc">1 browser id ÷ 1 person = <b>1.0</b></div>
+      <div class="verdict">OK, one laptop</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>GPN</th><th>Browser id (user_Id)</th></tr></thead><tbody><tr><td class="">00100200</td><td class="hi bad">a7f3</td></tr><tr><td class="">00100200</td><td class="hi bad">91c2</td></tr><tr><td class="">00100200</td><td class="hi bad">04be</td></tr></tbody></table>
+      <div class="calc">3 browser ids ÷ 1 person = <b>3.0</b>, equal to the view count.</div>
+      <div class="verdict">Critical, the cookie is not persisting</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> The strongest test we have, because the employee number comes from the server and not from the cookie.</footer>
+    </article>
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">B3</span>
+        <h3>Recurring browser identities</h3>
+        <span class="blk">Block 6</span>
+        <p class="q">Do we see yesterday&#x27;s browsers again today?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>Yesterday&#x27;s children should still be recognisable today. If not one of them is, every name tag was reprinted overnight.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Browser id</th><th>Seen in the last 28 days</th></tr></thead><tbody><tr><td class="">a7f3</td><td class="hi ok">yes</td></tr><tr><td class="">b210</td><td class="hi ok">yes</td></tr><tr><td class="">c884</td><td class="">no</td></tr></tbody></table>
+      <div class="calc">2 of 3 recur. Recurring share <b>67 %</b>.</div>
+      <div class="verdict">OK, stable and high</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Browser id</th><th>Seen in the last 28 days</th></tr></thead><tbody><tr><td class="">k92x</td><td class="hi bad">no</td></tr><tr><td class="">p11q</td><td class="hi bad">no</td></tr><tr><td class="">z04b</td><td class="hi bad">no</td></tr></tbody></table>
+      <div class="calc">0 of 3 recur. Recurring share <b>0 %</b>.</div>
+      <div class="verdict">Critical, every browser is brand new</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> The most direct test of whether the identifier persists at all.</footer>
+    </article>
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">B6</span>
+        <h3>Session timeout behaviour</h3>
+        <span class="blk">Block 6</span>
+        <p class="q">Does a session survive a short pause?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>A child who steps out for five minutes is still the same child. Hand them a new tag and nothing hangs together any more.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Same person</th><th>Gap</th><th>Session id</th></tr></thead><tbody><tr><td class="">view 1</td><td class="">–</td><td class="hi ok">s-11</td></tr><tr><td class="">view 2</td><td class="">5 min</td><td class="hi ok">s-11</td></tr><tr><td class="">view 3</td><td class="">45 min</td><td class="">s-12</td></tr></tbody></table>
+      <div class="calc">Below 30 minutes the session holds. P(same) <b>high</b>.</div>
+      <div class="verdict">OK, a real 30-minute timeout</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Same person</th><th>Gap</th><th>Session id</th></tr></thead><tbody><tr><td class="">view 1</td><td class="">–</td><td class="hi bad">s-11</td></tr><tr><td class="">view 2</td><td class="">5 min</td><td class="hi bad">s-12</td></tr><tr><td class="">view 3</td><td class="">45 min</td><td class="">s-13</td></tr></tbody></table>
+      <div class="calc">Even a 5-minute gap starts a new session. P(same) <b>near 0</b>.</div>
+      <div class="verdict">Critical, the session id means nothing</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> Time on page becomes unmeasurable, because it needs two views inside one group.</footer>
+    </article>
+</div></section>
+<section><div class="sec-hd"><h2>Does the data still look like the data?</h2><p>Shape rather than volume: the columns, the value formats, and the tracking software itself. This family catches a release before it reaches a number.</p></div><div class="cards">
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">C3</span>
+        <h3>Software version watch</h3>
+        <span class="blk">Block 7</span>
+        <p class="q">Did the tracking software change under us?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>Someone swapped the label printer overnight. Worth knowing before the labels start looking odd.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Day</th><th>SDK version</th><th>Share</th></tr></thead><tbody><tr><td class="">6 Sep</td><td class="hi ok">2.8.11</td><td class="">100 %</td></tr><tr><td class="">7 Sep</td><td class="hi ok">2.8.11</td><td class="">100 %</td></tr></tbody></table>
+      <div class="calc">One known version, unchanged.</div>
+      <div class="verdict">OK</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Day</th><th>SDK version</th><th>Share</th></tr></thead><tbody><tr><td class="">6 Sep</td><td class="hi bad">2.8.11</td><td class="">100 %</td></tr><tr><td class="">7 Sep</td><td class="hi bad">3.0.2</td><td class="">88 %</td></tr></tbody></table>
+      <div class="calc">A <b>new version</b> takes 88 % of traffic in one day.</div>
+      <div class="verdict">Info plus annotation, and the first thing to check</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> The leading indicator. A version change usually precedes a behaviour change by a day.</footer>
+    </article>
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">C5</span>
+        <h3>Format validity</h3>
+        <span class="blk">Block 7</span>
+        <p class="q">Do the identifiers still have the shape we rely on?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>A name tag has to have eight digits. One that lost its leading zeros no longer matches the class list.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Row</th><th>GPN</th><th>Valid</th></tr></thead><tbody><tr><td class="">1</td><td class="hi ok">00100200</td><td class="">yes</td></tr><tr><td class="">2</td><td class="hi ok">00473911</td><td class="">yes</td></tr></tbody></table>
+      <div class="calc">Both match the 8-digit rule. Invalid <b>0 %</b>.</div>
+      <div class="verdict">OK</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Row</th><th>GPN</th><th>Valid</th></tr></thead><tbody><tr><td class="">1</td><td class="hi bad">00100200</td><td class="">yes</td></tr><tr><td class="">2</td><td class="hi bad">100200</td><td class="hi bad">no</td></tr></tbody></table>
+      <div class="calc">One lost its leading zeros. Invalid <b>50 %</b>.</div>
+      <div class="verdict">Warning, the HR join will miss these people</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> Silent loss of the HR dimensions, so division and region drilldowns quietly shrink.</footer>
+    </article>
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">C8</span>
+        <h3>Double-fire rate</h3>
+        <span class="blk">Block 4</span>
+        <p class="q">Is the same page counted twice in the same instant?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>The door counted the same child twice in the same second, because the door swung open twice.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Person</th><th>Page</th><th>Time</th></tr></thead><tbody><tr><td class="">00100200</td><td class="">/de/news</td><td class="">09:14:02</td></tr><tr><td class="">00100200</td><td class="">/de/news</td><td class="hi ok">09:15:40</td></tr></tbody></table>
+      <div class="calc">98 seconds apart. Real reading time.</div>
+      <div class="verdict">OK</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Person</th><th>Page</th><th>Time</th></tr></thead><tbody><tr><td class="">00100200</td><td class="">/en/news</td><td class="">09:14:02</td></tr><tr><td class="">00100200</td><td class="">/de/news</td><td class="hi bad">09:14:02</td></tr></tbody></table>
+      <div class="calc"><b>Same second</b>, a language redirect firing twice.</div>
+      <div class="verdict">Warning, views inflate and average time collapses</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> Average time per page rounds to zero and looks like a formatting bug rather than a data problem.</footer>
+    </article>
+</div></section>
+<section><div class="sec-hd"><h2>Do the numbers make sense?</h2><p>The outside view. If the first three families missed something, these notice that the published number stopped being plausible.</p></div><div class="cards">
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">D1</span>
+        <h3>KPI corridor and step change</h3>
+        <span class="blk">Block 4</span>
+        <p class="q">Did a headline number jump without a business reason?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>Twice as many room visits as last week, but exactly the same number of children. One of those two numbers is lying.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Week</th><th>Visits</th><th>Unique visitors</th></tr></thead><tbody><tr><td class="">W35</td><td class="">31,400</td><td class="hi ok">22,900</td></tr><tr><td class="">W36</td><td class="">30,880</td><td class="hi ok">22,750</td></tr><tr><td class="">W37</td><td class="hi ok">31,120</td><td class="hi ok">23,010</td></tr></tbody></table>
+      <div class="calc">Both move together, within a few per cent.</div>
+      <div class="verdict">OK</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Week</th><th>Visits</th><th>Unique visitors</th></tr></thead><tbody><tr><td class="">W35</td><td class="">31,400</td><td class="hi bad">22,900</td></tr><tr><td class="">W36</td><td class="">30,880</td><td class="hi bad">22,750</td></tr><tr><td class="">W37</td><td class="hi bad">58,600</td><td class="hi bad">22,880</td></tr></tbody></table>
+      <div class="calc">Visits <b>+90 %</b> while unique visitors stay flat.</div>
+      <div class="verdict">Critical, and the pattern names the cause</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> This exact divergence is the April fingerprint: visits explode, people do not.</footer>
+    </article>
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">D5</span>
+        <h3>Gold against a fresh recount</h3>
+        <span class="blk">Block 8</span>
+        <p class="q">Does the published aggregate match a recount from the raw events?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>Count by hand and hold it against the summary sheet. If the children match but the visits do not, the visits are the problem.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Measure</th><th>Gold</th><th>Recount from bronze</th></tr></thead><tbody><tr><td class="">Views</td><td class="">9,801</td><td class="hi ok">9,801</td></tr><tr><td class="">Visits</td><td class="">4,613</td><td class="hi ok">4,613</td></tr><tr><td class="">People</td><td class="">3,079</td><td class="hi ok">3,079</td></tr></tbody></table>
+      <div class="calc">All three agree.</div>
+      <div class="verdict">OK</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Measure</th><th>Gold</th><th>Recount from bronze</th></tr></thead><tbody><tr><td class="">Views</td><td class="">9,801</td><td class="hi bad">9,801</td></tr><tr><td class="">Visits</td><td class="hi bad">9,780</td><td class="hi bad">4,613</td></tr><tr><td class="">People</td><td class="">3,079</td><td class="hi bad">3,079</td></tr></tbody></table>
+      <div class="calc">Visits diverge, <b>people agree</b>.</div>
+      <div class="verdict">Critical, and the fault is localised to the session cookie</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> Tells you which of the three numbers to distrust, instead of distrusting the whole report.</footer>
+    </article>
+</div></section>
+<section><div class="sec-hd"><h2>One layer, one responsibility</h2><p>Each layer earns its own checks. Bronze watches arrival and the raw identifiers, silver watches the person resolution, gold watches the aggregate. A failure inside one layer is invisible to the others.</p></div><div class="cards">
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">S1</span>
+        <h3>Person resolution, bronze to silver</h3>
+        <span class="blk">Block 8b</span>
+        <p class="q">Does one employee become exactly one contact?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>Three thousand children got on the bus and the list at the other end has four hundred names. Children were merged together.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Layer</th><th>Distinct people</th></tr></thead><tbody><tr><td class="">Bronze, distinct GPN</td><td class="">3,079</td></tr><tr><td class="">Silver, distinct contactId</td><td class="hi ok">3,066</td></tr></tbody></table>
+      <div class="calc">Ratio <b>1.00</b>. The resolution holds.</div>
+      <div class="verdict">OK</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Layer</th><th>Distinct people</th></tr></thead><tbody><tr><td class="">Bronze, distinct GPN</td><td class="">3,079</td></tr><tr><td class="">Silver, distinct contactId</td><td class="hi bad">412</td></tr></tbody></table>
+      <div class="calc">Ratio <b>0.13</b>. People are collapsing into each other.</div>
+      <div class="verdict">Critical, unique visitors are wrong</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> This is the only check that guards the unique-visitor number. Every bronze check stays green while it fails.</footer>
+    </article>
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">S2</span>
+        <h3>Key completeness on silver</h3>
+        <span class="blk">Block 8b</span>
+        <p class="q">Did every row get its derived keys?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>Half the worksheets carry no name and no room on them. They still get counted, but they belong to nobody.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Row</th><th>contactId</th><th>marketingPageId</th></tr></thead><tbody><tr><td class="">1</td><td class="hi ok">c-8841</td><td class="hi ok">p-04b2</td></tr><tr><td class="">2</td><td class="hi ok">c-2290</td><td class="hi ok">p-771a</td></tr></tbody></table>
+      <div class="calc">Fill rate <b>100 %</b>.</div>
+      <div class="verdict">OK</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Row</th><th>contactId</th><th>marketingPageId</th></tr></thead><tbody><tr><td class="">1</td><td class="hi bad">c-8841</td><td class="hi bad">p-04b2</td></tr><tr><td class="">2</td><td class="hi bad">null</td><td class="hi bad">null</td></tr></tbody></table>
+      <div class="calc">Fill rate <b>50 %</b>. Half the rows carry no person and no page.</div>
+      <div class="verdict">Critical below 80 %</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> Rows survive the count but drop out of every breakdown, so totals and details stop matching.</footer>
+    </article>
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">G1</span>
+        <h3>Grain uniqueness on gold</h3>
+        <span class="blk">Block 8c</span>
+        <p class="q">Is each page, day and person present exactly once?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>The same child, the same day, the same room, written down twice. Every total for that room doubles.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Page</th><th>Day</th><th>Contact</th><th>Views</th></tr></thead><tbody><tr><td class="">p-04b2</td><td class="">20260907</td><td class="hi ok">c-8841</td><td class="">3</td></tr><tr><td class="">p-04b2</td><td class="">20260907</td><td class="hi ok">c-2290</td><td class="">1</td></tr></tbody></table>
+      <div class="calc">Two different people. Total <b>4 views</b>.</div>
+      <div class="verdict">OK</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Page</th><th>Day</th><th>Contact</th><th>Views</th></tr></thead><tbody><tr><td class="">p-04b2</td><td class="">20260907</td><td class="hi bad">c-8841</td><td class="">3</td></tr><tr><td class="">p-04b2</td><td class="">20260907</td><td class="hi bad">c-8841</td><td class="">3</td></tr></tbody></table>
+      <div class="calc">Same key twice. Total <b>6 views</b> for the same 3.</div>
+      <div class="verdict">Critical, every KPI on this page is doubled</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> A duplicated grain multiplies the numbers and stays inside every corridor, so no other check sees it.</footer>
+    </article>
+<article class="card">
+      <header class="card-hd">
+        <span class="chip">G2</span>
+        <h3>Row consistency on gold</h3>
+        <span class="blk">Block 8c</span>
+        <p class="q">Do the metrics in one row contradict each other?</p>
+      </header>
+      <p class="plain"><span>On a school trip</span>Nine visits to a room that was only entered six times. That cannot have happened.</p>
+      <div class="panes">
+        <div class="pane healthy">
+      <div class="pane-hd"><span class="dot"></span>Healthy</div>
+      <table class="mini"><thead><tr><th>Page</th><th>Views</th><th>Visits</th><th>durationavg</th></tr></thead><tbody><tr><td class="">p-04b2</td><td class="">6</td><td class="hi ok">2</td><td class="hi ok">7.7</td></tr><tr><td class="">p-771a</td><td class="">1</td><td class="hi ok">1</td><td class="hi ok">4.2</td></tr></tbody></table>
+      <div class="calc">Visits never exceed views. Average matches sum ÷ views.</div>
+      <div class="verdict">OK</div>
+    </div>
+        <div class="pane broken">
+      <div class="pane-hd"><span class="dot"></span>Broken</div>
+      <table class="mini"><thead><tr><th>Page</th><th>Views</th><th>Visits</th><th>durationavg</th></tr></thead><tbody><tr><td class="">p-04b2</td><td class="">6</td><td class="hi bad">9</td><td class="hi bad">7.7</td></tr><tr><td class="">p-771a</td><td class="">1</td><td class="hi bad">1</td><td class="hi bad">410.0</td></tr></tbody></table>
+      <div class="calc"><b>9 visits from 6 views</b> is impossible, and the average does not reconcile.</div>
+      <div class="verdict">Critical, the aggregation is wrong</div>
+    </div>
+      </div>
+      <footer class="cost"><b>Without it:</b> Impossible rows pass every corridor because each number alone looks normal.</footer>
+    </article>
+</div></section>
+<footer class="pg">
+  <p>Notes: 1. All values are invented to make the arithmetic visible; no real traffic, no real people. 2. Full catalogue with formulas, fields and thresholds: <code>docs/data-integrity-checks.md</code>. SQL per check: <code>dq_checks_draft.sql</code>. 3. The executive summary of the April incident is the companion page, Telemetry Integrity Checks.</p>
+  <p>Draft for discussion</p>
+</footer></div></body>
+</html>
