@@ -433,6 +433,44 @@ CREATE TABLE IF NOT EXISTS dq.dq_check_result (
   computed_at  TIMESTAMP
 ) USING DELTA;
 
+-- Which reported figure does each check cast doubt on?
+--
+-- This is what makes "never hold data back" safe. A defect is almost always
+-- partial: in April the identity family broke while page views and unique
+-- visitors stayed correct, because unique visitors rest on the contact id and
+-- not on the browser cookie. A blanket "data under review" banner would have
+-- discredited two perfectly good figures and defeated the purpose of publishing.
+-- The report joins this table so the banner names only the affected figures, and
+-- says out loud which ones are fine.
+CREATE OR REPLACE TABLE dq.check_affects (check_id STRING, figure STRING) USING DELTA;
+
+INSERT INTO dq.check_affects VALUES
+  -- arrival and transport problems cast doubt on everything downstream
+  ('A1','page_views'),('A1','visits'),('A1','unique_visitors'),
+  ('A2','page_views'),('A2','visits'),('A2','unique_visitors'),
+  ('A4','page_views'),('A4','visits'),('A4','unique_visitors'),
+  ('A6','page_views'),('A6','visits'),('A6','unique_visitors'),
+  ('G1','page_views'),('G1','visits'),('G1','unique_visitors'),
+  ('A5','page_views'),                       -- duplicates inflate views first
+  ('A7','page_views'),('A7','visits'),
+  -- the identity family: visits and everything derived from session grouping.
+  -- Deliberately NOT page_views and NOT unique_visitors. This is the April case.
+  ('B1','visits'),('B1','pages_per_visit'),('B1','avg_time_on_page'),('B1','bounce_rate'),
+  ('B2','visits'),('B3','visits'),('B4','visits'),
+  ('B5','visits'),('B5','bounce_rate'),
+  ('B6','avg_time_on_page'),('B6','pages_per_visit'),
+  ('B7','visits'),('B7','pages_per_visit'),
+  ('C8','page_views'),('C8','avg_time_on_page'),
+  -- person resolution: the only family that can move unique visitors
+  ('B8','unique_visitors'),('S1','unique_visitors'),('S2','unique_visitors'),
+  ('S3','unique_visitors'),
+  -- everything else
+  ('D4','tracking_coverage'),('D6','tracking_coverage'),
+  ('C6','page_breakdowns'),('S2','page_breakdowns'),
+  ('D3','page_breakdowns'),('D7','clicks'),
+  ('G2','visits'),('G2','avg_time_on_page'),
+  ('G3','page_views'),('G3','unique_visitors');
+
 -- Corridor checks are data-driven: one row per check that reads dq.metric_baseline.
 -- abs_* bounds are absolute thresholds on the metric; rel_* are relative deviations
 -- from the same-weekday 8-week median; step_* compares the 7-day mean with the
@@ -1253,11 +1291,32 @@ ORDER  BY CASE status WHEN 'critical' THEN 0 ELSE 1 END, check_id;
 -- staleness is silent while a banner is not. This view feeds a banner; nothing
 -- reads it as a gate, and no job branches on it.
 CREATE OR REPLACE VIEW dq.v_affected_dates AS
-SELECT check_date,
-       collect_set(check_id)                     AS critical_checks,
-       collect_set(CONCAT(check_id, ': ', note)) AS detail
-FROM   dq.dq_check_result WHERE status = 'critical'
-GROUP  BY check_date;
+WITH all_figures AS (
+  SELECT explode(array('page_views','visits','unique_visitors','pages_per_visit',
+                       'avg_time_on_page','bounce_rate','tracking_coverage',
+                       'page_breakdowns','clicks')) AS figure
+),
+hit AS (
+  SELECT r.check_date, a.figure, collect_set(r.check_id) AS by_checks
+  FROM   dq.dq_check_result r
+  JOIN   dq.check_affects a ON a.check_id = r.check_id
+  WHERE  r.status IN ('warning','critical')
+  GROUP  BY r.check_date, a.figure
+)
+SELECT d.check_date,
+       collect_set(h.figure)                                  AS figures_affected,
+       array_except(collect_set(f.figure), collect_set(h.figure)) AS figures_unaffected,
+       collect_set(CONCAT(h.figure, ' <- ', concat_ws(',', h.by_checks))) AS why
+FROM  (SELECT DISTINCT check_date FROM dq.dq_check_result WHERE status IN ('warning','critical')) d
+CROSS JOIN all_figures f
+LEFT  JOIN hit h ON h.check_date = d.check_date AND h.figure = f.figure
+GROUP BY d.check_date;
+
+-- The banner is built from both columns, never from the first alone. Naming what
+-- is still sound is the half that keeps the report usable during an incident:
+--   "Visits, pages per visit, average time on page and bounce rate are under
+--    review from 7 April. Page views and unique visitors are unaffected."
+
 
 -- Power BI Data Health page: last 90 days, latest computation per day × check
 CREATE OR REPLACE VIEW dq.v_data_health AS
@@ -1265,6 +1324,21 @@ SELECT * FROM (
   SELECT *, ROW_NUMBER() OVER (PARTITION BY check_date, check_id ORDER BY computed_at DESC) AS rn
   FROM dq.dq_check_result WHERE check_date >= date_sub(current_date(), 90)
 ) WHERE rn = 1;
+
+-- Health Overview for the technical team: every check, every layer, every day,
+-- with the reported figures each failing check puts at risk. This is the
+-- operational surface FR-RSP-05 requires; the banner view above is the
+-- consumer-facing one. Depends on v_data_health, so it is created after it.
+CREATE OR REPLACE VIEW dq.v_health_overview AS
+SELECT r.check_date, r.layer, r.family, r.check_id, r.status,
+       ROUND(r.metric_value, 4) AS value, ROUND(r.baseline, 4) AS baseline,
+       ROUND(r.lower_bound, 4)  AS lo,    ROUND(r.upper_bound, 4) AS hi,
+       concat_ws(', ', collect_set(a.figure)) AS figures_at_risk,
+       r.note, r.computed_at
+FROM   dq.v_data_health r
+LEFT   JOIN dq.check_affects a ON a.check_id = r.check_id
+GROUP  BY r.check_date, r.layer, r.family, r.check_id, r.status, r.metric_value,
+         r.baseline, r.lower_bound, r.upper_bound, r.note, r.computed_at;
 
 -- DLT expectations for the staging → bronze step (Python cell), row-level C2 / C5:
 -- import dlt

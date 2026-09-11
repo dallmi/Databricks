@@ -389,19 +389,36 @@ Either delete the day before re-inserting, or merge on day and check. The block
 documents both; pick one and make the job do it unconditionally.
 
 **Policy: numbers are never held back.** No check result gates, delays, drops or
-filters anything. `dq.v_affected_dates` feeds a banner, not a gate, and no job
-branches on it. Withholding is itself a failure mode: a stale report is silent
-about being stale, while a published number carrying a visible warning lets the
-reader judge for themselves. BRD FR-RSP-02.
+filters anything. BRD FR-RSP-02 and §8.0.
+
+Three reasons, worth knowing before anyone is tempted to add a gate. A defect is
+almost always partial while a hold is total: in April page views and unique
+visitors were correct the whole time, and a hold would have removed them too.
+There are many downstream dependencies, so stopping a load stalls a chain rather
+than pausing one report. And a stale report is silent about being stale, whereas
+a labelled figure tells the reader exactly what is wrong.
+
+**Scoped labelling is what makes that safe.** `dq.check_affects` maps each check
+to the reported figures it casts doubt on, and `dq.v_affected_dates` returns both
+the affected figures and the unaffected ones. The banner must be built from both
+columns. Naming what is still sound is the half that keeps the report usable
+during an incident, and it is the reason the identity family is deliberately
+mapped to visits and the engagement metrics but **not** to page views or unique
+visitors. BRD FR-RSP-08, FR-RSP-09.
 
 The same rule applies at row level, which is why only `@dlt.expect` appears in
 the commented expectations and never `expect_or_drop` or `expect_or_fail`. Both
 withhold rows. BRD FR-RSP-07.
 
-The compensating control is that the labelling has to actually reach the reader,
-so the banner and the data-health page are both Must, not Should. Without them
-the policy degrades into publishing defects silently, which is worse than either
-alternative.
+**Two surfaces, two audiences.** `dq.v_health_overview` is the operational one:
+every check, every layer, every day, with the figures each failing check puts at
+risk, for the technical team to monitor and work from. `dq.v_affected_dates`
+drives the consumer-facing banner and says as little as the situation allows.
+Both are Must, not Should. Without them the policy degrades into publishing
+defects silently, which is worse than either alternative.
+
+Creation order matters: `v_health_overview` reads `v_data_health`, so it is
+defined after it in the block.
 
 ---
 

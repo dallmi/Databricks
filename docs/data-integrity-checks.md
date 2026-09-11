@@ -53,7 +53,13 @@ unit for engagement — see `scripts/flatten_appinsights.py` and
    calendar table. No alerting before 4 weeks of history exist.
 4. **Step change beats point outlier.** For ratios, compare the 7-day mean with
    the prior 28-day mean; a persistent shift is the signal, one noisy day is not.
-5. **Three severities, and publishing never stops.** Info (annotate the day),
+5. **Publishing never stops, and the label is scoped.** A defect is partial, a
+   hold is total: in April page views and unique visitors were correct while
+   visits were not, and holding the load would have removed all three. Many
+   downstream dependencies make a hold a chain outage rather than a pause, and a
+   stale report is silent about being stale. So everything loads, the technical
+   team monitors a Health Overview, and the report labels only the figures a
+   failing check actually implicates. Three severities, and publishing never stops. Info (annotate the day),
    Warning (notify the data owner, badge the KPI), Critical (banner naming the
    affected dates, mark the KPI, open an incident). A failing check labels data;
    it never withholds it. A stale report is silent about being stale, whereas a
@@ -213,7 +219,8 @@ all read from this table; no check result lives only in a log.
 | Aggregate ratios (A, B, D) | one daily SQL/notebook job after the Silver refresh, writing `gold.dq_check_result` |
 | Drift (C7, D1) | optional: Lakehouse Monitoring on the Silver fact with custom metrics for the ratios |
 | Notification | Databricks SQL alerts on `status IN ('warning','critical')`; a Power BI Data Health page on the same table |
-| Banner | the report reads `dq.v_affected_dates` and names the affected dates. No job branches on a check result |
+| Health Overview | `dq.v_health_overview` — every check, layer and day with the figures at risk, for the technical team to monitor |
+| Banner | the report reads `dq.v_affected_dates`, which returns affected **and** unaffected figures. The banner names both. No job branches on a check result |
 | SQL drafts | [`dq_checks_draft.sql`](../dq_checks_draft.sql): BLOCK 0 column probes, BLOCK 1 result table + check catalogue, BLOCK 2–3 daily metrics and same-weekday baseline, BLOCK 4 generic corridor engine, BLOCK 5–8 explicit checks, BLOCK 9 alert query, hold view, DLT expectations |
 
 ### Make the KPI robust, not only monitored

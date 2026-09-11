@@ -196,9 +196,11 @@ and each hop is reconciled.
 |---|---|---|
 | FR-RSP-01 | Three severities: Info, Warning, Critical, per §8.1 | Must |
 | FR-RSP-02 | **Data is never withheld.** No check result may gate, delay, drop or filter a refresh, a row or a date. A failing check labels data; it never removes it | Must |
-| FR-RSP-03 | A critical result shows a banner naming the affected date range on every report page, and marks the affected KPI itself | Must |
+| FR-RSP-03 | A critical result shows a banner naming the affected date range **and the affected figures by name**, and marks those figures | Must |
 | FR-RSP-04 | A warning notifies the data owner the same morning and badges the affected KPI | Must |
-| FR-RSP-05 | A data-health page exposes the last 90 days of results to report consumers | **Must** — the compensating control for FR-RSP-02 |
+| FR-RSP-05 | A **Health Overview** gives the technical team every check, layer and day for the last 90 days, with drill-down to the failing metric | **Must** — the compensating control for FR-RSP-02 |
+| FR-RSP-08 | Each check declares which reported figures it casts doubt on. Labelling is scoped to those figures only | Must |
+| FR-RSP-09 | A figure no failing check points at is never labelled. Correct numbers stay visibly correct | Must |
 | FR-RSP-06 | An info-level event annotates the day without notifying anyone | Should |
 | FR-RSP-07 | Row-level rules warn and keep. No expectation may drop or reject a row | Must |
 
@@ -263,6 +265,35 @@ Ten signals, the subset a non-specialist should be able to read.
 
 ## 8. Operating model
 
+### 8.0 Why nothing is ever held back
+
+This is a deliberate architectural position, not an omission. Three reasons.
+
+**A defect is partial; a hold is total.** April is the proof. Page views and
+unique visitors were correct throughout, because unique visitors rest on the
+contact id rather than the browser cookie. Visits and the engagement metrics
+were wrong. A hold would have removed all of it, including the two figures most
+people open the report to see. Withholding correct numbers to protect someone
+from an incorrect one is a poor trade, and it is one the reader never gets to
+make for themselves.
+
+**We have many downstream dependencies.** Stopping a load does not pause one
+report, it stalls a chain. Every consumer of the affected layer inherits the
+outage, including those whose numbers were never in doubt.
+
+**Stale is worse than flagged, because stale is silent.** A held refresh leaves
+yesterday's figures on the screen with nothing to indicate they are old. A
+published figure carrying a visible label tells the reader exactly what is
+wrong and lets them decide whether it affects their question.
+
+The consequence is that the labelling has to be good enough to replace the gate.
+Two surfaces do that, for two different audiences, and both are mandatory:
+
+| Surface | Audience | Purpose |
+|---|---|---|
+| **Health Overview** | The technical team | Operational monitoring. Every check, every layer, every day, with drill-down. This is where a defect is found and worked. |
+| **Banner and KPI badge** | Report consumers | Scoped labelling. Names only the figures a failing check actually casts doubt on, so correct numbers are not discredited alongside. |
+
 ### 8.1 Severity and response
 
 **Publishing always continues.** Severity changes how loudly a defect is
@@ -280,6 +311,16 @@ what earns the right to keep publishing.
 
 Renamed from *Critical* on 2026-09-11. Under this policy the level never blocked a
 refresh, and a name implying otherwise would mislead whoever maintains it.
+
+### 8.1a What scoped labelling looks like
+
+Applied to April, the identity family fires and the banner reads:
+
+> Visits, pages per visit, average time on page and bounce rate are under review
+> from 7 April. Page views and unique visitors are unaffected.
+
+Not *"data under review"*. The second sentence is the one that matters: it keeps
+two correct figures usable, which is the entire point of not holding the load.
 
 ### 8.2 Escalation path
 
