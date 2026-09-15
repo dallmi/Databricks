@@ -1318,18 +1318,22 @@ def chart(m):
         if outside(s, i, d):
             svg.append(f'<circle cx="{xpos(i):.1f}" cy="{y(s["v"][i]):.1f}" r="3" fill="#BD000C" '
                        f'stroke="#fff" stroke-width="1"/>')
+    # Compact, at most three lines: every chart on the page opens its box at once.
     tips = []
     for i, dd in enumerate(cdays):
+        line = f"actual <b>{fmt(s['v'][i], pct)}</b>"
         if s["e"][i] is None:
-            exp = "no expected value yet, fewer than four earlier " + f"{dd:%A}s"
-        elif s["lo"][i] is None:
-            exp = f"expected {fmt(s['e'][i], pct)}"
+            line += f'<br><span style="color:#8E8D83">no expected value yet</span>'
         else:
-            kind = "normal" if d is None or d["band_warn"] else "allowed"
-            exp = f"expected {fmt(s['e'][i], pct)}, {kind} {fmt(s['lo'][i], pct)} to {fmt(s['hi'][i], pct)}"
-        flag = '<br><b style="color:#BD000C">outside the range it is judged by</b>' if outside(s, i, d) else ""
-        tips.append(f"<b>{dd:%a} {dd.day} {dd:%b}</b><br>actual {fmt(s['v'][i], pct)}<br>{exp}{flag}")
-    return frame(svg, lo, hi, pad, pct, tips)
+            line += f' &middot; expected {fmt(s["e"][i], pct)}'
+            if s["lo"][i] is not None:
+                kind = "normal" if d is None or d["band_warn"] else "allowed"
+                line += f'<br><span style="color:#8E8D83">{kind} {fmt(s["lo"][i], pct)} to {fmt(s["hi"][i], pct)}</span>'
+        if outside(s, i, d):
+            line += ' <b style="color:#BD000C">outside</b>'
+        tips.append(f"<b>{dd:%a} {dd.day} {dd:%b}</b><br>{line}")
+    ys = [[round((y(v) - T) / PH, 3) for v in (s["v"][i], s["e"][i]) if v is not None] for i in range(C)]
+    return frame(svg, lo, hi, pad, pct, tips, ys)
 
 def flow_chart(lines):
     """The same figure in each layer, one line per layer, on the shared business-day axis."""
@@ -1350,10 +1354,13 @@ def flow_chart(lines):
     tips = [f"<b>{dd:%a} {dd.day} {dd:%b}</b>" + "".join(
                 f'<br><span style="color:{ink}">&#9632;</span> {label} {fmt(s["v"][i])}' for s, label, ink in ss)
             for i, dd in enumerate(cdays)]
-    return frame(svg, lo, hi, pad, False, tips)
+    ys = [[round((y(s["v"][i]) - T) / PH, 3) for s, _, _ in ss if s["v"][i] is not None] for i in range(C)]
+    return frame(svg, lo, hi, pad, False, tips, ys)
 
-def frame(svg, lo, hi, pad, pct, tips):
-    """Baseline, Monday ticks, the two y extremes, the hover marker, and the <svg> around it all."""
+def frame(svg, lo, hi, pad, pct, tips, ys):
+    """Baseline, Monday ticks, the two y extremes, the hover marker, and the <svg> around it all.
+    `ys` holds, per day, where the drawn lines sit as a share of the plot height, so
+    the hover box can take whichever edge of the plot has fewer lines under it."""
     y = lambda v: T + PH * (1 - (v - lo) / (hi - lo))
     svg = list(svg)
     svg.append(f'<line x1="{L}" x2="{W - R}" y1="{T + PH}" y2="{T + PH}" stroke="#000" stroke-width="1"/>')
@@ -1370,8 +1377,12 @@ def frame(svg, lo, hi, pad, pct, tips):
     svg.append(f'<line class="xh" x1="0" x2="0" y1="{T}" y2="{T + PH}" stroke="#8E8D83" stroke-width="1" '
                f'visibility="hidden"/>')
     svg.append(f'<rect x="{L}" y="{T}" width="{PW}" height="{PH}" fill="transparent"/>')
-    return (f'<svg class="tr" viewBox="0 0 {W} {H}" style="width:100%;height:auto;display:block;overflow:visible" '
-            f'data-tips="{html.escape(json.dumps(tips))}">{"".join(svg)}</svg>')
+    return (f'<div style="position:relative">'
+            f'<svg class="tr" viewBox="0 0 {W} {H}" style="width:100%;height:auto;display:block;overflow:visible" '
+            f'data-tips="{html.escape(json.dumps(tips))}" data-ys="{json.dumps(ys)}">{"".join(svg)}</svg>'
+            f'<div class="tr-box" style="display:none;position:absolute;z-index:10;background:rgba(255,255,255,.94);'
+            f'border:1px solid #CCCABC;padding:5px 7px;font-size:10.5px;line-height:1.35;color:#404040;'
+            f'pointer-events:none;max-width:72%"></div></div>')
 
 def panel(m):
     s, d = cseries[m], defs.get(m)
@@ -1486,7 +1497,7 @@ displayHTML(f"""
   </div>
   <div style="font-size:12.5px;color:#404040;margin:14px 0 8px;line-height:1.5">{shared_txt}</div>
   <div style="font-size:11.5px;color:#5A5D5C;margin-bottom:6px">{legend}</div>
-  <div style="font-size:11px;color:#8E8D83">Hover a chart to read one day; the line follows on every chart, so
+  <div style="font-size:11px;color:#8E8D83">Hover a chart to read one day; every chart shows that day at once, so
     breaks that happened together line up. Monday to Friday only, so weekend volume does not set the scale;
     weekends are still judged and named above when they leave their range. The first weeks have no expected
     value yet, because it needs four earlier days of the same weekday.</div>
@@ -1509,40 +1520,48 @@ displayHTML(f"""
   <div style="font-size:12px;color:#7A7870;margin:3px 0 10px">
     The control group. A problem that leaves these untouched is narrower than it looks.</div>
   {grid([panel(m) for m in others])}
-
-  <div id="tr-tip" style="display:none;position:fixed;z-index:10;background:#fff;border:1px solid #CCCABC;
-       padding:7px 9px;font-size:11.5px;line-height:1.45;color:#404040;pointer-events:none;max-width:260px"></div>
 </div>
 <script>
 (function () {{
-  var N = {C}, L = {L}, PW = {PW}, W = {W};
+  // One box per chart: hovering any chart shows the same day on every chart, each
+  // box beside its own day marker, flipped left at the chart's right edge, and at
+  // the top or bottom of the plot, whichever has fewer lines under it that day.
+  var N = {C}, L = {L}, PW = {PW}, W = {W}, T = {T}, PH = {PH};
   var charts = Array.prototype.slice.call(document.querySelectorAll('svg.tr'));
-  var tip = document.getElementById('tr-tip');
+  charts.forEach(function (c) {{
+    c._tips = JSON.parse(c.getAttribute('data-tips'));
+    c._ys = JSON.parse(c.getAttribute('data-ys'));
+  }});
   function show(i) {{
     var x = L + PW * i / Math.max(N - 1, 1);
-    charts.forEach(function (c) {{
-      var l = c.querySelector('.xh');
+    charts.forEach(function (o) {{
+      var l = o.querySelector('.xh');
       l.setAttribute('x1', x); l.setAttribute('x2', x); l.setAttribute('visibility', 'visible');
+      var wrap = o.parentNode, box = wrap.querySelector('.tr-box');
+      box.innerHTML = o._tips[i];
+      box.style.display = 'block';
+      var scale = wrap.clientWidth / W, px = x * scale, left = px + 8;
+      if (left + box.offsetWidth > wrap.clientWidth) left = px - box.offsetWidth - 8;
+      box.style.left = Math.max(0, left) + 'px';
+      var plotTop = T * scale, plotBottom = (T + PH) * scale;
+      var band = (box.offsetHeight + 4) / (PH * scale), ys = o._ys[i] || [];
+      var underTop = ys.filter(function (f) {{ return f <= band; }}).length;
+      var underBottom = ys.filter(function (f) {{ return f >= 1 - band; }}).length;
+      box.style.top = (underBottom < underTop ? Math.max(plotTop, plotBottom - box.offsetHeight - 4) : plotTop) + 'px';
+    }});
+  }}
+  function hide() {{
+    charts.forEach(function (o) {{
+      o.querySelector('.xh').setAttribute('visibility', 'hidden');
+      o.parentNode.querySelector('.tr-box').style.display = 'none';
     }});
   }}
   charts.forEach(function (c) {{
-    var tips = JSON.parse(c.getAttribute('data-tips'));
     c.addEventListener('mousemove', function (e) {{
       var r = c.getBoundingClientRect();
-      var i = Math.round(((e.clientX - r.left) * W / r.width - L) / PW * (N - 1));
-      i = Math.max(0, Math.min(N - 1, i));
-      show(i);
-      tip.innerHTML = tips[i];
-      tip.style.display = 'block';
-      var left = e.clientX + 14;
-      if (left + tip.offsetWidth > window.innerWidth - 8) left = e.clientX - tip.offsetWidth - 14;
-      tip.style.left = left + 'px';
-      tip.style.top = (e.clientY + 14) + 'px';
+      show(Math.max(0, Math.min(N - 1, Math.round(((e.clientX - r.left) * W / r.width - L) / PW * Math.max(N - 1, 1)))));
     }});
-    c.addEventListener('mouseleave', function () {{
-      tip.style.display = 'none';
-      charts.forEach(function (o) {{ o.querySelector('.xh').setAttribute('visibility', 'hidden'); }});
-    }});
+    c.addEventListener('mouseleave', hide);
   }});
 }})();
 </script>
@@ -1714,8 +1733,10 @@ def empty():
     return (f'<div style="height:{H}px;display:flex;align-items:center;justify-content:center;'
             f'background:#ECEBE4;font-size:12px;color:#7A7870">no values in this window</div>')
 
-def frame(svg, lo, hi, pad, pct, tips):
-    """Baseline, Monday ticks, the two y extremes, the hover marker, and the <svg> around it all."""
+def frame(svg, lo, hi, pad, pct, tips, ys):
+    """Baseline, Monday ticks, the two y extremes, the hover marker, and the <svg> around it all.
+    `ys` holds, per day, where the drawn lines sit as a share of the plot height, so
+    the hover box can take whichever edge of the plot has fewer lines under it."""
     y = lambda v: T + PH * (1 - (v - lo) / (hi - lo))
     svg = list(svg)
     svg.append(f'<line x1="{L}" x2="{W - R}" y1="{T + PH}" y2="{T + PH}" stroke="#000" stroke-width="1"/>')
@@ -1732,8 +1753,12 @@ def frame(svg, lo, hi, pad, pct, tips):
     svg.append(f'<line class="xh" x1="0" x2="0" y1="{T}" y2="{T + PH}" stroke="#8E8D83" stroke-width="1" '
                f'visibility="hidden"/>')
     svg.append(f'<rect x="{L}" y="{T}" width="{PW}" height="{PH}" fill="transparent"/>')
-    return (f'<svg class="t5" viewBox="0 0 {W} {H}" style="width:100%;height:auto;display:block;overflow:visible" '
-            f'data-tips="{html.escape(json.dumps(tips))}">{"".join(svg)}</svg>')
+    return (f'<div style="position:relative">'
+            f'<svg class="t5" viewBox="0 0 {W} {H}" style="width:100%;height:auto;display:block;overflow:visible" '
+            f'data-tips="{html.escape(json.dumps(tips))}" data-ys="{json.dumps(ys)}">{"".join(svg)}</svg>'
+            f'<div class="t5-box" style="display:none;position:absolute;z-index:10;background:rgba(255,255,255,.94);'
+            f'border:1px solid #CCCABC;padding:5px 7px;font-size:10.5px;line-height:1.35;color:#404040;'
+            f'pointer-events:none;max-width:72%"></div></div>')
 
 def chart(lines, extras):
     """One or more lines on the shared business-day axis. Each line with a corridor
@@ -1816,7 +1841,11 @@ def chart(lines, extras):
             t.append(f'<b style="color:#BD000C">{c} fired</b> {LBL.get(c, (d["metric"],))[0]} '
                      f'{fmt(cseries[d["metric"]]["v"][i], "_share" in d["metric"])}')
         tips.append("<br>".join(t))
-    return frame(svg, lo, hi, pad, pct, tips)
+    ys = [[round((y(v) - T) / PH, 3)
+           for m, _, _ in ss
+           for v in (cseries[m]["v"][i], cseries[m]["e"][i] if single else None) if v is not None]
+          for i in range(C)]
+    return frame(svg, lo, hi, pad, pct, tips, ys)
 
 def verdict_chip(c):
     st = verdict.get(c)
@@ -1928,7 +1957,7 @@ displayHTML(f"""
   </div>
   <div style="font-size:12.5px;color:#404040;margin:14px 0 8px;line-height:1.5">{state} {shared_txt}</div>
   <div style="font-size:11.5px;color:#5A5D5C;margin-bottom:6px">{legend}</div>
-  <div style="font-size:11px;color:#8E8D83">Hover a chart to read one day; the line follows on every chart, so
+  <div style="font-size:11px;color:#8E8D83">Hover a chart to read one day; every chart shows that day at once, so
     breaks that happened together line up. Monday to Friday only, so weekend volume does not set the scale;
     weekends are still judged and named above when they leave their range. Each panel names the checks it
     covers with today's verdict; the first weeks have no expected value yet, because it needs four earlier
@@ -1940,40 +1969,48 @@ displayHTML(f"""
   <div style="font-size:12px;color:#7A7870;margin:3px 0 10px">
     Corridor checks the five do not cover, drawn only while they are critical or warning. {quiet_txt}{blind_txt}</div>
   {also_html}
-
-  <div id="t5-tip" style="display:none;position:fixed;z-index:10;background:#fff;border:1px solid #CCCABC;
-       padding:7px 9px;font-size:11.5px;line-height:1.45;color:#404040;pointer-events:none;max-width:300px"></div>
 </div>
 <script>
 (function () {{
-  var N = {C}, L = {L}, PW = {PW}, W = {W};
+  // One box per chart: hovering any chart shows the same day on every chart, each
+  // box beside its own day marker, flipped left at the chart's right edge, and at
+  // the top or bottom of the plot, whichever has fewer lines under it that day.
+  var N = {C}, L = {L}, PW = {PW}, W = {W}, T = {T}, PH = {PH};
   var charts = Array.prototype.slice.call(document.querySelectorAll('svg.t5'));
-  var tip = document.getElementById('t5-tip');
+  charts.forEach(function (c) {{
+    c._tips = JSON.parse(c.getAttribute('data-tips'));
+    c._ys = JSON.parse(c.getAttribute('data-ys'));
+  }});
   function show(i) {{
     var x = L + PW * i / Math.max(N - 1, 1);
-    charts.forEach(function (c) {{
-      var l = c.querySelector('.xh');
+    charts.forEach(function (o) {{
+      var l = o.querySelector('.xh');
       l.setAttribute('x1', x); l.setAttribute('x2', x); l.setAttribute('visibility', 'visible');
+      var wrap = o.parentNode, box = wrap.querySelector('.t5-box');
+      box.innerHTML = o._tips[i];
+      box.style.display = 'block';
+      var scale = wrap.clientWidth / W, px = x * scale, left = px + 8;
+      if (left + box.offsetWidth > wrap.clientWidth) left = px - box.offsetWidth - 8;
+      box.style.left = Math.max(0, left) + 'px';
+      var plotTop = T * scale, plotBottom = (T + PH) * scale;
+      var band = (box.offsetHeight + 4) / (PH * scale), ys = o._ys[i] || [];
+      var underTop = ys.filter(function (f) {{ return f <= band; }}).length;
+      var underBottom = ys.filter(function (f) {{ return f >= 1 - band; }}).length;
+      box.style.top = (underBottom < underTop ? Math.max(plotTop, plotBottom - box.offsetHeight - 4) : plotTop) + 'px';
+    }});
+  }}
+  function hide() {{
+    charts.forEach(function (o) {{
+      o.querySelector('.xh').setAttribute('visibility', 'hidden');
+      o.parentNode.querySelector('.t5-box').style.display = 'none';
     }});
   }}
   charts.forEach(function (c) {{
-    var tips = JSON.parse(c.getAttribute('data-tips'));
     c.addEventListener('mousemove', function (e) {{
       var r = c.getBoundingClientRect();
-      var i = Math.round(((e.clientX - r.left) * W / r.width - L) / PW * (N - 1));
-      i = Math.max(0, Math.min(N - 1, i));
-      show(i);
-      tip.innerHTML = tips[i];
-      tip.style.display = 'block';
-      var left = e.clientX + 14;
-      if (left + tip.offsetWidth > window.innerWidth - 8) left = e.clientX - tip.offsetWidth - 14;
-      tip.style.left = left + 'px';
-      tip.style.top = (e.clientY + 14) + 'px';
+      show(Math.max(0, Math.min(N - 1, Math.round(((e.clientX - r.left) * W / r.width - L) / PW * Math.max(N - 1, 1)))));
     }});
-    c.addEventListener('mouseleave', function () {{
-      tip.style.display = 'none';
-      charts.forEach(function (o) {{ o.querySelector('.xh').setAttribute('visibility', 'hidden'); }});
-    }});
+    c.addEventListener('mouseleave', hide);
   }});
 }})();
 </script>
