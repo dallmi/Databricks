@@ -33,10 +33,11 @@
 --               to a row. The three published figures through the layers and
 --               the two integrity ratios, each panel naming the checks it
 --               covers. Anything else failing today is drawn below them.
---     cell 10d  six read-only queries, each its own cell (a to f): verify the
+--     cell 10d  seven read-only queries, each its own cell (a to g): verify the
 --               layer-flow checks, calibrate their limits, list the days they
 --               fired, show which layer moved, whether silver removes double
---               fires, and which pages did not reach silver on a flagged day.
+--               fires, which pages did not reach silver on a flagged day, and
+--               whether every person in silver reaches gold, person by person.
 --   Cell 11 cleans up and is safe to run at any point, including after a failure.
 --   To run the lot from a single cell instead, see the note at the foot.
 --
@@ -1979,7 +1980,7 @@ displayHTML(f"""
 -- ----------------------------------------------------------------------------
 -- CELL 10d-a — VERIFY: no check counted twice.
 --
--- Cells 10d-a to 10d-f are six SEPARATE notebook cells. Paste each on its own:
+-- Cells 10d-a to 10d-g are seven SEPARATE notebook cells. Paste each on its own:
 -- a cell holding several queries only displays the result of the last one.
 --
 -- A6, G3 and S1 moved from the explicit checks (cell 9) to the corridor engine
@@ -2211,6 +2212,51 @@ SELECT d AS check_date, date_format(d, 'EEE') AS weekday,
 FROM   ranked
 WHERE  rn <= 15
 ORDER  BY check_date DESC, rn;
+
+
+-- ----------------------------------------------------------------------------
+-- CELL 10d-g — PEOPLE, SILVER AGAINST GOLD, PERSON BY PERSON.
+--
+-- G4 compares two daily counts and reads 1.000 on every measured day. That is
+-- expected: gold aggregates silver to page x person x day, and aggregation
+-- cannot change how many people took part, only how many rows each has. This
+-- query confirms that the match is real rather than an artefact of counting,
+-- by joining the two layers on the person and the day and listing who is on
+-- one side only. Both difference columns at 0 on every day means silver to
+-- gold carries every person; anything else names the day to look at.
+--
+-- Two things it does not settle. Gold's visitdatekey is taken to be derived
+-- from the same event timestamp as the date in silver; if it were a different
+-- clock, people would slide across midnight and the counts would differ even
+-- when nobody is lost. And "gold visitors" is a daily distinct count, which is
+-- the published unique-visitor figure only if the report counts the same way.
+-- Fourteen days, reads the source tables directly, writes nothing.
+-- ----------------------------------------------------------------------------
+%sql
+WITH sv AS (
+  SELECT CAST(`timestamp` AS DATE) AS d, contactId AS c
+  FROM   sharepoint_silver.pageviewed
+  WHERE  `timestamp` >= date_sub(current_date(), 14)
+    AND  contactId IS NOT NULL
+  GROUP  BY 1, 2
+),
+g AS (
+  SELECT to_date(visitdatekey, 'yyyyMMdd') AS d, viewingcontactid AS c
+  FROM   sharepoint_gold.pbi_db_interactions_metrics
+  WHERE  visitdatekey >= date_format(date_sub(current_date(), 14), 'yyyyMMdd')
+    AND  viewingcontactid IS NOT NULL
+  GROUP  BY 1, 2
+)
+SELECT COALESCE(sv.d, g.d)                          AS view_date,
+       date_format(COALESCE(sv.d, g.d), 'EEE')      AS weekday,
+       COUNT(sv.c)                                  AS silver_contacts,
+       COUNT(g.c)                                   AS gold_contacts,
+       SUM(CASE WHEN g.c  IS NULL THEN 1 ELSE 0 END) AS in_silver_not_gold,
+       SUM(CASE WHEN sv.c IS NULL THEN 1 ELSE 0 END) AS in_gold_not_silver
+FROM   sv
+FULL OUTER JOIN g ON g.d = sv.d AND g.c = sv.c
+GROUP  BY 1, 2
+ORDER  BY view_date DESC;
 
 
 -- ----------------------------------------------------------------------------
