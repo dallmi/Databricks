@@ -416,7 +416,7 @@ skipped; neither costs anything once 9e has run.
 The verdicts were not the only thing recomputed. The expensive part sits in the
 daily metrics (cell 2: the per-person window for double fires and the rolling-week
 join), and everything downstream of them reads them again. 9e therefore also
-caches `dq_metric_daily`, which is about 1,200 rows, so the verdicts, the onset
+caches `dq_metric_daily`, which is under 2,000 rows, so the verdicts, the onset
 view and the trend charts in 10c all read the same materialised rows.
 
 ## Trend charts — seeing the shape of a problem
@@ -444,6 +444,26 @@ an edge, so it is named at that edge ("off the scale") instead of drawn to scale
 rest are shown as a control group. A problem that leaves page views and unique
 visitors untouched is a much narrower problem, and that is only visible if the
 untouched charts are there to compare.
+
+**Layer flow comes first.** The checks between layers (A6 bronze to silver, G3
+silver to gold for page views; S1 and G4 for people) are what the pipeline owns,
+so 10c draws them above everything else: one chart with the figure in each layer,
+and the two ratios beside it. They used to be single-day explicit checks in cell 9.
+They are now daily series in cell 4 and corridor checks in cell 6, which gives
+them a history, an onset date in 9b and a chart. Two things changed with the move.
+First, the corridor engine gained a `band_warn` flag: these ratios are nearly
+constant, so their MAD is tiny and the ±3 MAD band would warn on noise in the third
+decimal; for them only the stated limits decide, and the chart draws those limits
+rather than the band. Second, A6 is now relative to its same-weekday baseline
+instead of absolute points against a pooled 28-day median, which is slightly
+stricter at a share well below 1. A layer that did not load at all counts as a
+ratio of 0, not as a missing value, so an outage is critical rather than "cannot be
+judged"; the single-day versions did the same with `COALESCE(…, 0)`. G4 is new and unmeasured, hence relative limits.
+
+A layer-volume chart alone would not do the job. Silver and gold sit within a few
+per cent of each other and bronze only somewhat above, so three near-parallel lines
+hide a three per cent loss inside the daily swing. The ratio is flat when healthy, which is what makes a
+loss visible.
 
 **Weekends are judged but not drawn.** Weekend volume is a fraction of a
 weekday's, so with weekends drawn every volume chart became a saw blade scaled

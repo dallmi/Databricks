@@ -219,6 +219,20 @@ GROUP  BY 1;
 
 -- ----------------------------------------------------------------------------
 -- CELL 4 — long format, one row per day and metric
+--
+-- The last two blocks are the LAYER FLOW: silver's own volumes, and the ratios
+-- between layers for page views and for people. These measure what the pipeline
+-- itself does, which is what this team owns and can fix. A ratio between two
+-- layers is also the cleanest signal in the notebook: traffic moves numerator
+-- and denominator together, so weekends, holidays and quiet Mondays cancel out
+-- and a healthy ratio is a flat line. A6, G3, S1 and G4 judge them in cell 6;
+-- as daily series they get a history, an onset date and a chart, which the
+-- single-day versions formerly in cell 9 could not have.
+--
+-- Visits are deliberately absent. Gold stores visits per page, person and day,
+-- so a visit across three pages sits in three rows and SUM(visits) is not
+-- additive across pages. A daily total against a daily total would measure the
+-- aggregation rule, not data loss. It needs a like-for-like grain first.
 -- ----------------------------------------------------------------------------
 %sql
 CREATE OR REPLACE TEMPORARY VIEW dq_metric_daily AS
@@ -242,6 +256,22 @@ SELECT view_date, metric, CAST(value AS DOUBLE) AS value FROM (
     'gold_unique_visitors', CAST(gold_unique_visitors AS DOUBLE),
     'gold_views_per_visit', CAST(gold_views_per_visit AS DOUBLE)) AS (metric, value)
   FROM dq_gold_daily
+  UNION ALL
+  SELECT view_date, stack(2,
+    'silver_rows', CAST(sv_rows AS DOUBLE), 'silver_contacts', CAST(sv_contacts AS DOUBLE)) AS (metric, value)
+  FROM dq_sv_daily
+  UNION ALL
+  -- A layer that did not load at all has no row, so its numerator is defaulted
+  -- to 0: a missing gold day must read as a ratio of 0 (critical), never as a
+  -- NULL that the engine reports as "cannot be judged".
+  SELECT pv.view_date, stack(4,
+    'keep_share_silver',        CAST(COALESCE(sv.sv_rows, 0)             / NULLIF(pv.views, 0)       AS DOUBLE),
+    'gold_to_silver_views',     CAST(COALESCE(g.gold_views, 0)           / NULLIF(sv.sv_rows, 0)     AS DOUBLE),
+    'silver_to_bronze_persons', CAST(COALESCE(sv.sv_contacts, 0)         / NULLIF(pv.persons, 0)     AS DOUBLE),
+    'gold_to_silver_persons',   CAST(COALESCE(g.gold_unique_visitors, 0) / NULLIF(sv.sv_contacts, 0) AS DOUBLE)) AS (metric, value)
+  FROM dq_pv_daily pv
+  LEFT JOIN dq_sv_daily   sv ON sv.view_date = pv.view_date
+  LEFT JOIN dq_gold_daily g  ON g.view_date  = pv.view_date
 );
 
 
@@ -291,27 +321,41 @@ LEFT JOIN steps s ON s.view_date = med.view_date AND s.metric = med.metric;
 -- ----------------------------------------------------------------------------
 -- CELL 6 — the check catalogue, inline instead of a stored table
 -- Thresholds are the measured ones. See BRD §10.1.
+--
+-- band_warn: may the statistical band (+/- 3 MAD) raise a warning on its own?
+-- True for behavioural metrics, where the band is the only judgement. False for
+-- the layer-flow checks at the bottom: a ratio between layers is nearly constant,
+-- so its MAD is tiny and the band would flag harmless wobble in the third decimal.
+-- Their stated limits decide, exactly as they did as explicit checks in cell 9.
+-- A6 is now relative to the same-weekday baseline (5 % / 10 % of it) rather than
+-- 5 / 10 points against a pooled 28-day median; at a share well below 1 that is
+-- slightly stricter. G4 is new and not yet measured, hence relative limits.
 -- ----------------------------------------------------------------------------
 %sql
 CREATE OR REPLACE TEMPORARY VIEW dq_check_def AS
 SELECT * FROM VALUES
-  ('A1','completeness','bronze','views',                 CAST(NULL AS DOUBLE),CAST(NULL AS DOUBLE),CAST(NULL AS DOUBLE),CAST(NULL AS DOUBLE),0.25,0.50,CAST(NULL AS DOUBLE),CAST(NULL AS DOUBLE),'daily page views vs same-weekday median'),
-  ('A4','completeness','staging','sampling_factor',      NULL,NULL,1.001,1.001,NULL,NULL,NULL,NULL,'sum(itemCount)/count(*) must be 1.00'),
-  ('B1','identity','bronze','views_per_session',         1.30,1.50,NULL,NULL,NULL,NULL,0.10,0.25,'healthy 1.94-2.35 weekday, broken 1.06'),
-  ('B2','identity','bronze','sessions_per_browser_7d',   1.02,1.10,NULL,NULL,NULL,NULL,0.15,0.30,'visits per browser identity, rolling week'),
-  ('B4','identity','bronze','browser_ids_per_person',    NULL,NULL,1.5,2.5,NULL,NULL,0.15,0.30,'per DAY; healthy 1.06-1.15, broken 3.7-4.15'),
-  ('B5','identity','bronze','single_view_session_share', NULL,NULL,0.80,0.90,NULL,NULL,0.10,0.20,'healthy 0.54-0.76, broken 0.93-0.95'),
-  ('B8','identity','bronze','identified_share',          0.90,0.97,NULL,NULL,NULL,NULL,0.05,0.15,'measured 1.000, every row carries a GPN'),
-  ('C8','schema','bronze','double_fire_share',           NULL,NULL,0.10,0.25,NULL,NULL,0.05,NULL,'same person, same page, under 1 s apart'),
-  ('D1a','plausibility','gold','gold_views',             NULL,NULL,NULL,NULL,0.25,0.50,NULL,NULL,'gold views per day'),
-  ('D1b','plausibility','gold','gold_visits',            NULL,NULL,NULL,NULL,0.25,0.50,0.25,0.50,'gold visits per day'),
-  ('D1c','plausibility','gold','gold_unique_visitors',   NULL,NULL,NULL,NULL,0.25,0.50,0.25,0.50,'gold distinct contacts per day'),
-  ('D1d','plausibility','gold','gold_views_per_visit',   1.02,1.05,NULL,NULL,NULL,NULL,0.10,0.25,'the ratio the business sees'),
-  ('D4','plausibility','gold','tracked_share',           NULL,NULL,NULL,NULL,NULL,NULL,0.05,NULL,'views with a tracking id'),
-  ('D7','plausibility','gold','clicks_per_view',         NULL,NULL,NULL,NULL,NULL,NULL,0.25,NULL,'customEvents clicks per page view')
+  ('A1','completeness','bronze','views',                 CAST(NULL AS DOUBLE),CAST(NULL AS DOUBLE),CAST(NULL AS DOUBLE),CAST(NULL AS DOUBLE),0.25,0.50,CAST(NULL AS DOUBLE),CAST(NULL AS DOUBLE),true,'daily page views vs same-weekday median'),
+  ('A4','completeness','staging','sampling_factor',      NULL,NULL,1.001,1.001,NULL,NULL,NULL,NULL,true,'sum(itemCount)/count(*) must be 1.00'),
+  ('B1','identity','bronze','views_per_session',         1.30,1.50,NULL,NULL,NULL,NULL,0.10,0.25,true,'healthy 1.94-2.35 weekday, broken 1.06'),
+  ('B2','identity','bronze','sessions_per_browser_7d',   1.02,1.10,NULL,NULL,NULL,NULL,0.15,0.30,true,'visits per browser identity, rolling week'),
+  ('B4','identity','bronze','browser_ids_per_person',    NULL,NULL,1.5,2.5,NULL,NULL,0.15,0.30,true,'per DAY; healthy 1.06-1.15, broken 3.7-4.15'),
+  ('B5','identity','bronze','single_view_session_share', NULL,NULL,0.80,0.90,NULL,NULL,0.10,0.20,true,'healthy 0.54-0.76, broken 0.93-0.95'),
+  ('B8','identity','bronze','identified_share',          0.90,0.97,NULL,NULL,NULL,NULL,0.05,0.15,true,'measured 1.000, every row carries a GPN'),
+  ('C8','schema','bronze','double_fire_share',           NULL,NULL,0.10,0.25,NULL,NULL,0.05,NULL,true,'same person, same page, under 1 s apart'),
+  ('D1a','plausibility','gold','gold_views',             NULL,NULL,NULL,NULL,0.25,0.50,NULL,NULL,true,'gold views per day'),
+  ('D1b','plausibility','gold','gold_visits',            NULL,NULL,NULL,NULL,0.25,0.50,0.25,0.50,true,'gold visits per day'),
+  ('D1c','plausibility','gold','gold_unique_visitors',   NULL,NULL,NULL,NULL,0.25,0.50,0.25,0.50,true,'gold distinct contacts per day'),
+  ('D1d','plausibility','gold','gold_views_per_visit',   1.02,1.05,NULL,NULL,NULL,NULL,0.10,0.25,true,'the ratio the business sees'),
+  ('D4','plausibility','gold','tracked_share',           NULL,NULL,NULL,NULL,NULL,NULL,0.05,NULL,true,'views with a tracking id'),
+  ('D7','plausibility','gold','clicks_per_view',         NULL,NULL,NULL,NULL,NULL,NULL,0.25,NULL,true,'customEvents clicks per page view'),
+  -- layer flow: page views, then people
+  ('A6','completeness','silver','keep_share_silver',     NULL,NULL,NULL,NULL,0.05,0.10,NULL,NULL,false,'silver rows / bronze views; drafts and unpublished pages are filtered by design'),
+  ('G3','completeness','gold','gold_to_silver_views',    0.95,0.99,1.01,1.05,NULL,NULL,NULL,NULL,false,'gold views / silver rows, must be 1.00'),
+  ('S1','identity','silver','silver_to_bronze_persons',  0.75,0.90,1.10,1.35,NULL,NULL,NULL,NULL,false,'silver distinct contactId / bronze distinct GPN'),
+  ('G4','identity','gold','gold_to_silver_persons',      NULL,NULL,NULL,NULL,0.05,0.10,NULL,NULL,false,'gold distinct contacts / silver distinct contactId')
 AS t(check_id, family, layer, metric,
      abs_block_low, abs_warn_low, abs_warn_high, abs_block_high,
-     rel_warn_pct, rel_block_pct, step_warn_pct, step_block_pct, note);
+     rel_warn_pct, rel_block_pct, step_warn_pct, step_block_pct, band_warn, note);
 
 
 -- ----------------------------------------------------------------------------
@@ -339,7 +383,8 @@ SELECT * FROM VALUES
   ('D4','tracking_coverage'),('D7','clicks'),
   ('C6','page_breakdowns'),('D3','page_breakdowns'),
   ('G2','visits'),('G2','avg_time_on_page'),
-  ('G3','page_views'),('G3','unique_visitors')
+  ('G3','page_views'),('G3','unique_visitors'),
+  ('G4','unique_visitors')
 AS t(check_id, figure);
 
 
@@ -351,8 +396,15 @@ CREATE OR REPLACE TEMPORARY VIEW dq_r_corridor AS
 SELECT
   b.view_date AS check_date, d.check_id, d.family, d.layer,
   b.value AS metric_value, b.baseline,
-  COALESCE(d.abs_warn_low,  b.corr_low)  AS lower_bound,
-  COALESCE(d.abs_warn_high, b.corr_high) AS upper_bound,
+  -- The bounds shown are the ones that decide: fixed limits first; for a check
+  -- judged by limits alone, its relative limit around the baseline; the band only
+  -- where the band may warn.
+  COALESCE(d.abs_warn_low,
+           CASE WHEN NOT d.band_warn AND d.rel_warn_pct IS NOT NULL THEN b.baseline - ABS(b.baseline) * d.rel_warn_pct END,
+           CASE WHEN d.band_warn THEN b.corr_low END)  AS lower_bound,
+  COALESCE(d.abs_warn_high,
+           CASE WHEN NOT d.band_warn AND d.rel_warn_pct IS NOT NULL THEN b.baseline + ABS(b.baseline) * d.rel_warn_pct END,
+           CASE WHEN d.band_warn THEN b.corr_high END) AS upper_bound,
   CASE
     WHEN b.value IS NULL                                                                THEN 'info'
     WHEN b.n_hist < 4                                                                   THEN 'info'
@@ -367,7 +419,7 @@ SELECT
     WHEN d.abs_warn_high  IS NOT NULL AND b.value >  d.abs_warn_high                    THEN 'warning'
     WHEN d.rel_warn_pct   IS NOT NULL AND ABS(b.value - b.baseline) / NULLIF(b.baseline,0) > d.rel_warn_pct  THEN 'warning'
     WHEN d.step_warn_pct  IS NOT NULL AND ABS(b.step_pct) > d.step_warn_pct             THEN 'warning'
-    WHEN b.value < b.corr_low OR b.value > b.corr_high                                  THEN 'warning'
+    WHEN d.band_warn AND (b.value < b.corr_low OR b.value > b.corr_high)                THEN 'warning'
     ELSE 'ok'
   END AS status,
   CONCAT(d.note, ' | 7d ', ROUND(b.mean_7d, 3), ' vs prior 28d ', ROUND(b.mean_prior_28d, 3),
@@ -418,36 +470,14 @@ a5 AS (
          CONCAT(SUM(n - 1), ' duplicate rows of ', SUM(n))
   FROM a5k CROSS JOIN p GROUP BY p.d
 ),
--- A6 layer retention, bronze -> silver.
+-- A6 (layer retention), S1 (people bronze -> silver) and G3 (gold vs silver)
+-- used to be judged here for one day. They are now daily series in cell 4 and
+-- corridor checks in cell 6, so they have a history, an onset and a chart.
 --
--- Bronze holds MORE rows than silver by design: unpublished pages, drafts and
--- similar are filtered out on the way in (confirmed 2026-09-11). So the gap
--- itself is not a defect and comparing the counts for equality was wrong. What
--- matters is whether the share that survives suddenly changes: a filter that
--- starts dropping far more, or far less, than it did last month is the signal.
--- Silver against gold is checked separately and strictly, by G3.
-a6b AS (SELECT COUNT(*) AS n FROM dq_pv_window w JOIN p ON w.view_date = p.d),
-a6s AS (SELECT COALESCE(MAX(sv_rows), 0) AS n FROM dq_sv_daily v JOIN p ON v.view_date = p.d),
-a6g AS (SELECT COALESCE(MAX(gold_views), 0) AS n FROM dq_gold_daily g JOIN p ON g.view_date = p.d),
-a6hist AS (                      -- the retention share over the prior 28 days
-  SELECT percentile_approx(sv.sv_rows / NULLIF(pv.views, 0), 0.5) AS med_keep
-  FROM   dq_pv_daily pv JOIN dq_sv_daily sv ON sv.view_date = pv.view_date
-  CROSS  JOIN p
-  WHERE  pv.view_date BETWEEN date_sub(p.d, 28) AND date_sub(p.d, 1)
-),
-a6 AS (
-  SELECT p.d, 'A6', 'completeness', 'all layers',
-         a6s.n / NULLIF(a6b.n, 0), h.med_keep,
-         h.med_keep - 0.05, h.med_keep + 0.05,
-         CASE WHEN h.med_keep IS NULL THEN 'info'
-              WHEN ABS(a6s.n / NULLIF(a6b.n,0) - h.med_keep) > 0.10 THEN 'critical'
-              WHEN ABS(a6s.n / NULLIF(a6b.n,0) - h.med_keep) > 0.05 THEN 'warning' ELSE 'ok' END,
-         CONCAT('bronze ', a6b.n, ' -> silver ', a6s.n, ' -> gold ', a6g.n,
-                ' | kept ', ROUND(100 * a6s.n / NULLIF(a6b.n,0), 1),
-                ' % vs 28-day median ', ROUND(100 * h.med_keep, 1),
-                ' % — unpublished pages and drafts are filtered out by design')
-  FROM p CROSS JOIN a6b CROSS JOIN a6s CROSS JOIN a6g CROSS JOIN a6hist h
-),
+-- A6 background, still true: bronze holds MORE rows than silver by design,
+-- because unpublished pages, drafts and similar are filtered out on the way in
+-- (confirmed 2026-09-11). The gap is not a defect. A change in the share that
+-- survives is.
 -- B3 recurring browser identities
 b3t AS (SELECT DISTINCT browser_id FROM dq_pv_window w JOIN p ON w.view_date = p.d),
 b3p AS (SELECT DISTINCT browser_id FROM dq_pv_window w JOIN p ON w.view_date BETWEEN date_sub(p.d,28) AND date_sub(p.d,1)),
@@ -575,17 +605,6 @@ c6 AS (
   LEFT JOIN imep_bronze.tbl_hr_employee hr ON hr.WORKER_ID = w.gpn
   GROUP BY p.d
 ),
--- S1 person resolution, bronze employees vs silver contacts
-s1b AS (SELECT COUNT(DISTINCT gpn) AS n FROM dq_pv_window w JOIN p ON w.view_date = p.d),
-s1v AS (SELECT COALESCE(MAX(sv_contacts), 0) AS n FROM dq_sv_daily v JOIN p ON v.view_date = p.d),
-s1 AS (
-  SELECT p.d, 'S1', 'identity', 'silver',
-         s1v.n / NULLIF(s1b.n, 0), 1.0, 0.90, 1.10,
-         CASE WHEN s1v.n / NULLIF(s1b.n,0) NOT BETWEEN 0.75 AND 1.35 THEN 'critical'
-              WHEN s1v.n / NULLIF(s1b.n,0) NOT BETWEEN 0.90 AND 1.10 THEN 'warning' ELSE 'ok' END,
-         CONCAT('bronze distinct GPN ', s1b.n, ' vs silver distinct contactId ', s1v.n)
-  FROM p CROSS JOIN s1b CROSS JOIN s1v
-),
 -- S2 key completeness on silver
 -- S2 judges only the keys that are actually in use. `visitorId` measured 0.0 %
 -- on 2026-09-11, i.e. the column exists but is never populated, so including it
@@ -626,21 +645,12 @@ g2 AS (
          CONCAT('visits > views ', ROUND(100*AVG(CASE WHEN gm.visits > gm.views THEN 1.0 ELSE 0.0 END),4), ' %')
   FROM sharepoint_gold.pbi_db_interactions_metrics gm JOIN p ON gm.visitdatekey = date_format(p.d, 'yyyyMMdd')
   GROUP BY p.d
-),
--- G3 silver to gold aggregation tie-out
-g3 AS (
-  SELECT p.d, 'G3', 'completeness', 'gold',
-         a6g.n / NULLIF(a6s.n, 0), 1.0, 0.99, 1.01,
-         CASE WHEN a6g.n / NULLIF(a6s.n,0) NOT BETWEEN 0.95 AND 1.05 THEN 'critical'
-              WHEN a6g.n / NULLIF(a6s.n,0) NOT BETWEEN 0.99 AND 1.01 THEN 'warning' ELSE 'ok' END,
-         CONCAT('gold views ', a6g.n, ' vs silver rows ', a6s.n)
-  FROM p CROSS JOIN a6s CROSS JOIN a6g
 )
-SELECT * FROM a2 UNION ALL SELECT * FROM a5 UNION ALL SELECT * FROM a6
+SELECT * FROM a2 UNION ALL SELECT * FROM a5
 UNION ALL SELECT * FROM b3 UNION ALL SELECT * FROM b6 UNION ALL SELECT * FROM b7
 UNION ALL SELECT * FROM c3 UNION ALL SELECT * FROM c4 UNION ALL SELECT * FROM c5
-UNION ALL SELECT * FROM c6 UNION ALL SELECT * FROM s1 UNION ALL SELECT * FROM s2
-UNION ALL SELECT * FROM g1 UNION ALL SELECT * FROM g2 UNION ALL SELECT * FROM g3;
+UNION ALL SELECT * FROM c6 UNION ALL SELECT * FROM s2
+UNION ALL SELECT * FROM g1 UNION ALL SELECT * FROM g2;
 
 
 -- ----------------------------------------------------------------------------
@@ -770,7 +780,7 @@ AS t(cause_id, since, title, description, check_ids);
 --
 -- The daily metrics are cached first, and underneath it. They are where the cost
 -- actually sits (the per-person window and the rolling-week join in cell 2), they
--- are about 1,200 rows, and cell 10c charts every day of them rather than only
+-- are under 2,000 rows, and cell 10c charts every day of them rather than only
 -- yesterday. Cached here, the verdicts, the onset view and the trend charts all
 -- read the same rows instead of each recomputing them.
 --
@@ -879,6 +889,7 @@ LABELS = {
  "G1": ("No double counting",        "Is each page, day and person summarised exactly once?"),
  "G2": ("Summary rows consistent",   "Do the numbers inside one summary row contradict each other?"),
  "G3": ("Summary matches detail",    "Does the summary add up to the detail it came from?"),
+ "G4": ("People kept in the summary", "Does every person in the detail reach the summary?"),
  "S1": ("People recognised",         "Does one employee become exactly one person in the model?"),
  "S2": ("Keys assigned",             "Did every row receive the keys it needs?"),
 }
@@ -1096,11 +1107,19 @@ displayHTML(f"""
 --   the actual daily value                  dark line
 --   the expected value for that weekday     dashed line (cell 5: median of the
 --                                           same weekday over the 8 weeks before)
---   the normal range                        grey band, expected +/- 3 MAD
+--   the normal range                        grey band, expected +/- 3 MAD (for the
+--                                           layer ratios: the allowed deviation)
 --   the healthy limit, where one is fixed   dotted line (cell 6)
 -- Days outside the normal range are red dots. Failing checks come first; the
 -- charts that did not move stay on the page as the control group, because what
 -- did NOT break narrows a problem down as much as what did.
+--
+-- LAYER FLOW comes before all of that, because it is what the pipeline owns.
+-- For page views and for people, one chart shows the figure in bronze, silver
+-- and gold, and beside it the two ratios between the layers (A6 and G3, S1 and
+-- G4). Traffic cancels out in a ratio, so a healthy one is flat on any day, and
+-- any movement is the pipeline losing or doubling data rather than visitors
+-- changing their habits.
 --
 -- WHY THE CHARTS SHOW MONDAY TO FRIDAY ONLY
 -- Weekend volume is a fraction of a weekday's, so with weekends drawn every
@@ -1118,7 +1137,7 @@ displayHTML(f"""
 -- adapt, and a chart saying "inside its pattern but beyond the healthy limit" is
 -- the only honest way to show a lasting fault.
 --
--- Not charted: the explicit checks of cell 9 (A5, C6, S1, G1 ...), which are
+-- Not charted: the explicit checks of cell 9 (A5, C6, S2, G1 ...), which are
 -- computed for one day only and therefore have no history in this edition.
 -- Reads cached results from 9e, so it is quick. Writes nothing.
 -- Titles come from cell 10b when it has run; otherwise metric names are shown.
@@ -1132,7 +1151,20 @@ LAYER_ORDER = {"bronze": 0, "staging": 1, "silver": 2, "gold": 3}
 RANK        = {"critical": 3, "warning": 2, "info": 1, "ok": 0}
 BADGE       = {"critical": "#BD000C", "warning": "#E4A911", "info": "#7A7870"}
 TITLES      = {c: t for c, (t, _) in globals().get("LABELS", {}).items()}
-CONTEXT     = {"sessions": "Sessions", "browser_ids": "Browser identities", "persons": "Employees seen"}
+CONTEXT     = {"sessions": "Sessions", "browser_ids": "Browser identities", "persons": "Employees seen",
+               "silver_rows": "Silver rows", "silver_contacts": "Silver contacts"}
+# Layer flow, drawn first: the volumes of one figure in each layer, then the two
+# ratios between them. The ratios are the signal; the volumes give the scale.
+FLOW = [
+    ("Page views through the layers",
+     [("views", "bronze page views"), ("silver_rows", "silver rows"), ("gold_views", "gold views")],
+     ["keep_share_silver", "gold_to_silver_views"]),
+    ("People through the layers",
+     [("persons", "bronze employees"), ("silver_contacts", "silver contacts"), ("gold_unique_visitors", "gold visitors")],
+     ["silver_to_bronze_persons", "gold_to_silver_persons"]),
+]
+FLOW_INK  = ["#946F29", "#8E8D83", "#404040"]     # bronze, silver, gold: Bronze II, Grey III, Grey VI
+FLOW_ONLY = {m for _, _, ratios in FLOW for m in ratios} | {"silver_rows", "silver_contacts"}
 W, H, L, R, T, B = 360, 136, 46, 12, 12, 22       # chart geometry in viewBox units
 PW, PH = W - L - R, H - T - B
 
@@ -1143,8 +1175,9 @@ pts = spark.sql(f"""
   WHERE  d.view_date <= DATE '{CHECK_DAY:%Y-%m-%d}'
 """).collect()
 defs    = {r["metric"]: r for r in spark.sql("""
-             SELECT check_id, metric, layer,
-                    CAST(abs_warn_low AS DOUBLE) AS abs_warn_low, CAST(abs_warn_high AS DOUBLE) AS abs_warn_high
+             SELECT check_id, metric, layer, band_warn,
+                    CAST(abs_warn_low AS DOUBLE) AS abs_warn_low, CAST(abs_warn_high AS DOUBLE) AS abs_warn_high,
+                    CAST(rel_warn_pct AS DOUBLE) AS rel_warn_pct
              FROM   dq_check_def""").collect()}   # cast: a literal like 1.50 can arrive as DECIMAL
 verdict = {r["check_id"]: r["status"] for r in spark.sql("SELECT check_id, status FROM dq_results").collect()}
 
@@ -1159,6 +1192,12 @@ for r in pts:
     s["v"][i] = r["value"]
     if r["n_hist"] is not None and r["n_hist"] >= 4:      # same rule as the corridor engine
         s["e"][i], s["lo"][i], s["hi"][i] = r["baseline"], r["corr_low"], r["corr_high"]
+        d = defs.get(r["metric"])
+        if d and not d["band_warn"]:
+            # Judged by stated limits, not by the statistical band (cell 6), so draw
+            # what is judged: the allowed relative deviation, or no band at all.
+            rel, e = d["rel_warn_pct"], r["baseline"]
+            s["lo"][i], s["hi"][i] = (e - abs(e) * rel, e + abs(e) * rel) if rel is not None and e is not None else (None, None)
 
 # What is drawn: business days only, on a continuous axis (Friday runs into Monday).
 # `days` and `series` keep every day and feed the summary line.
@@ -1182,9 +1221,16 @@ def axis_labels(a, b, pct):
         if fmt(a, pct, p) != fmt(b, pct, p): break
     return fmt(a, pct, p), fmt(b, pct, p)
 
-def outside(s, i):
-    return (s["v"][i] is not None and s["lo"][i] is not None
-            and (s["v"][i] < s["lo"][i] or s["v"][i] > s["hi"][i]))
+def outside(s, i, d=None):
+    """Would this day be flagged? The band, plus the stated limits for checks judged by limits alone."""
+    v = s["v"][i]
+    if v is None or s["e"][i] is None:      # no baseline yet: the engine says "info", so no mark either
+        return False
+    band = s["lo"][i] is not None and (v < s["lo"][i] or v > s["hi"][i])
+    if d is None or d["band_warn"]:
+        return band
+    return (band or (d["abs_warn_low"] is not None and v < d["abs_warn_low"])
+                 or (d["abs_warn_high"] is not None and v > d["abs_warn_high"]))
 
 def xpos(i):
     return L + PW * i / max(C - 1, 1)
@@ -1205,7 +1251,7 @@ def title_of(m):
 
 def chart(m):
     s, d = cseries[m], defs.get(m)
-    pct  = m.endswith("_share")
+    pct  = "_share" in m
     lims = [(d["abs_warn_low"], "above"), (d["abs_warn_high"], "below")] if d else []
     lims = [(v, side) for v, side in lims if v is not None]
     data = [v for k in ("v", "lo", "hi") for v in s[k] if v is not None]
@@ -1236,7 +1282,8 @@ def chart(m):
     for v, side in near:                                             # fixed healthy limit
         svg.append(f'<line x1="{L}" x2="{W - R}" y1="{y(v):.1f}" y2="{y(v):.1f}" stroke="#946F29" '
                    f'stroke-width="1" stroke-dasharray="1.5 2.5"/>'
-                   f'<text x="{W - R}" y="{y(v) - 3:.1f}" text-anchor="end" font-size="9" fill="#946F29">'
+                   f'<text x="{W - R}" y="{y(v) + (10 if side == "above" else -3):.1f}" text-anchor="end" '
+                   f'font-size="9" fill="#946F29">'
                    f'healthy {side} {fmt(v, pct)}</text>')
     for key, style in (("e", 'stroke="#5A5D5C" stroke-width="1.25" stroke-dasharray="4 3"'),
                        ("v", 'stroke="#404040" stroke-width="1.75"')):
@@ -1244,9 +1291,47 @@ def chart(m):
             pts_ = " ".join(f"{xpos(i):.1f},{y(s[key][i]):.1f}" for i in run)
             svg.append(f'<polyline points="{pts_}" fill="none" {style} stroke-linejoin="round"/>')
     for i in range(C):                                               # days outside the range
-        if outside(s, i):
+        if outside(s, i, d):
             svg.append(f'<circle cx="{xpos(i):.1f}" cy="{y(s["v"][i]):.1f}" r="3" fill="#BD000C" '
                        f'stroke="#fff" stroke-width="1"/>')
+    tips = []
+    for i, dd in enumerate(cdays):
+        if s["e"][i] is None:
+            exp = "no expected value yet, fewer than four earlier " + f"{dd:%A}s"
+        elif s["lo"][i] is None:
+            exp = f"expected {fmt(s['e'][i], pct)}"
+        else:
+            kind = "normal" if d is None or d["band_warn"] else "allowed"
+            exp = f"expected {fmt(s['e'][i], pct)}, {kind} {fmt(s['lo'][i], pct)} to {fmt(s['hi'][i], pct)}"
+        flag = '<br><b style="color:#BD000C">outside the range it is judged by</b>' if outside(s, i, d) else ""
+        tips.append(f"<b>{dd:%a} {dd.day} {dd:%b}</b><br>actual {fmt(s['v'][i], pct)}<br>{exp}{flag}")
+    return frame(svg, lo, hi, pad, pct, tips)
+
+def flow_chart(lines):
+    """The same figure in each layer, one line per layer, on the shared business-day axis."""
+    ss = [(cseries[m], label, FLOW_INK[k]) for k, (m, label) in enumerate(lines) if m in cseries]
+    data = [v for s, _, _ in ss for v in s["v"] if v is not None]
+    if not data:
+        return (f'<div style="height:{H}px;display:flex;align-items:center;justify-content:center;'
+                f'background:#ECEBE4;font-size:12px;color:#7A7870">no values in this window</div>')
+    lo, hi = min(data), max(data)
+    pad = (hi - lo) * 0.08 or abs(hi) * 0.05 or 1.0
+    lo, hi = lo - pad, hi + pad
+    y = lambda v: T + PH * (1 - (v - lo) / (hi - lo))
+    svg = []
+    for s, _, ink in ss:
+        for run in runs(s["v"]):
+            pts_ = " ".join(f"{xpos(i):.1f},{y(s['v'][i]):.1f}" for i in run)
+            svg.append(f'<polyline points="{pts_}" fill="none" stroke="{ink}" stroke-width="1.75" stroke-linejoin="round"/>')
+    tips = [f"<b>{dd:%a} {dd.day} {dd:%b}</b>" + "".join(
+                f'<br><span style="color:{ink}">&#9632;</span> {label} {fmt(s["v"][i])}' for s, label, ink in ss)
+            for i, dd in enumerate(cdays)]
+    return frame(svg, lo, hi, pad, False, tips)
+
+def frame(svg, lo, hi, pad, pct, tips):
+    """Baseline, Monday ticks, the two y extremes, the hover marker, and the <svg> around it all."""
+    y = lambda v: T + PH * (1 - (v - lo) / (hi - lo))
+    svg = list(svg)
     svg.append(f'<line x1="{L}" x2="{W - R}" y1="{T + PH}" y2="{T + PH}" stroke="#000" stroke-width="1"/>')
     mondays = [i for i, dd in enumerate(cdays) if dd.weekday() == 0]
     for n, i in enumerate(reversed(mondays)):                       # label every other Monday, latest first
@@ -1261,21 +1346,12 @@ def chart(m):
     svg.append(f'<line class="xh" x1="0" x2="0" y1="{T}" y2="{T + PH}" stroke="#8E8D83" stroke-width="1" '
                f'visibility="hidden"/>')
     svg.append(f'<rect x="{L}" y="{T}" width="{PW}" height="{PH}" fill="transparent"/>')
-
-    tips = []
-    for i, dd in enumerate(cdays):
-        if s["e"][i] is None:
-            exp = "no expected value yet, fewer than four earlier " + f"{dd:%A}s"
-        else:
-            exp = f"expected {fmt(s['e'][i], pct)}, normal {fmt(s['lo'][i], pct)} to {fmt(s['hi'][i], pct)}"
-        flag = '<br><b style="color:#BD000C">outside the normal range</b>' if outside(s, i) else ""
-        tips.append(f"<b>{dd:%a} {dd.day} {dd:%b}</b><br>actual {fmt(s['v'][i], pct)}<br>{exp}{flag}")
     return (f'<svg class="tr" viewBox="0 0 {W} {H}" style="width:100%;height:auto;display:block;overflow:visible" '
             f'data-tips="{html.escape(json.dumps(tips))}">{"".join(svg)}</svg>')
 
 def panel(m):
     s, d = cseries[m], defs.get(m)
-    pct  = m.endswith("_share")
+    pct  = "_share" in m
     cid  = d["check_id"] if d else None
     st   = verdict.get(cid)
     last = max((i for i in range(C) if s["v"][i] is not None), default=None)
@@ -1290,7 +1366,7 @@ def panel(m):
         if cdays[last] != days[-1]:     # e.g. the board judges a Sunday, the chart ends on Friday
             now += f' <span style="color:#8E8D83">&middot; {cdays[last]:%a} {cdays[last].day} {cdays[last]:%b}</span>'
     note = ""
-    if last is not None and d and s["lo"][last] is not None and not outside(s, last):
+    if last is not None and d and s["lo"][last] is not None and not outside(s, last, d):
         v = s["v"][last]
         beyond = ((d["abs_warn_low"] is not None and v < d["abs_warn_low"]) or
                   (d["abs_warn_high"] is not None and v > d["abs_warn_high"]))
@@ -1311,16 +1387,32 @@ def order_key(m):
     return (-RANK.get(verdict.get(d["check_id"]) if d else None, -1),
             LAYER_ORDER.get(d["layer"], 9) if d else 9, d["check_id"] if d else m)
 
+def flow_panel(title, lines):
+    known = [(m, label, FLOW_INK[k]) for k, (m, label) in enumerate(lines) if m in cseries]
+    last  = max((i for m, _, _ in known for i in range(C) if cseries[m]["v"][i] is not None), default=None)
+    now   = " &rarr; ".join(fmt(cseries[m]["v"][last]) for m, _, _ in known) if last is not None else ""
+    keys  = " ".join(f'<span style="white-space:nowrap;margin-right:8px"><span style="color:{ink}">&#9632;</span> '
+                     f'{label}</span>' for _, label, ink in known)
+    return (f'<div style="padding-top:8px;border-top:1px solid #ECEBE4">'
+            f'<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:2px 10px">'
+            f'<div style="font-size:14px;font-weight:600;color:#000">{title}</div>'
+            f'<div style="font-size:12px;color:#404040;white-space:nowrap;margin-left:auto">{now}</div></div>'
+            f'<div style="font-size:11px;color:#5A5D5C;margin:1px 0 4px">{keys}</div>'
+            f'{flow_chart(lines)}</div>')
+
 metrics = sorted(series, key=order_key)
-failing = [m for m in metrics if defs.get(m) and verdict.get(defs[m]["check_id"]) in ("critical", "warning")]
-others  = [m for m in metrics if m not in failing]
+charted = [m for m in metrics if m not in FLOW_ONLY]          # the flow ratios have their own section
+failing = [m for m in charted if defs.get(m) and verdict.get(defs[m]["check_id"]) in ("critical", "warning")]
+others  = [m for m in charted if m not in failing]
+flow_bad  = [m for m in FLOW_ONLY if defs.get(m) and verdict.get(defs[m]["check_id"]) in ("critical", "warning")]
+flow_blind = [m for m in FLOW_ONLY if defs.get(m) and verdict.get(defs[m]["check_id"]) in ("info", None)]
 
 # Days on which several figures left their range together: the pattern this cell exists to show.
 recent = set(days[-28:])
 together = {}
 for m in metrics:
     for i in range(N):
-        if days[i] in recent and outside(series[m], i):
+        if days[i] in recent and outside(series[m], i, defs.get(m)):
             together.setdefault(days[i], []).append(title_of(m))
 shared = sorted(((dd, ms) for dd, ms in together.items() if len(ms) >= 3), key=lambda t: (-len(t[1]), t[0]))[:4]
 if shared:
@@ -1338,12 +1430,27 @@ def swatch(svg, label):
 legend = (swatch('<line x1="0" x2="22" y1="5" y2="5" stroke="#404040" stroke-width="1.75"/>', "actual")
         + swatch('<line x1="0" x2="22" y1="5" y2="5" stroke="#5A5D5C" stroke-width="1.25" stroke-dasharray="4 3"/>',
                  "expected for this weekday")
-        + swatch('<rect width="22" height="10" fill="#ECEBE4"/>', "normal range")
+        + swatch('<rect width="22" height="10" fill="#ECEBE4"/>', "normal range (layer ratios: allowed range)")
         + swatch('<line x1="0" x2="22" y1="5" y2="5" stroke="#946F29" stroke-dasharray="1.5 2.5"/>', "healthy limit")
         + swatch('<circle cx="11" cy="5" r="3" fill="#BD000C"/>', "outside the normal range"))
 
-grid = lambda ms: ('<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));'
-                   'gap:18px 26px">' + "".join(panel(m) for m in ms) + '</div>')
+grid = lambda cells: ('<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));'
+                      'gap:18px 26px">' + "".join(cells) + '</div>')
+
+flow_html = "".join(
+    f'<div style="margin-top:12px">'
+    + grid([flow_panel(title, lines)] + [panel(m) for m in ratios if m in series]) + '</div>'
+    for title, lines, ratios in FLOW)
+# "All pass" only when every layer check was actually judged: a check that could
+# not be judged is not a pass, and must not read as one.
+if flow_bad:
+    flow_state = (f'<b style="color:#BD000C">{len(flow_bad)} of the layer checks '
+                  f'{"is" if len(flow_bad) == 1 else "are"} failing.</b>')
+elif flow_blind:
+    flow_state = (f'<b style="color:#7A7870">{len(flow_blind)} of the layer checks could not be judged today '
+                  f'({", ".join(sorted(defs[m]["check_id"] for m in flow_blind))}).</b>')
+else:
+    flow_state = '<b style="color:#6F7A1A">All layer checks pass.</b>'
 
 displayHTML(f"""
 <div style="font-family:'Frutiger 45 Light',Frutiger,'Helvetica Neue',Arial,sans-serif;color:#404040;background:#fff;padding:22px 26px;max-width:1180px;position:relative">
@@ -1360,16 +1467,24 @@ displayHTML(f"""
     weekends are still judged and named above when they leave their range. The first weeks have no expected
     value yet, because it needs four earlier days of the same weekday.</div>
 
-  <div style="margin-top:24px;font-size:15px;font-weight:600;color:#000">Failing today</div>
+  <div style="margin-top:24px;font-size:15px;font-weight:600;color:#000">Layer flow</div>
+  <div style="font-size:12px;color:#7A7870;margin:3px 0 0;line-height:1.5">
+    What the pipeline itself does, from bronze to silver to gold. Traffic moves every layer together, so the
+    ratios on the right stay flat when the pipeline is healthy, whatever the day; any movement there is the
+    pipeline, not the visitors. These checks are judged by their stated limits only, so the grey band on a ratio
+    is the allowed deviation and red marks a day beyond it. {flow_state}</div>
+  {flow_html}
+
+  <div style="margin-top:30px;font-size:15px;font-weight:600;color:#000">Failing today</div>
   <div style="font-size:12px;color:#7A7870;margin:3px 0 10px">
-    {len(failing)} figure{'s' if len(failing) != 1 else ''} whose check is critical or warning, worst first,
+    {len(failing)} further figure{'s' if len(failing) != 1 else ''} whose check is critical or warning, worst first,
     then bronze before gold.</div>
-  {grid(failing) if failing else '<div style="font-size:13px;color:#6F7A1A">None of the charted checks is failing.</div>'}
+  {grid([panel(m) for m in failing]) if failing else '<div style="font-size:13px;color:#6F7A1A">None of the other charted checks is failing.</div>'}
 
   <div style="margin-top:30px;font-size:15px;font-weight:600;color:#000">Everything else</div>
   <div style="font-size:12px;color:#7A7870;margin:3px 0 10px">
     The control group. A problem that leaves these untouched is narrower than it looks.</div>
-  {grid(others)}
+  {grid([panel(m) for m in others])}
 
   <div id="tr-tip" style="display:none;position:fixed;z-index:10;background:#fff;border:1px solid #CCCABC;
        padding:7px 9px;font-size:11.5px;line-height:1.45;color:#404040;pointer-events:none;max-width:260px"></div>

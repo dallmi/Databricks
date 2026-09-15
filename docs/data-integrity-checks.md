@@ -451,9 +451,20 @@ than inheriting it.
 
 | Layer | Owns | Checks | Tie-out to the next layer |
 |---|---|---|---|
-| Bronze | arrival, schema, formats, raw identity | A1–A7, B1–B8, C1–C8 | A6 bronze = silver = gold row counts |
+| Bronze | arrival, schema, formats, raw identity | A1–A7, B1–B8, C1–C8 | A6 share of bronze rows kept in silver |
 | Silver | person resolution, key completeness | **S1–S3** | S1 bronze GPN = silver contactId |
-| Gold | aggregate correctness, KPI plausibility | **G1–G3**, D1–D8 | G3 silver rows = gold views |
+| Gold | aggregate correctness, KPI plausibility | **G1–G4**, D1–D8 | G3 silver rows = gold views; G4 silver contacts = gold contacts |
+
+**Layer flow (2026-09-15).** A6, G3, S1 and G4 are the checks the pipeline owns,
+because they measure what happens *between* layers rather than what arrives from
+the browser. In the read-only notebook they are daily ratio series judged by
+their stated limits only (not by the ±3 MAD band, which on a near-constant ratio
+flags harmless wobble), and cell 10c charts them first, beside the volume of the
+same figure in each layer. Traffic cancels out in a ratio, so these stay flat on
+weekends and holidays, and their limits can be tight. Visits are deliberately not
+compared between layers yet: gold stores visits per page, person and day, so
+`SUM(visits)` is not additive across pages and a daily total would measure the
+aggregation rule rather than data loss.
 
 **S1 person resolution.** Distinct `GPN` in bronze against distinct `contactId`
 in silver for the same day. This is the check that guards the unique-visitor
@@ -474,8 +485,12 @@ multiplies every KPI silently and is invisible in any corridor.
 **G2 row-level consistency.** Visits never exceed views, no negative metrics, and
 `durationavg` matches `durationsum ÷ views`.
 
-**G3 aggregation tie-out.** Gold views equal silver rows, gold contacts equal
-silver contacts.
+**G3 aggregation tie-out.** Gold views equal silver rows, within 1 %.
+
+**G4 people carried into gold.** Distinct `viewingcontactid` in gold against
+distinct `contactId` in silver for the same day. Not yet measured, so it is judged
+relative to its same-weekday baseline (5 % warning, 10 % critical) until a fixed
+limit can be set from real values.
 
 ### Verified in the workspace, 2026-09-11
 
