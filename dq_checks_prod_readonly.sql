@@ -29,8 +29,9 @@
 --     cell 10c  the trends: one chart per daily metric against the value
 --               expected for that weekday, to see the shape of a problem and
 --               which figures broke on the same day. Run after 10b for titles.
---     cell 10d  three read-only queries that verify the layer-flow checks and
---               show what their ratios measure, for calibrating the limits.
+--     cell 10d  four read-only queries, each its own cell (a to d): verify the
+--               layer-flow checks, calibrate their limits, list the days they
+--               fired, and show which layer moved on each of those days.
 --   Cell 11 cleans up and is safe to run at any point, including after a failure.
 --   To run the lot from a single cell instead, see the note at the foot.
 --
@@ -1265,7 +1266,9 @@ def chart(m):
     # far ones are named at the edge they lie beyond.
     dlo, dhi = min(data), max(data)
     span = (dhi - dlo) or abs(dhi) * 0.05 or 1.0
-    near = [(v, side) for v, side in lims if dlo - span <= v <= dhi + span]
+    # A check judged by its limits alone always shows them: otherwise a ratio that
+    # sits at 1.00000 is scaled to its fifth decimal and noise reads as a spike.
+    near = lims if d and not d["band_warn"] else [(v, side) for v, side in lims if dlo - span <= v <= dhi + span]
     far  = [(v, side) for v, side in lims if (v, side) not in near]
     lo, hi = min(data + [v for v, _ in near]), max(data + [v for v, _ in near])
     pad = (hi - lo) * 0.08 or abs(hi) * 0.05 or 1.0
@@ -1284,7 +1287,7 @@ def chart(m):
     for v, side in near:                                             # fixed healthy limit
         svg.append(f'<line x1="{L}" x2="{W - R}" y1="{y(v):.1f}" y2="{y(v):.1f}" stroke="#946F29" '
                    f'stroke-width="1" stroke-dasharray="1.5 2.5"/>'
-                   f'<text x="{W - R}" y="{y(v) + (10 if side == "above" else -3):.1f}" text-anchor="end" '
+                   f'<text x="{W - R}" y="{y(v) + (10 if side == "above" and y(v) + 10 <= T + PH - 3 else -3):.1f}" text-anchor="end" '
                    f'font-size="9" fill="#946F29">'
                    f'healthy {side} {fmt(v, pct)}</text>')
     for key, style in (("e", 'stroke="#5A5D5C" stroke-width="1.25" stroke-dasharray="4 3"'),
@@ -1528,17 +1531,14 @@ displayHTML(f"""
 
 
 -- ----------------------------------------------------------------------------
--- CELL 10d — VERIFY THE LAYER FLOW. Three small read-only queries, run after 9e.
+-- CELL 10d-a — VERIFY: no check counted twice.
 --
--- a) No check may appear twice in the verdicts. A6, G3 and S1 moved from the
---    explicit checks (cell 9) to the corridor engine (cell 6); if an old cell 9
---    is still in the session they would be counted twice. Must return no rows.
--- b) What the layer ratios actually measure, business days only. G4 has never
---    been measured and A6 changed its rule, so these figures are what their
---    limits in cell 6 should be calibrated from.
--- c) Every day in the window on which a layer check was not ok, newest first.
---    Shows whether the limits would have been quiet on ordinary days and loud on
---    real ones.
+-- Cells 10d-a to 10d-d are four SEPARATE notebook cells. Paste each on its own:
+-- a cell holding several queries only displays the result of the last one.
+--
+-- A6, G3 and S1 moved from the explicit checks (cell 9) to the corridor engine
+-- (cell 6). If an old cell 9 is still in the session they would be counted
+-- twice. Must return no rows.
 -- ----------------------------------------------------------------------------
 %sql
 SELECT check_id, COUNT(*) AS n
@@ -1546,6 +1546,13 @@ FROM   dq_results
 GROUP  BY check_id
 HAVING COUNT(*) > 1;
 
+
+-- ----------------------------------------------------------------------------
+-- CELL 10d-b — CALIBRATE: what the layer ratios measure, business days only.
+--
+-- G4 has never been measured and A6 changed its rule, so these figures are what
+-- their limits in cell 6 should be set from.
+-- ----------------------------------------------------------------------------
 %sql
 SELECT metric,
        ROUND(MIN(value), 4)                                  AS min_value,
@@ -1561,8 +1568,15 @@ WHERE  metric IN ('keep_share_silver', 'gold_to_silver_views',
 GROUP  BY metric
 ORDER  BY metric;
 
+
+-- ----------------------------------------------------------------------------
+-- CELL 10d-c — HISTORY: every day a layer check warned or went critical.
+--
+-- Shows whether the limits stay quiet on ordinary days. 'info' days are left
+-- out: they are the first weeks of the window, before a baseline exists.
+-- ----------------------------------------------------------------------------
 %sql
-SELECT check_date, check_id,
+SELECT check_date, date_format(check_date, 'EEE') AS weekday, check_id,
        ROUND(metric_value, 4) AS value,
        ROUND(baseline, 4)     AS expected,
        ROUND(lower_bound, 4)  AS lo,
@@ -1570,9 +1584,54 @@ SELECT check_date, check_id,
        status
 FROM   dq_r_corridor
 WHERE  check_id IN ('A6', 'G3', 'S1', 'G4')
-  AND  status <> 'ok'
-ORDER  BY check_date DESC, check_id
-LIMIT  30;
+  AND  status IN ('warning', 'critical')
+ORDER  BY check_date DESC, check_id;
+
+
+-- ----------------------------------------------------------------------------
+-- CELL 10d-d — DIAGNOSE: on each day a layer check fired, which layer moved?
+--
+-- A ratio between two layers falls for one of two reasons, and they need
+-- different people. Each column is that layer's volume against its expected
+-- value for the weekday, in per cent.
+--
+--   bronze normal, silver low      silver lost rows: a pipeline defect
+--   bronze high,   silver normal   extra traffic that silver filters by design
+--                                  (drafts, unpublished pages): not a defect
+--   silver normal, gold low        gold lost rows between silver and gold
+--   all layers low together        less traffic, or a late bronze load
+--
+-- One row per flagged day, no dates written in: it answers the same question
+-- for any day the checks flag in future.
+-- ----------------------------------------------------------------------------
+%sql
+WITH flagged AS (
+  SELECT check_date, concat_ws(', ', sort_array(collect_set(check_id))) AS checks
+  FROM   dq_r_corridor
+  WHERE  check_id IN ('A6', 'G3', 'S1', 'G4')
+    AND  status IN ('warning', 'critical')
+  GROUP  BY check_date
+),
+vs_expected AS (
+  SELECT view_date, metric,
+         ROUND(100 * (value - baseline) / NULLIF(baseline, 0), 1) AS pct
+  FROM   dq_metric_baseline
+  WHERE  metric IN ('views', 'silver_rows', 'gold_views',
+                    'persons', 'silver_contacts', 'gold_unique_visitors')
+)
+SELECT f.check_date,
+       date_format(f.check_date, 'EEE')                                AS weekday,
+       f.checks,
+       MAX(CASE WHEN e.metric = 'views'                THEN e.pct END) AS bronze_views_pct,
+       MAX(CASE WHEN e.metric = 'silver_rows'          THEN e.pct END) AS silver_rows_pct,
+       MAX(CASE WHEN e.metric = 'gold_views'           THEN e.pct END) AS gold_views_pct,
+       MAX(CASE WHEN e.metric = 'persons'              THEN e.pct END) AS bronze_people_pct,
+       MAX(CASE WHEN e.metric = 'silver_contacts'      THEN e.pct END) AS silver_people_pct,
+       MAX(CASE WHEN e.metric = 'gold_unique_visitors' THEN e.pct END) AS gold_people_pct
+FROM   flagged f
+LEFT JOIN vs_expected e ON e.view_date = f.check_date
+GROUP  BY f.check_date, f.checks
+ORDER  BY f.check_date DESC;
 
 
 -- ----------------------------------------------------------------------------
