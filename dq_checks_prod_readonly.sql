@@ -37,7 +37,8 @@
 --               layer-flow checks, calibrate their limits, list the days they
 --               fired, show which layer moved, whether silver removes double
 --               fires, which pages did not reach silver on a flagged day, and
---               whether every person in silver reaches gold, person by person.
+--               whether every person in silver reaches gold, person by person,
+--               for all pages or for one page switched on by its URL.
 --   Cell 11 cleans up and is safe to run at any point, including after a failure.
 --   To run the lot from a single cell instead, see the note at the foot.
 --
@@ -2215,47 +2216,105 @@ ORDER  BY check_date DESC, rn;
 
 
 -- ----------------------------------------------------------------------------
--- CELL 10d-g — PEOPLE, SILVER AGAINST GOLD, PERSON BY PERSON.
+-- CELL 10d-g — PEOPLE THROUGH THE LAYERS, PERSON BY PERSON, ALL PAGES OR ONE.
 --
 -- G4 compares two daily counts and reads 1.000 on every measured day. That is
 -- expected: gold aggregates silver to page x person x day, and aggregation
 -- cannot change how many people took part, only how many rows each has. This
--- query confirms that the match is real rather than an artefact of counting,
--- by joining the two layers on the person and the day and listing who is on
--- one side only. Both difference columns at 0 on every day means silver to
--- gold carries every person; anything else names the day to look at.
+-- query confirms that the match is real rather than an artefact of counting:
+-- it joins silver and gold on the person and the day and lists who is on one
+-- side only. Both difference columns at 0 on every day means silver to gold
+-- carries every person; anything else names the day to look at.
+--
+-- Bronze cannot join on the person: it carries the GPN, silver the contactId
+-- that the transformation resolves from it. So bronze stands beside them as a
+-- count, and silver_per_bronze is S1 for the same day and the same pages.
+--
+-- THE PAGE SWITCH. Off, the query covers every page. To look at one page, put
+-- its URL into the line marked (*) in `wanted` and uncomment it; that is the
+-- only line to touch, and one more such line adds a second page. The page is
+-- matched on its URL in bronze, and in silver and gold on its page key, which
+-- is resolved from the URL two ways at once because that key is still marked
+-- as to be verified: the GUID that sharepoint_bronze.pages holds for the URL,
+-- and the pageId the bronze rows with that URL carry. Whichever silver and
+-- gold use, the filter finds it. Bronze people but zero silver and gold
+-- people for a page means neither key matched: tell whoever maintains the
+-- notebook rather than reading the rows.
 --
 -- Two things it does not settle. Gold's visitdatekey is taken to be derived
 -- from the same event timestamp as the date in silver; if it were a different
 -- clock, people would slide across midnight and the counts would differ even
--- when nobody is lost. And "gold visitors" is a daily distinct count, which is
+-- when nobody is lost. And "gold contacts" is a daily distinct count, which is
 -- the published unique-visitor figure only if the report counts the same way.
 -- Fourteen days, reads the source tables directly, writes nothing.
 -- ----------------------------------------------------------------------------
 %sql
-WITH sv AS (
-  SELECT CAST(`timestamp` AS DATE) AS d, contactId AS c
-  FROM   sharepoint_silver.pageviewed
-  WHERE  `timestamp` >= date_sub(current_date(), 14)
-    AND  contactId IS NOT NULL
+WITH wanted AS (                             -- (*) the page switch: uncomment, put the URL in
+  SELECT LOWER(TRIM(url)) AS url FROM (
+    SELECT CAST(NULL AS STRING) AS url
+    -- UNION ALL SELECT 'https://intranet.example.com/sites/news/SitePages/some-page.aspx'   -- (*)
+  ) WHERE url IS NOT NULL
+),
+switch AS (SELECT COUNT(*) AS n FROM wanted),   -- n = 0: every page
+keys AS (                                    -- the page's key in silver and gold, resolved from the URL
+  SELECT DISTINCT LOWER(p.pageUUID) AS key
+  FROM   sharepoint_bronze.pages p JOIN wanted w ON LOWER(TRIM(p.PageURL)) = w.url
+  UNION
+  SELECT DISTINCT LOWER(CAST(b.pageId AS STRING))
+  FROM   sharepoint_bronze.pageviews b JOIN wanted w ON LOWER(TRIM(b.PageURL)) = w.url
+  WHERE  b.`timestamp` >= date_format(date_sub(current_date(), 14), 'yyyy-MM-dd')
+    AND  b.pageId IS NOT NULL
+),
+bronze AS (
+  SELECT CAST(CAST(b.`timestamp` AS TIMESTAMP) AS DATE)                    AS d,
+         COUNT(DISTINCT CASE WHEN b.GPN RLIKE '^[0-9]{8}$' THEN b.GPN END) AS bronze_persons
+  FROM   sharepoint_bronze.pageviews b
+  CROSS JOIN switch s
+  LEFT JOIN wanted w ON LOWER(TRIM(b.PageURL)) = w.url
+  WHERE  b.`timestamp` >= date_format(date_sub(current_date(), 14), 'yyyy-MM-dd')
+    AND  (s.n = 0 OR w.url IS NOT NULL)
+  GROUP  BY 1
+),
+sv AS (
+  SELECT CAST(v.`timestamp` AS DATE) AS d, v.contactId AS c
+  FROM   sharepoint_silver.pageviewed v
+  CROSS JOIN switch s
+  LEFT JOIN keys k ON LOWER(v.marketingPageId) = k.key
+  WHERE  v.`timestamp` >= date_sub(current_date(), 14)
+    AND  v.contactId IS NOT NULL
+    AND  (s.n = 0 OR k.key IS NOT NULL)
   GROUP  BY 1, 2
 ),
 g AS (
-  SELECT to_date(visitdatekey, 'yyyyMMdd') AS d, viewingcontactid AS c
-  FROM   sharepoint_gold.pbi_db_interactions_metrics
-  WHERE  visitdatekey >= date_format(date_sub(current_date(), 14), 'yyyyMMdd')
-    AND  viewingcontactid IS NOT NULL
+  SELECT to_date(m.visitdatekey, 'yyyyMMdd') AS d, m.viewingcontactid AS c
+  FROM   sharepoint_gold.pbi_db_interactions_metrics m
+  CROSS JOIN switch s
+  LEFT JOIN keys k ON LOWER(m.marketingPageId) = k.key
+  WHERE  m.visitdatekey >= date_format(date_sub(current_date(), 14), 'yyyyMMdd')
+    AND  m.viewingcontactid IS NOT NULL
+    AND  (s.n = 0 OR k.key IS NOT NULL)
   GROUP  BY 1, 2
+),
+matched AS (                                 -- silver and gold, joined on the person and the day
+  SELECT COALESCE(sv.d, g.d)                          AS d,
+         COUNT(sv.c)                                  AS silver_contacts,
+         COUNT(g.c)                                   AS gold_contacts,
+         SUM(CASE WHEN g.c  IS NULL THEN 1 ELSE 0 END) AS in_silver_not_gold,
+         SUM(CASE WHEN sv.c IS NULL THEN 1 ELSE 0 END) AS in_gold_not_silver
+  FROM   sv
+  FULL OUTER JOIN g ON g.d = sv.d AND g.c = sv.c
+  GROUP  BY 1
 )
-SELECT COALESCE(sv.d, g.d)                          AS view_date,
-       date_format(COALESCE(sv.d, g.d), 'EEE')      AS weekday,
-       COUNT(sv.c)                                  AS silver_contacts,
-       COUNT(g.c)                                   AS gold_contacts,
-       SUM(CASE WHEN g.c  IS NULL THEN 1 ELSE 0 END) AS in_silver_not_gold,
-       SUM(CASE WHEN sv.c IS NULL THEN 1 ELSE 0 END) AS in_gold_not_silver
-FROM   sv
-FULL OUTER JOIN g ON g.d = sv.d AND g.c = sv.c
-GROUP  BY 1, 2
+SELECT COALESCE(m.d, b.d)                                          AS view_date,
+       date_format(COALESCE(m.d, b.d), 'EEE')                      AS weekday,
+       b.bronze_persons,
+       m.silver_contacts,
+       m.gold_contacts,
+       ROUND(m.silver_contacts / NULLIF(b.bronze_persons, 0), 4)   AS silver_per_bronze,
+       m.in_silver_not_gold,
+       m.in_gold_not_silver
+FROM   matched m
+FULL OUTER JOIN bronze b ON b.d = m.d
 ORDER  BY view_date DESC;
 
 
