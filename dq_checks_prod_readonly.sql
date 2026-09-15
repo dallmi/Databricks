@@ -29,9 +29,10 @@
 --     cell 10c  the trends: one chart per daily metric against the value
 --               expected for that weekday, to see the shape of a problem and
 --               which figures broke on the same day. Run after 10b for titles.
---     cell 10d  four read-only queries, each its own cell (a to d): verify the
+--     cell 10d  six read-only queries, each its own cell (a to f): verify the
 --               layer-flow checks, calibrate their limits, list the days they
---               fired, and show which layer moved on each of those days.
+--               fired, show which layer moved, whether silver removes double
+--               fires, and which pages did not reach silver on a flagged day.
 --   Cell 11 cleans up and is safe to run at any point, including after a failure.
 --   To run the lot from a single cell instead, see the note at the foot.
 --
@@ -332,7 +333,17 @@ LEFT JOIN steps s ON s.view_date = med.view_date AND s.metric = med.metric;
 -- Their stated limits decide, exactly as they did as explicit checks in cell 9.
 -- A6 is now relative to the same-weekday baseline (5 % / 10 % of it) rather than
 -- 5 / 10 points against a pooled 28-day median; at a share well below 1 that is
--- slightly stricter. G4 is new and not yet measured, hence relative limits.
+-- slightly stricter. Over 50 business days it fired on exactly the two days with
+-- a visible event, so it stays as it is.
+--
+-- Calibrated 2026-09-15 from 50 business days (cell 10d-b):
+--   G3, G4  lossless on every measured day. Silver to gold loses nothing, so a
+--           0.1 % loss is already a real signal: warning outside 0.999-1.001,
+--           critical outside 0.99-1.01. G4 moves from relative to fixed limits.
+--   S1      stayed within a few per cent of 1 throughout. The old 0.90-1.10 would
+--           only have warned on a tenth of all people vanishing: warning outside
+--           0.97-1.01, critical outside 0.93-1.05. Upward is tighter because silver
+--           holding MORE people than bronze means one person splitting into several.
 -- ----------------------------------------------------------------------------
 %sql
 CREATE OR REPLACE TEMPORARY VIEW dq_check_def AS
@@ -353,9 +364,9 @@ SELECT * FROM VALUES
   ('D7','plausibility','gold','clicks_per_view',         NULL,NULL,NULL,NULL,NULL,NULL,0.25,NULL,true,'customEvents clicks per page view'),
   -- layer flow: page views, then people
   ('A6','completeness','silver','keep_share_silver',     NULL,NULL,NULL,NULL,0.05,0.10,NULL,NULL,false,'silver rows / bronze views; drafts and unpublished pages are filtered by design'),
-  ('G3','completeness','gold','gold_to_silver_views',    0.95,0.99,1.01,1.05,NULL,NULL,NULL,NULL,false,'gold views / silver rows, must be 1.00'),
-  ('S1','identity','silver','silver_to_bronze_persons',  0.75,0.90,1.10,1.35,NULL,NULL,NULL,NULL,false,'silver distinct contactId / bronze distinct GPN'),
-  ('G4','identity','gold','gold_to_silver_persons',      NULL,NULL,NULL,NULL,0.05,0.10,NULL,NULL,false,'gold distinct contacts / silver distinct contactId')
+  ('G3','completeness','gold','gold_to_silver_views',    0.99,0.999,1.001,1.01,NULL,NULL,NULL,NULL,false,'gold views / silver rows, lossless when healthy'),
+  ('S1','identity','silver','silver_to_bronze_persons',  0.93,0.97,1.01,1.05,NULL,NULL,NULL,NULL,false,'silver distinct contactId / bronze distinct GPN'),
+  ('G4','identity','gold','gold_to_silver_persons',      0.99,0.999,1.001,1.01,NULL,NULL,NULL,NULL,false,'gold distinct contacts / silver distinct contactId, lossless when healthy')
 AS t(check_id, family, layer, metric,
      abs_block_low, abs_warn_low, abs_warn_high, abs_block_high,
      rel_warn_pct, rel_block_pct, step_warn_pct, step_block_pct, band_warn, note);
@@ -1533,7 +1544,7 @@ displayHTML(f"""
 -- ----------------------------------------------------------------------------
 -- CELL 10d-a — VERIFY: no check counted twice.
 --
--- Cells 10d-a to 10d-d are four SEPARATE notebook cells. Paste each on its own:
+-- Cells 10d-a to 10d-f are six SEPARATE notebook cells. Paste each on its own:
 -- a cell holding several queries only displays the result of the last one.
 --
 -- A6, G3 and S1 moved from the explicit checks (cell 9) to the corridor engine
@@ -1550,8 +1561,8 @@ HAVING COUNT(*) > 1;
 -- ----------------------------------------------------------------------------
 -- CELL 10d-b — CALIBRATE: what the layer ratios measure, business days only.
 --
--- G4 has never been measured and A6 changed its rule, so these figures are what
--- their limits in cell 6 should be set from.
+-- What the limits of A6, G3, S1 and G4 in cell 6 were calibrated from on
+-- 2026-09-15. Re-run it before changing them.
 -- ----------------------------------------------------------------------------
 %sql
 SELECT metric,
@@ -1585,6 +1596,7 @@ SELECT check_date, date_format(check_date, 'EEE') AS weekday, check_id,
 FROM   dq_r_corridor
 WHERE  check_id IN ('A6', 'G3', 'S1', 'G4')
   AND  status IN ('warning', 'critical')
+  AND  check_date <= date_sub(current_date(), 1)     -- today is partial: a layer not yet loaded reads as 0
 ORDER  BY check_date DESC, check_id;
 
 
@@ -1610,6 +1622,7 @@ WITH flagged AS (
   FROM   dq_r_corridor
   WHERE  check_id IN ('A6', 'G3', 'S1', 'G4')
     AND  status IN ('warning', 'critical')
+    AND  check_date <= date_sub(current_date(), 1)   -- today is partial
   GROUP  BY check_date
 ),
 vs_expected AS (
@@ -1632,6 +1645,137 @@ FROM   flagged f
 LEFT JOIN vs_expected e ON e.view_date = f.check_date
 GROUP  BY f.check_date, f.checks
 ORDER  BY f.check_date DESC;
+
+
+-- ----------------------------------------------------------------------------
+-- CELL 10d-e — DOES SILVER REMOVE DOUBLE-FIRED PAGE VIEWS?
+--
+-- The known cause "the same page load is recorded twice" was written as
+-- overstating page views. On 2026-08-18 bronze carried a double-fire surge and
+-- silver did not grow with it, which suggests silver removes them, in which case
+-- only bronze is inflated and the published figures are not.
+--
+-- This measures the double-fire share in silver with the same rule cell 2
+-- applies to bronze (same person, same page, under one second apart), for the
+-- last ten days, side by side:
+--   silver near 0, bronze near its usual share   silver removes them
+--   silver about equal to bronze                 they reach the published figures
+-- Reads ten days of silver only.
+-- ----------------------------------------------------------------------------
+%sql
+--
+-- Rows without a page id are left out: they can never count as a pair, and would
+-- otherwise dilute the silver share and fake "silver removes them". If silver
+-- stores whole seconds while bronze keeps milliseconds, pairs straddling a second
+-- are missed and silver reads low for the same false reason; a quick look at
+-- date_format(ts, 'SSS') on a few silver rows settles that.
+WITH sv AS (
+  SELECT CAST(`timestamp` AS DATE)                     AS view_date,      -- as cell 3 derives it
+         marketingPageId                               AS page_id,
+         CAST(`timestamp` AS TIMESTAMP)                AS ts,
+         LAG(CAST(`timestamp` AS TIMESTAMP)) OVER (PARTITION BY contactId ORDER BY CAST(`timestamp` AS TIMESTAMP)) AS prev_ts,
+         LAG(marketingPageId)                OVER (PARTITION BY contactId ORDER BY CAST(`timestamp` AS TIMESTAMP)) AS prev_page
+  FROM   sharepoint_silver.pageviewed
+  WHERE  `timestamp` >= date_sub(current_date(), 10)
+    AND  contactId IS NOT NULL
+    AND  marketingPageId IS NOT NULL
+),
+sv_daily AS (
+  SELECT view_date,
+         SUM(CASE WHEN page_id = prev_page AND ts < prev_ts + INTERVAL 1 SECOND THEN 1 ELSE 0 END) / COUNT(*) AS share
+  FROM   sv
+  GROUP  BY view_date
+)
+SELECT s.view_date,
+       date_format(s.view_date, 'EEE')  AS weekday,
+       ROUND(100 * b.value, 2)          AS bronze_double_fire_pct,
+       ROUND(100 * s.share, 2)          AS silver_double_fire_pct
+FROM   sv_daily s
+JOIN   dq_metric_daily b ON b.view_date = s.view_date AND b.metric = 'double_fire_share'
+WHERE  s.view_date <= date_sub(current_date(), 1)
+ORDER  BY s.view_date DESC;
+
+
+-- ----------------------------------------------------------------------------
+-- CELL 10d-f — ON A FLAGGED DAY, WHICH PAGES DID NOT REACH SILVER?
+--
+-- For every day a layer check warned or went critical, the fifteen pages with
+-- the most bronze views that silver does not hold, and for each:
+--   bronze_views              views in bronze that day
+--   same_weekday_avg          the page's bronze views on the four previous same
+--                             weekdays, averaged: a page far above it is new or
+--                             spiking, which is what a flagged day looks for
+--   silver_rows               rows silver holds for that page that day
+--   in_page_inventory         whether the URL is in the page reference list
+--
+-- Reading it: a page that spiked, is missing from silver AND from the inventory
+-- was probably published or first viewed before the inventory knew it, which is
+-- a timing gap in the pipeline. A page that is in the inventory and still absent
+-- from silver is filtered on purpose (a draft, an unpublished page) or lost.
+--
+-- Pages are matched on bronze pageId = silver marketingPageId, which the catalogue
+-- still marks as to be verified. day_page_match_share is the share of ALL bronze
+-- views that day whose page silver holds at all. It must be judged on all pages,
+-- not the fifteen shown, because those are ranked to be the ones silver lacks.
+-- If it is near 0, the IDs do not match and this needs the inventory as a bridge:
+-- tell whoever maintains the notebook rather than reading the rows.
+-- ----------------------------------------------------------------------------
+%sql
+WITH flagged AS (
+  SELECT DISTINCT check_date AS d
+  FROM   dq_r_corridor
+  WHERE  check_id IN ('A6', 'G3', 'S1', 'G4')
+    AND  status IN ('warning', 'critical')
+    AND  check_date <= date_sub(current_date(), 1)   -- today is partial
+),
+prior_days AS (                                   -- the four previous same weekdays
+  SELECT f.d, date_sub(f.d, k) AS pd
+  FROM   flagged f CROSS JOIN (SELECT explode(array(7, 14, 21, 28)) AS k) weeks
+),
+bronze AS (                                       -- rows without a page id cannot be matched, so they are left out
+  SELECT f.d, LOWER(w.page_id) AS page_id, MAX(w.page_url) AS page_url, COUNT(*) AS bronze_views
+  FROM   dq_pv_window w JOIN flagged f ON w.view_date = f.d
+  WHERE  w.page_id IS NOT NULL
+  GROUP  BY f.d, LOWER(w.page_id)
+),
+prior AS (
+  SELECT p.d, LOWER(w.page_id) AS page_id, COUNT(*) / 4.0 AS same_weekday_avg
+  FROM   dq_pv_window w JOIN prior_days p ON w.view_date = p.pd
+  WHERE  w.page_id IS NOT NULL
+  GROUP  BY p.d, LOWER(w.page_id)
+),
+silver AS (
+  SELECT CAST(`timestamp` AS DATE) AS d, LOWER(marketingPageId) AS page_id, COUNT(*) AS silver_rows
+  FROM   sharepoint_silver.pageviewed
+  WHERE  `timestamp` >= date_sub(current_date(), 70)
+    AND  CAST(`timestamp` AS DATE) IN (SELECT d FROM flagged)      -- the day as cell 3 derives it
+    AND  marketingPageId IS NOT NULL
+  GROUP  BY 1, 2
+),
+inventory AS (
+  SELECT DISTINCT LOWER(TRIM(PageURL)) AS url FROM sharepoint_bronze.pages
+),
+ranked AS (
+  SELECT b.d, b.page_url, b.bronze_views,
+         COALESCE(p.same_weekday_avg, 0)           AS same_weekday_avg,
+         COALESCE(s.silver_rows, 0)                AS silver_rows,
+         i.url IS NOT NULL                         AS in_page_inventory,
+         SUM(CASE WHEN s.page_id IS NOT NULL THEN b.bronze_views ELSE 0 END) OVER (PARTITION BY b.d)
+           / SUM(b.bronze_views) OVER (PARTITION BY b.d)                                AS day_page_match_share,
+         ROW_NUMBER() OVER (PARTITION BY b.d
+                            ORDER BY b.bronze_views - COALESCE(s.silver_rows, 0) DESC) AS rn
+  FROM   bronze b
+  LEFT JOIN prior     p ON p.d = b.d AND p.page_id = b.page_id
+  LEFT JOIN silver    s ON s.d = b.d AND s.page_id = b.page_id
+  LEFT JOIN inventory i ON i.url = LOWER(TRIM(b.page_url))
+)
+SELECT d AS check_date, date_format(d, 'EEE') AS weekday,
+       ROUND(day_page_match_share, 3) AS day_page_match_share, rn, page_url,
+       bronze_views, ROUND(same_weekday_avg, 0) AS same_weekday_avg,
+       silver_rows, bronze_views - silver_rows AS not_in_silver, in_page_inventory
+FROM   ranked
+WHERE  rn <= 15
+ORDER  BY check_date DESC, rn;
 
 
 -- ----------------------------------------------------------------------------

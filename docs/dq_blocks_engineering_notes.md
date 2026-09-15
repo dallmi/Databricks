@@ -456,9 +456,12 @@ constant, so their MAD is tiny and the ±3 MAD band would warn on noise in the t
 decimal; for them only the stated limits decide, and the chart draws those limits
 rather than the band. Second, A6 is now relative to its same-weekday baseline
 instead of absolute points against a pooled 28-day median, which is slightly
-stricter at a share well below 1. A layer that did not load at all counts as a
+stricter at a share well below 1. G3, G4 and S1 were calibrated on 2026-09-15
+from 50 business days (cell 10d-b): silver to gold was lossless on every day, so
+G3 and G4 now warn at a 0.1 % deviation, and S1 moved from 0.90–1.10 to 0.97–1.01.
+A layer that did not load at all counts as a
 ratio of 0, not as a missing value, so an outage is critical rather than "cannot be
-judged"; the single-day versions did the same with `COALESCE(…, 0)`. G4 is new and unmeasured, hence relative limits.
+judged"; the single-day versions did the same with `COALESCE(…, 0)`.
 
 A layer-volume chart alone would not do the job. Silver and gold sit within a few
 per cent of each other and bronze only somewhat above, so three near-parallel lines

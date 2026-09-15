@@ -485,12 +485,18 @@ multiplies every KPI silently and is invisible in any corridor.
 **G2 row-level consistency.** Visits never exceed views, no negative metrics, and
 `durationavg` matches `durationsum ÷ views`.
 
-**G3 aggregation tie-out.** Gold views equal silver rows, within 1 %.
+**G3 aggregation tie-out.** Gold views equal silver rows. Lossless on every
+measured business day (calibrated 2026-09-15), so a warning outside 0.999–1.001
+and critical outside 0.99–1.01.
 
 **G4 people carried into gold.** Distinct `viewingcontactid` in gold against
-distinct `contactId` in silver for the same day. Not yet measured, so it is judged
-relative to its same-weekday baseline (5 % warning, 10 % critical) until a fixed
-limit can be set from real values.
+distinct `contactId` in silver for the same day. Lossless on every measured day,
+so the same limits as G3.
+
+**S1 limits (calibrated 2026-09-15).** Warning outside 0.97–1.01, critical outside
+0.93–1.05. The earlier 0.90–1.10 would only have warned once a tenth of all people
+had vanished. Upward is tighter, because silver holding more people than bronze
+means one person splitting into several.
 
 ### Verified in the workspace, 2026-09-11
 
