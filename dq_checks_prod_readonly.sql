@@ -33,12 +33,13 @@
 --               to a row. The three published figures through the layers and
 --               the two integrity ratios, each panel naming the checks it
 --               covers. Anything else failing today is drawn below them.
---     cell 10d  seven read-only queries, each its own cell (a to g): verify the
+--     cell 10d  eight read-only queries, each its own cell (a to h): verify the
 --               layer-flow checks, calibrate their limits, list the days they
 --               fired, show which layer moved, whether silver removes double
 --               fires, which pages did not reach silver on a flagged day, and
 --               whether every person in silver reaches gold, person by person,
---               for all pages or for one page switched on by its URL.
+--               for all pages or for one page switched on by its URL; and a
+--               lookup by URL fragment of visitors, views and visits per layer.
 --   Cell 11 cleans up and is safe to run at any point, including after a failure.
 --   To run the lot from a single cell instead, see the note at the foot.
 --
@@ -75,7 +76,7 @@ REQUIRED = {
       "user_AuthenticatedId","GPN","Email","pageId","PageURL","GICTrackingID",
       "sdkVersion","itemCount","iKey","appId","client_Browser","client_OS","client_Type"],
   "sharepoint_bronze.customevents": ["timestamp","name","user_Id","session_Id","GPN"],
-  "sharepoint_bronze.pages":        ["PageURL"],
+  "sharepoint_bronze.pages":        ["PageURL", "pageUUID"],
   "sharepoint_silver.pageviewed":   ["timestamp","contactId","visitorId","sessionId",
                                      "marketingPageId","visitorReturningStatus"],
   "sharepoint_gold.pbi_db_interactions_metrics": [
@@ -1981,7 +1982,7 @@ displayHTML(f"""
 -- ----------------------------------------------------------------------------
 -- CELL 10d-a — VERIFY: no check counted twice.
 --
--- Cells 10d-a to 10d-g are seven SEPARATE notebook cells. Paste each on its own:
+-- Cells 10d-a to 10d-h are eight SEPARATE notebook cells. Paste each on its own:
 -- a cell holding several queries only displays the result of the last one.
 --
 -- A6, G3 and S1 moved from the explicit checks (cell 9) to the corridor engine
@@ -2316,6 +2317,120 @@ SELECT COALESCE(m.d, b.d)                                          AS view_date,
 FROM   matched m
 FULL OUTER JOIN bronze b ON b.d = m.d
 ORDER  BY view_date DESC;
+
+
+-- ----------------------------------------------------------------------------
+-- CELL 10d-h — PAGE LOOKUP: one page (or site) through bronze, silver and gold.
+--
+-- Type part of a page URL into url_contains below (case does not matter, at
+-- least three characters) and run. One row per day, newest first: unique
+-- visitors, views and visits for the matching pages in each layer, side by side.
+--
+-- How the page is found in each layer:
+--   bronze          by its URL directly
+--   silver, gold    by page key, resolved from the URL two ways as in 10d-g:
+--                   the GUID the page inventory holds (pages.pageUUID), which gold
+--                   is documented to carry as marketingPageId, and the pageId the
+--                   matching bronze rows carry. 10d-f found no match on the
+--                   latter, but both are kept until the key is confirmed.
+--
+-- Where 10d-g checks exact URLs person by person between silver and gold, this
+-- takes a fragment, so a whole site can be looked at, and adds views and visits.
+--
+-- The three measures, defined the same way in every layer:
+--   unique visitors   distinct people across all matching pages
+--                     (bronze GPN, silver contactId, gold viewingcontactid)
+--   views             every page view
+--   visits            per page, then added up over the matching pages, because
+--                     that is how gold stores them. Bronze uses the raw browser
+--                     session, which is per view since April, so bronze visits
+--                     close to bronze views is the known incident, not this page.
+--
+-- Reading it:
+--   page_keys 0                        no page key found for the term, so silver
+--                                      and gold cannot be looked up here
+--   bronze people, silver and gold 0   neither key matched: tell whoever maintains
+--                                      the notebook rather than reading the rows
+--   bronze above silver, silver = gold  normal: silver filters drafts and double
+--                                      fires, and gold is lossless
+--   silver 0 while gold is not         silver keys pages differently from gold
+--   silver above gold                  gold lost rows for this page
+-- ----------------------------------------------------------------------------
+%sql
+WITH params AS (
+  SELECT 'news'        AS url_contains,      -- <- part of the page URL to look up
+         28            AS days_back          -- <- days to show, at most 70
+),
+inventory AS (                               -- page keys for the term, resolved two ways (see header)
+  SELECT DISTINCT LOWER(pg.pageUUID) AS page_guid
+  FROM   sharepoint_bronze.pages pg CROSS JOIN params p
+  WHERE  length(trim(p.url_contains)) >= 3
+    AND  instr(LOWER(pg.PageURL), LOWER(trim(p.url_contains))) > 0
+    AND  pg.pageUUID IS NOT NULL
+  UNION
+  SELECT DISTINCT LOWER(CAST(w.page_id AS STRING))
+  FROM   dq_pv_window w CROSS JOIN params p
+  WHERE  length(trim(p.url_contains)) >= 3
+    AND  instr(LOWER(w.page_url), LOWER(trim(p.url_contains))) > 0
+    AND  w.page_id IS NOT NULL
+),
+bronze_rows AS (
+  SELECT w.view_date, LOWER(TRIM(w.page_url)) AS page, w.gpn, w.session_id
+  FROM   dq_pv_window w CROSS JOIN params p
+  WHERE  length(trim(p.url_contains)) >= 3
+    AND  instr(LOWER(w.page_url), LOWER(trim(p.url_contains))) > 0
+),
+silver_rows AS (                             -- the date filter is a constant so file skipping still works
+  SELECT CAST(s.`timestamp` AS DATE) AS view_date, i.page_guid, s.contactId, s.sessionId
+  FROM   sharepoint_silver.pageviewed s
+  JOIN   inventory i ON LOWER(s.marketingPageId) = i.page_guid
+  WHERE  s.`timestamp` >= date_sub(current_date(), 70)
+),
+gold AS (
+  SELECT to_date(g.visitdatekey, 'yyyyMMdd')   AS view_date,
+         COUNT(DISTINCT g.viewingcontactid)     AS uv,
+         SUM(g.views)                           AS views,
+         SUM(g.visits)                          AS visits
+  FROM   sharepoint_gold.pbi_db_interactions_metrics g
+  JOIN   inventory i ON LOWER(g.marketingpageid) = i.page_guid
+  WHERE  g.visitdatekey >= date_format(date_sub(current_date(), 70), 'yyyyMMdd')
+  GROUP  BY 1
+),
+bronze AS (
+  SELECT view_date, COUNT(DISTINCT gpn) AS uv, COUNT(*) AS views FROM bronze_rows GROUP BY view_date
+),
+bronze_visits AS (
+  SELECT view_date, SUM(n) AS visits
+  FROM  (SELECT view_date, page, COUNT(DISTINCT session_id) AS n FROM bronze_rows GROUP BY view_date, page) x
+  GROUP BY view_date
+),
+silver AS (
+  SELECT view_date, COUNT(DISTINCT contactId) AS uv, COUNT(*) AS views FROM silver_rows GROUP BY view_date
+),
+silver_visits AS (
+  SELECT view_date, SUM(n) AS visits
+  FROM  (SELECT view_date, page_guid, COUNT(DISTINCT sessionId) AS n FROM silver_rows GROUP BY view_date, page_guid) x
+  GROUP BY view_date
+),
+days AS (
+  SELECT DISTINCT w.view_date
+  FROM   dq_pv_window w CROSS JOIN params p
+  WHERE  w.view_date >= date_sub(current_date(), p.days_back)
+    AND  w.view_date <= date_sub(current_date(), 1)       -- today is partial
+)
+SELECT d.view_date,
+       date_format(d.view_date, 'EEE')     AS weekday,
+       (SELECT COUNT(*) FROM inventory)    AS page_keys,
+       COALESCE(b.uv, 0)      AS bronze_uv,     COALESCE(s.uv, 0)      AS silver_uv,     COALESCE(g.uv, 0)      AS gold_uv,
+       COALESCE(b.views, 0)   AS bronze_views,  COALESCE(s.views, 0)   AS silver_views,  COALESCE(g.views, 0)   AS gold_views,
+       COALESCE(bv.visits, 0) AS bronze_visits, COALESCE(sv.visits, 0) AS silver_visits, COALESCE(g.visits, 0) AS gold_visits
+FROM   days d
+LEFT JOIN bronze        b  ON b.view_date  = d.view_date
+LEFT JOIN bronze_visits bv ON bv.view_date = d.view_date
+LEFT JOIN silver        s  ON s.view_date  = d.view_date
+LEFT JOIN silver_visits sv ON sv.view_date = d.view_date
+LEFT JOIN gold          g  ON g.view_date  = d.view_date
+ORDER  BY d.view_date DESC;
 
 
 -- ----------------------------------------------------------------------------
