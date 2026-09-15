@@ -29,6 +29,10 @@
 --     cell 10c  the trends: one chart per daily metric against the value
 --               expected for that weekday, to see the shape of a problem and
 --               which figures broke on the same day. Run after 10b for titles.
+--     cell 10c-5 the trial beside it: five charts instead of twenty-three, two
+--               to a row. The three published figures through the layers and
+--               the two integrity ratios, each panel naming the checks it
+--               covers. Anything else failing today is drawn below them.
 --     cell 10d  six read-only queries, each its own cell (a to f): verify the
 --               layer-flow checks, calibrate their limits, list the days they
 --               fired, show which layer moved, whether silver removes double
@@ -1510,6 +1514,437 @@ displayHTML(f"""
   var N = {C}, L = {L}, PW = {PW}, W = {W};
   var charts = Array.prototype.slice.call(document.querySelectorAll('svg.tr'));
   var tip = document.getElementById('tr-tip');
+  function show(i) {{
+    var x = L + PW * i / Math.max(N - 1, 1);
+    charts.forEach(function (c) {{
+      var l = c.querySelector('.xh');
+      l.setAttribute('x1', x); l.setAttribute('x2', x); l.setAttribute('visibility', 'visible');
+    }});
+  }}
+  charts.forEach(function (c) {{
+    var tips = JSON.parse(c.getAttribute('data-tips'));
+    c.addEventListener('mousemove', function (e) {{
+      var r = c.getBoundingClientRect();
+      var i = Math.round(((e.clientX - r.left) * W / r.width - L) / PW * (N - 1));
+      i = Math.max(0, Math.min(N - 1, i));
+      show(i);
+      tip.innerHTML = tips[i];
+      tip.style.display = 'block';
+      var left = e.clientX + 14;
+      if (left + tip.offsetWidth > window.innerWidth - 8) left = e.clientX - tip.offsetWidth - 14;
+      tip.style.left = left + 'px';
+      tip.style.top = (e.clientY + 14) + 'px';
+    }});
+    c.addEventListener('mouseleave', function () {{
+      tip.style.display = 'none';
+      charts.forEach(function (o) {{ o.querySelector('.xh').setAttribute('visibility', 'hidden'); }});
+    }});
+  }});
+}})();
+</script>
+""")
+
+
+-- ----------------------------------------------------------------------------
+-- CELL 10c-5 — TRENDS, THE FIVE. The page to look at every morning.
+--
+-- A trial beside 10c, which stays exactly as it is. Both read the same cached
+-- rows (cells 4, 5, 9e), so they can be compared in one session and either
+-- can be dropped later without touching the other.
+--
+-- Cell 10c draws every daily metric: twenty-three small charts, three to a
+-- row. That is the right page for diagnosing a problem and the wrong page for
+-- a daily review, because nobody reads twenty-three charts a day. This cell
+-- keeps one rule: a chart earns its place only if a person would act
+-- differently because of it. That leaves five, each answering one question:
+--
+--   1  Page views through the layers   bronze, silver, gold as three lines.
+--                                       Did enough arrive, and did the pipeline
+--                                       keep it?                A1, D1a, A6, G3
+--   2  People through the layers       bronze employees, silver contacts, gold
+--                                       visitors.               D1c, B8, S1, G4
+--   3  Visits                          bronze sessions beside gold visits, the
+--                                       third published figure.            D1b
+--   4  Pages per visit, gold           the ratio the business sees, and the
+--                                       signal of the April identity break. D1d
+--   5  Browsers per employee           the one figure that tells a broken
+--                                       cookie from changed traffic, because
+--                                       the employee number is server-side
+--                                       ground truth.                       B4
+--
+-- The three published figures, and the two integrity questions behind them:
+-- is the pipeline whole, is the identity whole. Every drawn line that has a
+-- corridor check carries its grey band; a check that is covered but not drawn
+-- (the layer ratios, the identified share) marks the days it fired as a red
+-- square on the bottom axis. The head of each panel names every covered check
+-- with today's verdict, so the checks are on the page even where the metric
+-- is not.
+--
+-- The five are fixed, not ranked. A reviewer builds a sense of "normal" only
+-- when the same chart sits in the same place every day. What the five do not
+-- cover is not gone: any other corridor check that is critical or warning
+-- today gets its chart below, and on a healthy day that section is empty. The
+-- passed ones are listed by id; 10c still draws them all.
+--
+-- Charts are about twice the size of 10c's: two to a row rather than three,
+-- and taller. Business days only, as in 10c and for the same reason (weekend
+-- volume would set the scale; weekends are still judged and named in the
+-- summary line). Reads cached results from 9e, quick, writes nothing.
+-- Titles for the "also failing" panels come from cell 10b when it has run.
+-- ----------------------------------------------------------------------------
+%python
+import html, json
+from datetime import date, timedelta
+
+CHECK_DAY = date.today() - timedelta(days=1)   # the day the board judges; today is still partial
+RANK      = {"critical": 3, "warning": 2, "info": 1, "ok": 0}
+BADGE     = {"critical": "#BD000C", "warning": "#E4A911", "info": "#7A7870", "ok": "#6F7A1A"}
+INK       = {"bronze": "#946F29", "silver": "#8E8D83", "gold": "#404040", "staging": "#8E8D83"}
+LBL       = globals().get("LABELS", {})        # from 10b, for the "also failing" panels
+
+# The five. lines: (metric, label, layer); also: checks covered but not drawn.
+FIVE = [
+    ("Page views through the layers", "Did enough arrive, and did the pipeline keep it?",
+     [("views", "bronze page views", "bronze"), ("silver_rows", "silver rows", "silver"),
+      ("gold_views", "gold views", "gold")],
+     ["A6", "G3"]),
+    ("People through the layers", "Does one employee still reach gold as one visitor?",
+     [("persons", "bronze employees", "bronze"), ("silver_contacts", "silver contacts", "silver"),
+      ("gold_unique_visitors", "gold visitors", "gold")],
+     ["B8", "S1", "G4"]),
+    ("Visits", "Is the published visit figure in its normal range?",
+     [("sessions", "bronze sessions", "bronze"), ("gold_visits", "gold visits", "gold")],
+     []),
+    ("Pages per visit, gold", "Does one visit still contain several pages?",
+     [("gold_views_per_visit", "gold pages per visit", "gold")],
+     []),
+    ("Browsers per employee", "Does one employee still look like one person?",
+     [("browser_ids_per_person", "browser identities per employee, bronze", "bronze")],
+     []),
+]
+W, H, L, R, T, B = 360, 170, 46, 12, 12, 22       # chart geometry in viewBox units; taller than 10c
+PW, PH = W - L - R, H - T - B
+
+pts = spark.sql(f"""
+  SELECT d.metric, d.view_date, d.value, b.n_hist, b.baseline, b.corr_low, b.corr_high
+  FROM   dq_metric_daily d
+  LEFT JOIN dq_metric_baseline b ON b.metric = d.metric AND b.view_date = d.view_date
+  WHERE  d.view_date <= DATE '{CHECK_DAY:%Y-%m-%d}'
+""").collect()
+defs = {r["metric"]: r for r in spark.sql("""
+          SELECT check_id, metric, layer, band_warn,
+                 CAST(abs_warn_low AS DOUBLE) AS abs_warn_low, CAST(abs_warn_high AS DOUBLE) AS abs_warn_high,
+                 CAST(rel_warn_pct AS DOUBLE) AS rel_warn_pct
+          FROM   dq_check_def""").collect()}   # cast: a literal like 1.50 can arrive as DECIMAL
+by_check = {d["check_id"]: d for d in defs.values()}
+verdict  = {r["check_id"]: r["status"] for r in spark.sql("SELECT check_id, status FROM dq_results").collect()}
+
+days = sorted({r["view_date"] for r in pts})
+at   = {d: i for i, d in enumerate(days)}
+N    = len(days)
+
+series = {}
+for r in pts:
+    s = series.setdefault(r["metric"], {k: [None] * N for k in ("v", "e", "lo", "hi")})
+    i = at[r["view_date"]]
+    s["v"][i] = r["value"]
+    if r["n_hist"] is not None and r["n_hist"] >= 4:      # same rule as the corridor engine
+        s["e"][i], s["lo"][i], s["hi"][i] = r["baseline"], r["corr_low"], r["corr_high"]
+        d = defs.get(r["metric"])
+        if d and not d["band_warn"]:
+            # Judged by stated limits, not by the statistical band (cell 6), so draw
+            # what is judged: the allowed relative deviation, or no band at all.
+            rel, e = d["rel_warn_pct"], r["baseline"]
+            s["lo"][i], s["hi"][i] = (e - abs(e) * rel, e + abs(e) * rel) if rel is not None and e is not None else (None, None)
+
+# Drawn: business days only, on a continuous axis. `days`/`series` keep every day for the summary line.
+cdays   = [d for d in days if d.weekday() < 5]
+cseries = {m: {k: [s[k][at[d]] for d in cdays] for k in s} for m, s in series.items()}
+C       = len(cdays)
+
+def fmt(v, pct=False, p=3):
+    if v is None: return "&ndash;"
+    if pct:       return f"{100 * v:.{p}g} %"
+    a = abs(v)
+    if a >= 1e6:  return f"{v / 1e6:.2f}M"
+    if a >= 1e4:  return f"{v / 1e3:.1f}k"
+    if a >= 100:  return f"{v:,.0f}"
+    if a == 0:    return "0"
+    return f"{v:.{p}g}"
+
+def axis_labels(a, b, pct):
+    """Enough digits that the top and bottom label differ (1.001 vs 1, not 1 vs 1)."""
+    for p in range(3, 9):
+        if fmt(a, pct, p) != fmt(b, pct, p): break
+    return fmt(a, pct, p), fmt(b, pct, p)
+
+def outside(s, i, d=None):
+    """Would this day be flagged? The band, plus the stated limits for checks judged by limits alone."""
+    v = s["v"][i]
+    if v is None or s["e"][i] is None:      # no baseline yet: the engine says "info", so no mark either
+        return False
+    band = s["lo"][i] is not None and (v < s["lo"][i] or v > s["hi"][i])
+    if d is None or d["band_warn"]:
+        return band
+    return (band or (d["abs_warn_low"] is not None and v < d["abs_warn_low"])
+                 or (d["abs_warn_high"] is not None and v > d["abs_warn_high"]))
+
+def xpos(i):
+    return L + PW * i / max(C - 1, 1)
+
+def runs(vals):
+    """Index runs without gaps, so a missing day breaks the line instead of bridging it."""
+    out, cur = [], []
+    for i, v in enumerate(vals):
+        if v is None:
+            if cur: out.append(cur); cur = []
+        else:
+            cur.append(i)
+    return out + ([cur] if cur else [])
+
+def title_of(m):
+    d = defs.get(m)
+    return LBL.get(d["check_id"], (m,))[0] if d else m
+
+def empty():
+    return (f'<div style="height:{H}px;display:flex;align-items:center;justify-content:center;'
+            f'background:#ECEBE4;font-size:12px;color:#7A7870">no values in this window</div>')
+
+def frame(svg, lo, hi, pad, pct, tips):
+    """Baseline, Monday ticks, the two y extremes, the hover marker, and the <svg> around it all."""
+    y = lambda v: T + PH * (1 - (v - lo) / (hi - lo))
+    svg = list(svg)
+    svg.append(f'<line x1="{L}" x2="{W - R}" y1="{T + PH}" y2="{T + PH}" stroke="#000" stroke-width="1"/>')
+    mondays = [i for i, dd in enumerate(cdays) if dd.weekday() == 0]
+    for n, i in enumerate(reversed(mondays)):                       # label every other Monday, latest first
+        svg.append(f'<line x1="{xpos(i):.1f}" x2="{xpos(i):.1f}" y1="{T + PH}" y2="{T + PH + 3}" stroke="#000"/>')
+        if n % 2 == 0:
+            svg.append(f'<text x="{xpos(i):.1f}" y="{H - 5}" text-anchor="middle" font-size="8.5" '
+                       f'fill="#7A7870">{cdays[i].day} {cdays[i]:%b}</text>')
+    top, bottom = axis_labels(hi - pad, lo + pad, pct)               # only the extremes, no gridlines
+    for v, label in ((hi - pad, top), (lo + pad, bottom))[: 1 if top == bottom else 2]:
+        svg.append(f'<text x="{L - 5}" y="{y(v) + 3:.1f}" text-anchor="end" font-size="8.5" fill="#7A7870">'
+                   f'{label}</text>')
+    svg.append(f'<line class="xh" x1="0" x2="0" y1="{T}" y2="{T + PH}" stroke="#8E8D83" stroke-width="1" '
+               f'visibility="hidden"/>')
+    svg.append(f'<rect x="{L}" y="{T}" width="{PW}" height="{PH}" fill="transparent"/>')
+    return (f'<svg class="t5" viewBox="0 0 {W} {H}" style="width:100%;height:auto;display:block;overflow:visible" '
+            f'data-tips="{html.escape(json.dumps(tips))}">{"".join(svg)}</svg>')
+
+def chart(lines, extras):
+    """One or more lines on the shared business-day axis. Each line with a corridor
+    check gets its band; a single line also gets its expected value and fixed
+    limits; checks in `extras` mark the days they fired along the bottom axis."""
+    ss = [(m, label, INK.get(layer, "#404040")) for m, label, layer in lines if m in cseries]
+    if not any(v is not None for m, _, _ in ss for v in cseries[m]["v"]):
+        return empty()
+    single = len(ss) == 1
+    pct    = single and "_share" in ss[0][0]
+    data   = [v for m, _, _ in ss for k in ("v", "lo", "hi") for v in cseries[m][k] if v is not None]
+    lims   = []
+    if single and defs.get(ss[0][0]):
+        d0   = defs[ss[0][0]]
+        lims = [(v, side) for v, side in ((d0["abs_warn_low"], "above"), (d0["abs_warn_high"], "below")) if v is not None]
+    # A limit far from the data would flatten the chart into a line along one edge.
+    # Near limits are drawn to scale; far ones are named at the edge they lie beyond.
+    dlo, dhi = min(data), max(data)
+    span = (dhi - dlo) or abs(dhi) * 0.05 or 1.0
+    near = [(v, side) for v, side in lims if dlo - span <= v <= dhi + span]
+    far  = [x for x in lims if x not in near]
+    lo, hi = min(data + [v for v, _ in near]), max(data + [v for v, _ in near])
+    pad = (hi - lo) * 0.08 or abs(hi) * 0.05 or 1.0
+    lo, hi = lo - pad, hi + pad
+    y = lambda v: T + PH * (1 - (v - lo) / (hi - lo))
+
+    svg = []
+    for v, side in far:
+        above = v > hi
+        svg.append(f'<text x="{W - R}" y="{T + 8 if above else T + PH - 4}" text-anchor="end" font-size="8.5" '
+                   f'fill="#946F29">healthy {side} {fmt(v, pct)}, off the scale {"&#8593;" if above else "&#8595;"}</text>')
+    for m, _, _ in ss:                                               # normal range of every drawn line that has one
+        s = cseries[m]
+        for run in runs(s["lo"]):
+            up = " ".join(f"{xpos(i):.1f},{y(s['hi'][i]):.1f}" for i in run)
+            dn = " ".join(f"{xpos(i):.1f},{y(s['lo'][i]):.1f}" for i in reversed(run))
+            svg.append(f'<polygon points="{up} {dn}" fill="#ECEBE4"/>')
+    for v, side in near:                                             # fixed healthy limit
+        svg.append(f'<line x1="{L}" x2="{W - R}" y1="{y(v):.1f}" y2="{y(v):.1f}" stroke="#946F29" '
+                   f'stroke-width="1" stroke-dasharray="1.5 2.5"/>'
+                   f'<text x="{W - R}" y="{y(v) + (10 if side == "above" and y(v) + 10 <= T + PH - 3 else -3):.1f}" '
+                   f'text-anchor="end" font-size="8.5" fill="#946F29">healthy {side} {fmt(v, pct)}</text>')
+    if single:                                                       # expected value, one line only: on a
+        for run in runs(cseries[ss[0][0]]["e"]):                     # three-line chart the band says it
+            pts_ = " ".join(f"{xpos(i):.1f},{y(cseries[ss[0][0]]['e'][i]):.1f}" for i in run)
+            svg.append(f'<polyline points="{pts_}" fill="none" stroke="#5A5D5C" stroke-width="1.25" '
+                       f'stroke-dasharray="4 3" stroke-linejoin="round"/>')
+    for m, _, ink in ss:                                             # the actual values
+        for run in runs(cseries[m]["v"]):
+            pts_ = " ".join(f"{xpos(i):.1f},{y(cseries[m]['v'][i]):.1f}" for i in run)
+            svg.append(f'<polyline points="{pts_}" fill="none" stroke="{ink}" stroke-width="1.75" stroke-linejoin="round"/>')
+    for m, _, _ in ss:                                               # days outside the range
+        s, d = cseries[m], defs.get(m)
+        for i in range(C):
+            if outside(s, i, d):
+                svg.append(f'<circle cx="{xpos(i):.1f}" cy="{y(s["v"][i]):.1f}" r="3" fill="#BD000C" '
+                           f'stroke="#fff" stroke-width="1"/>')
+    ex = [(c, by_check[c]) for c in extras if c in by_check and by_check[c]["metric"] in cseries]
+    fired = {i: [c for c, d in ex if outside(cseries[d["metric"]], i, d)] for i in range(C)}
+    for i, cs in fired.items():                                      # covered but not drawn: a mark on the axis
+        if cs:
+            svg.append(f'<rect x="{xpos(i) - 2.5:.1f}" y="{T + PH + 1}" width="5" height="5" fill="#BD000C"/>')
+
+    tips = []
+    for i, dd in enumerate(cdays):
+        t = [f"<b>{dd:%a} {dd.day} {dd:%b}</b>"]
+        for m, label, ink in ss:
+            s, d = cseries[m], defs.get(m)
+            p = "_share" in m
+            row = f'<span style="color:{ink}">&#9632;</span> {label} <b>{fmt(s["v"][i], p)}</b>'
+            if s["e"][i] is not None:
+                row += f' <span style="color:#8E8D83">expected {fmt(s["e"][i], p)}</span>'
+            if outside(s, i, d):
+                row += ' <b style="color:#BD000C">outside</b>'
+            t.append(row)
+        if single and cseries[ss[0][0]]["e"][i] is None:
+            t.append(f'<span style="color:#8E8D83">no expected value yet, fewer than four earlier {dd:%A}s</span>')
+        for c in fired[i]:
+            d = by_check[c]
+            t.append(f'<b style="color:#BD000C">{c} fired</b> {LBL.get(c, (d["metric"],))[0]} '
+                     f'{fmt(cseries[d["metric"]]["v"][i], "_share" in d["metric"])}')
+        tips.append("<br>".join(t))
+    return frame(svg, lo, hi, pad, pct, tips)
+
+def verdict_chip(c):
+    st = verdict.get(c)
+    return (f'<span style="white-space:nowrap">{c} <span style="color:{BADGE.get(st, "#8E8D83")};font-weight:700">'
+            f'{(st or "not judged").upper()}</span></span>')
+
+def panel(title, question, lines, extras):
+    ss      = [(m, label, layer) for m, label, layer in lines if m in cseries]
+    covered = [defs[m]["check_id"] for m, _, _ in ss if m in defs] + [c for c in extras if c in by_check]
+    worst   = max((verdict.get(c) for c in covered), key=lambda st: RANK.get(st, -1), default=None)
+    badge   = (f'<span style="background:{BADGE[worst]};color:#fff;font-size:10px;font-weight:700;'
+               f'padding:2px 7px;letter-spacing:.05em;margin-right:8px">{worst.upper()}</span>'
+               if worst in ("critical", "warning") else "")
+    last = max((i for m, _, _ in ss for i in range(C) if cseries[m]["v"][i] is not None), default=None)
+    now  = ""
+    if last is not None:
+        if len(ss) == 1:
+            m, s = ss[0][0], cseries[ss[0][0]]
+            p    = "_share" in m
+            now  = fmt(s["v"][last], p)
+            if s["e"][last] is not None:
+                now += f' <span style="color:#8E8D83">vs {fmt(s["e"][last], p)} expected</span>'
+        else:
+            now = " &rarr; ".join(fmt(cseries[m]["v"][last]) for m, _, _ in ss)
+        if cdays[last] != days[-1]:     # e.g. the board judges a Sunday, the chart ends on Friday
+            now += f' <span style="color:#8E8D83">&middot; {cdays[last]:%a} {cdays[last].day} {cdays[last]:%b}</span>'
+    keys = ""
+    if len(ss) > 1:
+        keys = " ".join(f'<span style="white-space:nowrap;margin-right:8px"><span style="color:{INK[layer]}">&#9632;</span> '
+                        f'{label}</span>' for _, label, layer in ss)
+    note = ""
+    if len(ss) == 1 and last is not None and defs.get(ss[0][0]):
+        m, d, s = ss[0][0], defs[ss[0][0]], cseries[ss[0][0]]
+        v = s["v"][last]
+        if s["lo"][last] is not None and not outside(s, last, d) and (
+                (d["abs_warn_low"] is not None and v < d["abs_warn_low"]) or
+                (d["abs_warn_high"] is not None and v > d["abs_warn_high"])):
+            note = ('<div style="font-size:11px;color:#946F29;margin-top:4px;line-height:1.4">'
+                    'Inside its recent pattern, but beyond the healthy limit. The expected value has '
+                    'adapted to a lasting change, so read the dotted line, not the band.</div>')
+    checks = " &middot; ".join(verdict_chip(c) for c in covered) or "no check &middot; context only"
+    return (f'<div style="padding-top:10px;border-top:1px solid #ECEBE4">'
+            f'<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:2px 10px">'
+            f'<div style="font-size:16px;font-weight:600;color:#000;min-width:0">{badge}{html.escape(title)}</div>'
+            f'<div style="font-size:13px;color:#404040;white-space:nowrap;margin-left:auto">{now}</div></div>'
+            f'<div style="font-size:12px;color:#5A5D5C;margin:1px 0 2px">{html.escape(question)}</div>'
+            f'<div style="font-size:11px;color:#8E8D83;margin:0 0 6px">{checks}'
+            f'{(" &nbsp;&middot;&nbsp; " + keys) if keys else ""}</div>'
+            f'{chart(lines, extras)}{note}</div>')
+
+# What the five cover, and what they leave to the "also failing" section.
+drawn   = {m for _, _, lines, _ in FIVE for m, _, _ in lines}
+covered = {defs[m]["check_id"] for m in drawn if m in defs} | {c for _, _, _, ex in FIVE for c in ex}
+rest    = sorted((c for c in by_check if c not in covered and by_check[c]["metric"] in series),
+                 key=lambda c: (-RANK.get(verdict.get(c), -1), c))
+also    = [c for c in rest if verdict.get(c) in ("critical", "warning")]
+quiet   = [c for c in rest if verdict.get(c) == "ok"]
+blind   = [c for c in rest if verdict.get(c) not in ("critical", "warning", "ok")]
+n_bad_cov = sum(1 for c in covered if verdict.get(c) in ("critical", "warning"))
+
+# Days on which several figures left their range together, all metrics, weekends included.
+recent, together = set(days[-28:]), {}
+for m, s in series.items():
+    for i in range(N):
+        if days[i] in recent and outside(s, i, defs.get(m)):
+            together.setdefault(days[i], []).append(title_of(m))
+shared = sorted(((dd, ms) for dd, ms in together.items() if len(ms) >= 3), key=lambda t: (-len(t[1]), t[0]))[:4]
+if shared:
+    shared_txt = "Days on which three or more figures left their normal range together: " + "; ".join(
+        f"<b>{dd:%a} {dd.day} {dd:%b}</b>{' (weekend, not charted)' if dd.weekday() >= 5 else ''} "
+        f"({len(ms)}: {html.escape(', '.join(ms[:4]))}{' and more' if len(ms) > 4 else ''})" for dd, ms in shared) + "."
+else:
+    shared_txt = "No day in the last four weeks had three or more figures outside their normal range at once."
+
+def swatch(svg, label):
+    return (f'<span style="display:inline-flex;align-items:center;gap:6px;margin-right:18px">'
+            f'<svg width="22" height="10">{svg}</svg>{label}</span>')
+
+legend = ("".join(swatch(f'<line x1="0" x2="22" y1="5" y2="5" stroke="{INK[l]}" stroke-width="1.75"/>', l)
+                  for l in ("bronze", "silver", "gold"))
+        + swatch('<line x1="0" x2="22" y1="5" y2="5" stroke="#5A5D5C" stroke-width="1.25" stroke-dasharray="4 3"/>',
+                 "expected for this weekday")
+        + swatch('<rect width="22" height="10" fill="#ECEBE4"/>', "normal range")
+        + swatch('<line x1="0" x2="22" y1="5" y2="5" stroke="#946F29" stroke-dasharray="1.5 2.5"/>', "healthy limit")
+        + swatch('<circle cx="11" cy="5" r="3" fill="#BD000C"/>', "outside the normal range")
+        + swatch('<rect x="8.5" y="2.5" width="5" height="5" fill="#BD000C"/>', "a covered check fired that day"))
+
+grid = lambda cells: ('<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));'
+                      'gap:22px 32px">' + "".join(cells) + '</div>')
+
+also_html = (grid([panel(LBL.get(c, (by_check[c]["metric"],))[0],
+                         LBL.get(c, ("", ""))[1],
+                         [(by_check[c]["metric"], by_check[c]["metric"], by_check[c]["layer"])], [])
+                   for c in also])
+             if also else '<div style="font-size:13px;color:#6F7A1A">Nothing else is failing today.</div>')
+quiet_txt = (f'Passing and not drawn: {", ".join(quiet)}.' if quiet else "")
+blind_txt = (f' Not judged today: {", ".join(blind)}.' if blind else "")
+state = (f'<b style="color:#BD000C">{n_bad_cov} of the {len(covered)} covered checks '
+         f'{"is" if n_bad_cov == 1 else "are"} failing.</b>' if n_bad_cov
+         else f'<b style="color:#6F7A1A">All {len(covered)} covered checks pass.</b>')
+
+displayHTML(f"""
+<div style="font-family:'Frutiger 45 Light',Frutiger,'Helvetica Neue',Arial,sans-serif;color:#404040;background:#fff;padding:22px 26px;max-width:1180px;position:relative">
+  <div style="border-bottom:2px solid #E60000;padding-bottom:12px">
+    <div style="font-size:26px;font-weight:300;color:#000">Trends, the five</div>
+    <div style="font-size:13px;color:#7A7870;margin-top:3px">
+      The three published figures and the two integrity questions behind them, each business day against
+      what that weekday normally looks like &middot; {cdays[0].day} {cdays[0]:%B} to {cdays[-1].day} {cdays[-1]:%B %Y}</div>
+  </div>
+  <div style="font-size:12.5px;color:#404040;margin:14px 0 8px;line-height:1.5">{state} {shared_txt}</div>
+  <div style="font-size:11.5px;color:#5A5D5C;margin-bottom:6px">{legend}</div>
+  <div style="font-size:11px;color:#8E8D83">Hover a chart to read one day; the line follows on every chart, so
+    breaks that happened together line up. Monday to Friday only, so weekend volume does not set the scale;
+    weekends are still judged and named above when they leave their range. Each panel names the checks it
+    covers with today's verdict; the first weeks have no expected value yet, because it needs four earlier
+    days of the same weekday.</div>
+
+  <div style="margin-top:24px">{grid([panel(*f) for f in FIVE])}</div>
+
+  <div style="margin-top:34px;font-size:15px;font-weight:600;color:#000">Also failing today</div>
+  <div style="font-size:12px;color:#7A7870;margin:3px 0 10px">
+    Corridor checks the five do not cover, drawn only while they are critical or warning. {quiet_txt}{blind_txt}</div>
+  {also_html}
+
+  <div id="t5-tip" style="display:none;position:fixed;z-index:10;background:#fff;border:1px solid #CCCABC;
+       padding:7px 9px;font-size:11.5px;line-height:1.45;color:#404040;pointer-events:none;max-width:300px"></div>
+</div>
+<script>
+(function () {{
+  var N = {C}, L = {L}, PW = {PW}, W = {W};
+  var charts = Array.prototype.slice.call(document.querySelectorAll('svg.t5'));
+  var tip = document.getElementById('t5-tip');
   function show(i) {{
     var x = L + PW * i / Math.max(N - 1, 1);
     charts.forEach(function (c) {{
