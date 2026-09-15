@@ -29,6 +29,8 @@
 --     cell 10c  the trends: one chart per daily metric against the value
 --               expected for that weekday, to see the shape of a problem and
 --               which figures broke on the same day. Run after 10b for titles.
+--     cell 10d  three read-only queries that verify the layer-flow checks and
+--               show what their ratios measure, for calibrating the limits.
 --   Cell 11 cleans up and is safe to run at any point, including after a failure.
 --   To run the lot from a single cell instead, see the note at the foot.
 --
@@ -1523,6 +1525,54 @@ displayHTML(f"""
 }})();
 </script>
 """)
+
+
+-- ----------------------------------------------------------------------------
+-- CELL 10d — VERIFY THE LAYER FLOW. Three small read-only queries, run after 9e.
+--
+-- a) No check may appear twice in the verdicts. A6, G3 and S1 moved from the
+--    explicit checks (cell 9) to the corridor engine (cell 6); if an old cell 9
+--    is still in the session they would be counted twice. Must return no rows.
+-- b) What the layer ratios actually measure, business days only. G4 has never
+--    been measured and A6 changed its rule, so these figures are what their
+--    limits in cell 6 should be calibrated from.
+-- c) Every day in the window on which a layer check was not ok, newest first.
+--    Shows whether the limits would have been quiet on ordinary days and loud on
+--    real ones.
+-- ----------------------------------------------------------------------------
+%sql
+SELECT check_id, COUNT(*) AS n
+FROM   dq_results
+GROUP  BY check_id
+HAVING COUNT(*) > 1;
+
+%sql
+SELECT metric,
+       ROUND(MIN(value), 4)                                  AS min_value,
+       ROUND(percentile_approx(value, 0.5), 4)               AS median_value,
+       ROUND(MAX(value), 4)                                  AS max_value,
+       ROUND(percentile_approx(value, 0.5) - MIN(value), 4)  AS drop_from_median,
+       COUNT(*)                                              AS business_days
+FROM   dq_metric_daily
+WHERE  metric IN ('keep_share_silver', 'gold_to_silver_views',
+                  'silver_to_bronze_persons', 'gold_to_silver_persons')
+  AND  dayofweek(view_date) BETWEEN 2 AND 6          -- Monday to Friday
+  AND  view_date <= date_sub(current_date(), 1)      -- today is still partial
+GROUP  BY metric
+ORDER  BY metric;
+
+%sql
+SELECT check_date, check_id,
+       ROUND(metric_value, 4) AS value,
+       ROUND(baseline, 4)     AS expected,
+       ROUND(lower_bound, 4)  AS lo,
+       ROUND(upper_bound, 4)  AS hi,
+       status
+FROM   dq_r_corridor
+WHERE  check_id IN ('A6', 'G3', 'S1', 'G4')
+  AND  status <> 'ok'
+ORDER  BY check_date DESC, check_id
+LIMIT  30;
 
 
 -- ----------------------------------------------------------------------------
