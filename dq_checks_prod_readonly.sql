@@ -33,13 +33,14 @@
 --               to a row. The three published figures through the layers and
 --               the two integrity ratios, each panel naming the checks it
 --               covers. Anything else failing today is drawn below them.
---     cell 10d  eight read-only queries, each its own cell (a to h): verify the
+--     cell 10d  nine read-only cells, each its own cell (a to i): verify the
 --               layer-flow checks, calibrate their limits, list the days they
 --               fired, show which layer moved, whether silver removes double
 --               fires, which pages did not reach silver on a flagged day, and
 --               whether every person in silver reaches gold, person by person,
 --               for all pages or for one page switched on by its URL; and a
---               lookup by URL fragment of visitors, views and visits per layer.
+--               lookup by URL fragment of visitors, views and visits per layer,
+--               as a table (h) and as three charts (i).
 --   Cell 11 cleans up and is safe to run at any point, including after a failure.
 --   To run the lot from a single cell instead, see the note at the foot.
 --
@@ -1982,7 +1983,7 @@ displayHTML(f"""
 -- ----------------------------------------------------------------------------
 -- CELL 10d-a — VERIFY: no check counted twice.
 --
--- Cells 10d-a to 10d-h are eight SEPARATE notebook cells. Paste each on its own:
+-- Cells 10d-a to 10d-i are nine SEPARATE notebook cells. Paste each on its own:
 -- a cell holding several queries only displays the result of the last one.
 --
 -- A6, G3 and S1 moved from the explicit checks (cell 9) to the corridor engine
@@ -2355,8 +2356,16 @@ ORDER  BY view_date DESC;
 --                                      fires, and gold is lossless
 --   silver 0 while gold is not         silver keys pages differently from gold
 --   silver above gold                  gold lost rows for this page
+--
+-- The result is kept as the temporary view dq_page_lookup and cached, so it is
+-- computed once: cell 10d-i draws it as charts without querying the layers
+-- again. Change the term here, re-run this cell, then re-run 10d-i. The first
+-- statement drops the previous term's cache. Cell 11 releases it.
 -- ----------------------------------------------------------------------------
 %sql
+UNCACHE TABLE IF EXISTS dq_page_lookup;
+
+CREATE OR REPLACE TEMPORARY VIEW dq_page_lookup AS
 WITH params AS (
   SELECT 'news'        AS url_contains,      -- <- part of the page URL to look up
          28            AS days_back          -- <- days to show, at most 70
@@ -2423,14 +2432,184 @@ SELECT d.view_date,
        (SELECT COUNT(*) FROM inventory)    AS page_keys,
        COALESCE(b.uv, 0)      AS bronze_uv,     COALESCE(s.uv, 0)      AS silver_uv,     COALESCE(g.uv, 0)      AS gold_uv,
        COALESCE(b.views, 0)   AS bronze_views,  COALESCE(s.views, 0)   AS silver_views,  COALESCE(g.views, 0)   AS gold_views,
-       COALESCE(bv.visits, 0) AS bronze_visits, COALESCE(sv.visits, 0) AS silver_visits, COALESCE(g.visits, 0) AS gold_visits
+       COALESCE(bv.visits, 0) AS bronze_visits, COALESCE(sv.visits, 0) AS silver_visits, COALESCE(g.visits, 0) AS gold_visits,
+       p.url_contains
 FROM   days d
+CROSS JOIN params p
 LEFT JOIN bronze        b  ON b.view_date  = d.view_date
 LEFT JOIN bronze_visits bv ON bv.view_date = d.view_date
 LEFT JOIN silver        s  ON s.view_date  = d.view_date
 LEFT JOIN silver_visits sv ON sv.view_date = d.view_date
-LEFT JOIN gold          g  ON g.view_date  = d.view_date
-ORDER  BY d.view_date DESC;
+LEFT JOIN gold          g  ON g.view_date  = d.view_date;
+
+CACHE TABLE dq_page_lookup;
+
+SELECT * FROM dq_page_lookup ORDER BY view_date DESC;
+
+
+-- ----------------------------------------------------------------------------
+-- CELL 10d-i — PAGE LOOKUP AS CHARTS. Run right after 10d-h.
+--
+-- Draws the cached result of 10d-h as three charts side by side: unique
+-- visitors, views and visits, each with one line per layer. Silver and gold
+-- lying on top of each other is healthy; a visible gap between them is the
+-- finding. The axis starts at zero, so the distance between bronze and silver
+-- keeps its true proportion for a single page instead of being magnified.
+-- Hovering one chart moves a day marker across all three and shows the three
+-- values and the ratios between layers.
+--
+-- Business days only, as in 10c, because a single page's weekend dip would
+-- otherwise dominate; set BUSINESS_DAYS_ONLY to False to draw weekends too.
+-- The charts refuse to be read when they cannot be: no page key found for the
+-- term, or bronze has views while silver and gold hold none.
+-- Reads the cached view only. Writes nothing.
+-- ----------------------------------------------------------------------------
+%python
+import html, json
+
+BUSINESS_DAYS_ONLY = True                        # <- False draws weekends as well
+
+LAYERS   = [("bronze", "#946F29"), ("silver", "#8E8D83"), ("gold", "#404040")]   # Bronze II, Grey III, Grey VI
+MEASURES = [("uv", "Unique visitors"), ("views", "Views"), ("visits", "Visits")]
+W, H, L, R, T, B = 360, 170, 46, 12, 12, 22      # chart geometry in viewBox units
+PW, PH = W - L - R, H - T - B
+
+rows = sorted(spark.sql("SELECT * FROM dq_page_lookup").collect(), key=lambda r: r["view_date"])
+if BUSINESS_DAYS_ONLY:
+    rows = [r for r in rows if r["view_date"].weekday() < 5]
+N    = len(rows)
+term = rows[0]["url_contains"] if rows else ""
+keys = rows[0]["page_keys"] if rows else 0
+tot  = {f"{l}_{m}": sum(r[f"{l}_{m}"] or 0 for r in rows) for l, _ in LAYERS for m, _ in MEASURES}
+
+def num(v):
+    v = v or 0
+    return f"{v / 1e6:.2f}M" if v >= 1e6 else f"{v / 1e3:.1f}k" if v >= 1e4 else f"{v:,.0f}"
+
+def pct(a, b):
+    return f"{100 * a / b:.1f} %" if b else "&ndash;"
+
+def xpos(i):
+    return L + PW * i / max(N - 1, 1)
+
+def chart(m):
+    series = [(l, ink, [r[f"{l}_{m}"] or 0 for r in rows]) for l, ink in LAYERS]
+    top = max([v for _, _, vs in series for v in vs] + [1])
+    hi  = top * 1.08
+    y   = lambda v: T + PH * (1 - v / hi)
+    svg = []
+    # Silver is drawn wide underneath and gold thin on top, so where they agree
+    # silver still shows as a grey edge around gold instead of vanishing: "on top
+    # of each other" must look different from "silver missing".
+    width = {"bronze": 1.75, "silver": 5, "gold": 1.5}
+    for l, ink, vs in series:                                    # gold drawn last, on top
+        if N == 1:
+            svg.append(f'<circle cx="{xpos(0):.1f}" cy="{y(vs[0]):.1f}" r="{width[l] + 1.5}" fill="{ink}"/>')
+        else:
+            pts = " ".join(f"{xpos(i):.1f},{y(v):.1f}" for i, v in enumerate(vs))
+            svg.append(f'<polyline points="{pts}" fill="none" stroke="{ink}" stroke-width="{width[l]}" '
+                       f'stroke-linejoin="round" stroke-linecap="round"/>')
+    svg.append(f'<line x1="{L}" x2="{W - R}" y1="{T + PH}" y2="{T + PH}" stroke="#000" stroke-width="1"/>')
+    mondays = [i for i, r in enumerate(rows) if r["view_date"].weekday() == 0]
+    for n, i in enumerate(reversed(mondays)):
+        svg.append(f'<line x1="{xpos(i):.1f}" x2="{xpos(i):.1f}" y1="{T + PH}" y2="{T + PH + 3}" stroke="#000"/>')
+        if n % 2 == 0:
+            d = rows[i]["view_date"]
+            svg.append(f'<text x="{xpos(i):.1f}" y="{H - 5}" text-anchor="middle" font-size="9" fill="#7A7870">{d.day} {d:%b}</text>')
+    for v in (top, 0):
+        svg.append(f'<text x="{L - 5}" y="{y(v) + 3:.1f}" text-anchor="end" font-size="9" fill="#7A7870">{num(v)}</text>')
+    svg.append(f'<line class="xh" x1="0" x2="0" y1="{T}" y2="{T + PH}" stroke="#8E8D83" stroke-width="1" visibility="hidden"/>')
+    svg.append(f'<rect x="{L}" y="{T}" width="{PW}" height="{PH}" fill="transparent"/>')
+    tips = []
+    for i, r in enumerate(rows):
+        b, s, g = (r[f"{l}_{m}"] or 0 for l, _ in LAYERS)
+        tips.append(f"<b>{r['view_date']:%a} {r['view_date'].day} {r['view_date']:%b}</b>"
+                    + "".join(f'<br><span style="color:{ink}">&#9632;</span> {l} {num(v)}'
+                              for (l, ink), v in zip(LAYERS, (b, s, g)))
+                    + f"<br>silver of bronze {pct(s, b)}<br>gold of silver {pct(g, s)}")
+    return (f'<svg class="pl" viewBox="0 0 {W} {H}" style="width:100%;height:auto;display:block;overflow:visible" '
+            f'data-tips="{html.escape(json.dumps(tips))}">{"".join(svg)}</svg>')
+
+def panel(m, title):
+    last = rows[-1] if rows else None
+    now  = " &rarr; ".join(num(last[f"{l}_{m}"]) for l, _ in LAYERS) if last else ""
+    keys_html = " ".join(f'<span style="white-space:nowrap;margin-right:8px"><span style="color:{ink}">&#9632;</span> {l}</span>'
+                         for l, ink in LAYERS)
+    note = ('<div style="font-size:11px;color:#7A7870;margin-top:4px;line-height:1.4">Bronze visits come from the raw '
+            'browser session, which is per view since April, so bronze visits close to bronze views is the known '
+            'incident, not this page.</div>') if m == "visits" else ""
+    return (f'<div style="padding-top:8px;border-top:1px solid #ECEBE4">'
+            f'<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:2px 10px">'
+            f'<div style="font-size:14px;font-weight:600;color:#000">{title}</div>'
+            f'<div style="font-size:12px;color:#404040;white-space:nowrap;margin-left:auto">{now}</div></div>'
+            f'<div style="font-size:11px;color:#5A5D5C;margin:1px 0 4px">{keys_html}</div>'
+            f'{chart(m)}{note}</div>')
+
+# When the numbers cannot be read, say so instead of drawing them.
+if not rows:
+    stop = "No rows. Run cell 10d-h first, with a term of at least three characters."
+elif keys == 0:
+    stop = (f"No page key found for &lsquo;{html.escape(term)}&rsquo;. Silver and gold cannot be looked up, "
+            "so their zeros say nothing about data loss. Check the term, or whether the page is in the inventory.")
+elif tot["bronze_views"] > 0 and tot["silver_views"] == 0 and tot["gold_views"] == 0:
+    stop = ("Bronze has views for this term but silver and gold hold none. The page key did not match, "
+            "so these charts must not be read as data loss: tell whoever maintains the notebook.")
+else:
+    stop = ""
+
+summary = (f"Over these {N} {'business ' if BUSINESS_DAYS_ONLY else ''}days silver holds "
+           f"<b>{pct(tot['silver_views'], tot['bronze_views'])}</b> of bronze views and gold "
+           f"<b>{pct(tot['gold_views'], tot['silver_views'])}</b> of silver; for unique visitors, summed per day, "
+           f"<b>{pct(tot['silver_uv'], tot['bronze_uv'])}</b> and <b>{pct(tot['gold_uv'], tot['silver_uv'])}</b>.") if rows else ""
+span = f"{rows[0]['view_date'].day} {rows[0]['view_date']:%B} to {rows[-1]['view_date'].day} {rows[-1]['view_date']:%B %Y}" if rows else ""
+
+body = (f'<div style="margin-top:14px;background:#ECEBE4;border-left:3px solid #BD000C;padding:10px 12px;'
+        f'font-size:13px;color:#404040">{stop}</div>' if stop else
+        f'<div style="font-size:12.5px;color:#404040;margin:14px 0 10px;line-height:1.5">{summary}</div>'
+        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:18px 26px">'
+        + "".join(panel(m, t) for m, t in MEASURES) + '</div>')
+
+displayHTML(f"""
+<div style="font-family:'Frutiger 45 Light',Frutiger,'Helvetica Neue',Arial,sans-serif;color:#404040;background:#fff;padding:22px 26px;max-width:1180px">
+  <div style="border-bottom:2px solid #E60000;padding-bottom:12px">
+    <div style="font-size:26px;font-weight:300;color:#000">Page lookup</div>
+    <div style="font-size:13px;color:#7A7870;margin-top:3px">
+      URL containing &lsquo;{html.escape(term)}&rsquo; &middot; {keys} page key{'s' if keys != 1 else ''} &middot; {span}</div>
+  </div>
+  {body}
+  <div id="pl-tip" style="display:none;position:fixed;z-index:10;background:#fff;border:1px solid #CCCABC;
+       padding:7px 9px;font-size:11.5px;line-height:1.45;color:#404040;pointer-events:none;max-width:240px"></div>
+</div>
+<script>
+(function () {{
+  var N = {N}, L = {L}, PW = {PW}, W = {W};
+  var charts = Array.prototype.slice.call(document.querySelectorAll('svg.pl'));
+  var tip = document.getElementById('pl-tip');
+  charts.forEach(function (c) {{
+    var tips = JSON.parse(c.getAttribute('data-tips'));
+    c.addEventListener('mousemove', function (e) {{
+      var r = c.getBoundingClientRect();
+      var i = Math.max(0, Math.min(N - 1, Math.round(((e.clientX - r.left) * W / r.width - L) / PW * Math.max(N - 1, 1))));
+      var x = L + PW * i / Math.max(N - 1, 1);
+      charts.forEach(function (o) {{
+        var l = o.querySelector('.xh');
+        l.setAttribute('x1', x); l.setAttribute('x2', x); l.setAttribute('visibility', 'visible');
+      }});
+      tip.innerHTML = tips[i];
+      tip.style.display = 'block';
+      var left = e.clientX + 14;
+      if (left + tip.offsetWidth > window.innerWidth - 8) left = e.clientX - tip.offsetWidth - 14;
+      tip.style.left = left + 'px';
+      tip.style.top = (e.clientY + 14) + 'px';
+    }});
+    c.addEventListener('mouseleave', function () {{
+      tip.style.display = 'none';
+      charts.forEach(function (o) {{ o.querySelector('.xh').setAttribute('visibility', 'hidden'); }});
+    }});
+  }});
+}})();
+</script>
+""")
 
 
 -- ----------------------------------------------------------------------------
@@ -2448,6 +2627,7 @@ ORDER  BY d.view_date DESC;
 %python
 # Reverse creation order, so dependents go before the views they read.
 VIEWS = [
+    "dq_page_lookup",
     "dq_results",
     "dq_known_causes", "dq_scope", "dq_onset",
     "dq_r_explicit", "dq_r_corridor",
@@ -2456,7 +2636,7 @@ VIEWS = [
     "dq_sv_daily", "dq_gold_daily", "dq_pv_daily",
     "dq_pv_window",
 ]
-CACHED = ["dq_results", "dq_metric_daily", "dq_pv_window"]   # all need releasing, in this order
+CACHED = ["dq_page_lookup", "dq_results", "dq_metric_daily", "dq_pv_window"]   # all need releasing, in this order
 
 # --- 1. prove that everything about to be dropped is temporary ---------------
 # A temporary view exists only in this session. If anything below reports
