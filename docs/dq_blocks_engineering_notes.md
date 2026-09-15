@@ -445,6 +445,16 @@ rest are shown as a control group. A problem that leaves page views and unique
 visitors untouched is a much narrower problem, and that is only visible if the
 untouched charts are there to compare.
 
+**Weekends are judged but not drawn.** Weekend volume is a fraction of a
+weekday's, so with weekends drawn every volume chart became a saw blade scaled
+from near zero to the weekday peak, and a five per cent drop on a Tuesday vanished
+inside it. Dropping weekends from the charts changes nothing about detection,
+because the expected value already compares a Saturday only with earlier
+Saturdays; it only changes the scale. The axis runs Friday straight into Monday.
+The summary line still counts weekend days and names them when they leave their
+range, and when the board judges a Sunday each panel says which Friday its
+latest value belongs to.
+
 **Only corridor metrics are charted.** The explicit checks of cell 9 are computed
 for one day and have no history in this edition, the same limitation as onset
 detection. The first four weeks of the window have no expected value either,

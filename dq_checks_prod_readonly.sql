@@ -1102,6 +1102,15 @@ displayHTML(f"""
 -- charts that did not move stay on the page as the control group, because what
 -- did NOT break narrows a problem down as much as what did.
 --
+-- WHY THE CHARTS SHOW MONDAY TO FRIDAY ONLY
+-- Weekend volume is a fraction of a weekday's, so with weekends drawn every
+-- volume chart is a saw blade scaled from near zero to the weekday peak, and a
+-- five per cent drop on a Tuesday disappears inside it. Leaving weekends out
+-- changes nothing about detection, because the expected value already compares
+-- a Saturday only with earlier Saturdays. It only changes the scale. Weekends are
+-- therefore still judged: the summary line counts them and names them when they
+-- leave their range, so a broken Saturday is not lost, just not drawn.
+--
 -- WHY THE FIXED LIMIT IS DRAWN AS WELL
 -- The expected value adapts. A break older than eight weeks is, by now, what the
 -- baseline expects, so a permanently broken metric sits comfortably inside its
@@ -1151,6 +1160,12 @@ for r in pts:
     if r["n_hist"] is not None and r["n_hist"] >= 4:      # same rule as the corridor engine
         s["e"][i], s["lo"][i], s["hi"][i] = r["baseline"], r["corr_low"], r["corr_high"]
 
+# What is drawn: business days only, on a continuous axis (Friday runs into Monday).
+# `days` and `series` keep every day and feed the summary line.
+cdays   = [d for d in days if d.weekday() < 5]
+cseries = {m: {k: [s[k][at[d]] for d in cdays] for k in s} for m, s in series.items()}
+C       = len(cdays)
+
 def fmt(v, pct=False, p=3):
     if v is None: return "&ndash;"
     if pct:       return f"{100 * v:.{p}g} %"
@@ -1172,7 +1187,7 @@ def outside(s, i):
             and (s["v"][i] < s["lo"][i] or s["v"][i] > s["hi"][i]))
 
 def xpos(i):
-    return L + PW * i / max(N - 1, 1)
+    return L + PW * i / max(C - 1, 1)
 
 def runs(vals):
     """Index runs without gaps, so a missing day breaks the line instead of bridging it."""
@@ -1189,7 +1204,7 @@ def title_of(m):
     return TITLES.get(d["check_id"], m) if d else CONTEXT.get(m, m)
 
 def chart(m):
-    s, d = series[m], defs.get(m)
+    s, d = cseries[m], defs.get(m)
     pct  = m.endswith("_share")
     lims = [(d["abs_warn_low"], "above"), (d["abs_warn_high"], "below")] if d else []
     lims = [(v, side) for v, side in lims if v is not None]
@@ -1228,17 +1243,17 @@ def chart(m):
         for run in runs(s[key]):
             pts_ = " ".join(f"{xpos(i):.1f},{y(s[key][i]):.1f}" for i in run)
             svg.append(f'<polyline points="{pts_}" fill="none" {style} stroke-linejoin="round"/>')
-    for i in range(N):                                               # days outside the range
+    for i in range(C):                                               # days outside the range
         if outside(s, i):
             svg.append(f'<circle cx="{xpos(i):.1f}" cy="{y(s["v"][i]):.1f}" r="3" fill="#BD000C" '
                        f'stroke="#fff" stroke-width="1"/>')
     svg.append(f'<line x1="{L}" x2="{W - R}" y1="{T + PH}" y2="{T + PH}" stroke="#000" stroke-width="1"/>')
-    mondays = [i for i, dd in enumerate(days) if dd.weekday() == 0]
+    mondays = [i for i, dd in enumerate(cdays) if dd.weekday() == 0]
     for n, i in enumerate(reversed(mondays)):                       # label every other Monday, latest first
         svg.append(f'<line x1="{xpos(i):.1f}" x2="{xpos(i):.1f}" y1="{T + PH}" y2="{T + PH + 3}" stroke="#000"/>')
         if n % 2 == 0:
             svg.append(f'<text x="{xpos(i):.1f}" y="{H - 5}" text-anchor="middle" font-size="9" '
-                       f'fill="#7A7870">{days[i].day} {days[i]:%b}</text>')
+                       f'fill="#7A7870">{cdays[i].day} {cdays[i]:%b}</text>')
     top, bottom = axis_labels(hi - pad, lo + pad, pct)               # only the extremes, no gridlines
     for v, label in ((hi - pad, top), (lo + pad, bottom))[: 1 if top == bottom else 2]:
         svg.append(f'<text x="{L - 5}" y="{y(v) + 3:.1f}" text-anchor="end" font-size="9" fill="#7A7870">'
@@ -1248,7 +1263,7 @@ def chart(m):
     svg.append(f'<rect x="{L}" y="{T}" width="{PW}" height="{PH}" fill="transparent"/>')
 
     tips = []
-    for i, dd in enumerate(days):
+    for i, dd in enumerate(cdays):
         if s["e"][i] is None:
             exp = "no expected value yet, fewer than four earlier " + f"{dd:%A}s"
         else:
@@ -1259,11 +1274,11 @@ def chart(m):
             f'data-tips="{html.escape(json.dumps(tips))}">{"".join(svg)}</svg>')
 
 def panel(m):
-    s, d = series[m], defs.get(m)
+    s, d = cseries[m], defs.get(m)
     pct  = m.endswith("_share")
     cid  = d["check_id"] if d else None
     st   = verdict.get(cid)
-    last = max((i for i in range(N) if s["v"][i] is not None), default=None)
+    last = max((i for i in range(C) if s["v"][i] is not None), default=None)
     badge = (f'<span style="background:{BADGE[st]};color:#fff;font-size:10px;font-weight:700;'
              f'padding:2px 7px;letter-spacing:.05em;margin-right:8px">{st.upper()}</span>') if st in BADGE else ""
     sub = f"check {cid} &middot; {d['layer']}" if d else "no check &middot; context only"
@@ -1272,6 +1287,8 @@ def panel(m):
         now = f"{fmt(s['v'][last], pct)}"
         if s["e"][last] is not None:
             now += f' <span style="color:#8E8D83">vs {fmt(s["e"][last], pct)} expected</span>'
+        if cdays[last] != days[-1]:     # e.g. the board judges a Sunday, the chart ends on Friday
+            now += f' <span style="color:#8E8D83">&middot; {cdays[last]:%a} {cdays[last].day} {cdays[last]:%b}</span>'
     note = ""
     if last is not None and d and s["lo"][last] is not None and not outside(s, last):
         v = s["v"][last]
@@ -1308,7 +1325,8 @@ for m in metrics:
 shared = sorted(((dd, ms) for dd, ms in together.items() if len(ms) >= 3), key=lambda t: (-len(t[1]), t[0]))[:4]
 if shared:
     shared_txt = "Days on which three or more figures left their normal range together: " + "; ".join(
-        f"<b>{dd:%a} {dd.day} {dd:%b}</b> ({len(ms)}: {html.escape(', '.join(ms[:4]))}"
+        f"<b>{dd:%a} {dd.day} {dd:%b}</b>{' (weekend, not charted)' if dd.weekday() >= 5 else ''} "
+        f"({len(ms)}: {html.escape(', '.join(ms[:4]))}"
         f"{' and more' if len(ms) > 4 else ''})" for dd, ms in shared) + "."
 else:
     shared_txt = "No day in the last four weeks had three or more figures outside their normal range at once."
@@ -1332,14 +1350,15 @@ displayHTML(f"""
   <div style="border-bottom:2px solid #E60000;padding-bottom:12px">
     <div style="font-size:26px;font-weight:300;color:#000">Trends</div>
     <div style="font-size:13px;color:#7A7870;margin-top:3px">
-      Each daily figure against what that weekday normally looks like &middot;
-      {days[0].day} {days[0]:%B} to {days[-1].day} {days[-1]:%B %Y}</div>
+      Each business day against what that weekday normally looks like &middot;
+      {cdays[0].day} {cdays[0]:%B} to {cdays[-1].day} {cdays[-1]:%B %Y}</div>
   </div>
   <div style="font-size:12.5px;color:#404040;margin:14px 0 8px;line-height:1.5">{shared_txt}</div>
   <div style="font-size:11.5px;color:#5A5D5C;margin-bottom:6px">{legend}</div>
   <div style="font-size:11px;color:#8E8D83">Hover a chart to read one day; the line follows on every chart, so
-    breaks that happened together line up. The first weeks have no expected value yet, because it needs four
-    earlier days of the same weekday.</div>
+    breaks that happened together line up. Monday to Friday only, so weekend volume does not set the scale;
+    weekends are still judged and named above when they leave their range. The first weeks have no expected
+    value yet, because it needs four earlier days of the same weekday.</div>
 
   <div style="margin-top:24px;font-size:15px;font-weight:600;color:#000">Failing today</div>
   <div style="font-size:12px;color:#7A7870;margin:3px 0 10px">
@@ -1357,7 +1376,7 @@ displayHTML(f"""
 </div>
 <script>
 (function () {{
-  var N = {N}, L = {L}, PW = {PW}, W = {W};
+  var N = {C}, L = {L}, PW = {PW}, W = {W};
   var charts = Array.prototype.slice.call(document.querySelectorAll('svg.tr'));
   var tip = document.getElementById('tr-tip');
   function show(i) {{
