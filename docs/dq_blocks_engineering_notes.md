@@ -413,6 +413,49 @@ passed, which is what proves coverage and what an engineer wants when tracing a
 number. Cell 10b shows only what is failing, grouped and explained. Either can be
 skipped; neither costs anything once 9e has run.
 
+The verdicts were not the only thing recomputed. The expensive part sits in the
+daily metrics (cell 2: the per-person window for double fires and the rolling-week
+join), and everything downstream of them reads them again. 9e therefore also
+caches `dq_metric_daily`, which is about 1,200 rows, so the verdicts, the onset
+view and the trend charts in 10c all read the same materialised rows.
+
+## Trend charts — seeing the shape of a problem
+
+The board says what is wrong today. It cannot show the shape: a step or a drift,
+a one-day spike or a lasting change, and above all whether several figures broke
+on the same day. Cell 10c draws one small chart per daily metric, all on one time
+axis, with the actual value, the value expected for that weekday (cell 5's
+same-weekday median), the normal range of three MADs around it, and the fixed
+healthy limit where cell 6 defines one. Days outside the range are marked. Hovering
+one chart moves a day marker across all of them, and a summary line names the
+days on which three or more figures left their range together.
+
+Three decisions are not obvious.
+
+**The fixed limit is drawn beside the adaptive range.** The expected value is a
+median of the previous eight weeks, so a break older than that becomes what the
+baseline expects. A permanently broken metric then sits inside its band and the
+chart looks healthy. The April identity break is exactly that case. The healthy
+limit does not adapt, and a panel whose latest value is inside the band but beyond
+the limit says so in words. A limit far from the data would flatten the chart into
+an edge, so it is named at that edge ("off the scale") instead of drawn to scale.
+
+**Charts that did not move stay on the page.** Failing checks come first, but the
+rest are shown as a control group. A problem that leaves page views and unique
+visitors untouched is a much narrower problem, and that is only visible if the
+untouched charts are there to compare.
+
+**Only corridor metrics are charted.** The explicit checks of cell 9 are computed
+for one day and have no history in this edition, the same limitation as onset
+detection. The first four weeks of the window have no expected value either,
+because the baseline requires four earlier days of the same weekday.
+
+The markers use the same corridor as the verdicts, so they are exactly as noisy as
+the engine is. Three MADs from four to eight same-weekday samples is a narrow
+band; if the first production run shows red markers on ordinary days, the fix
+belongs in cell 5 (for example the 1.4826 consistency factor on the MAD), where it
+changes the verdicts and the charts together rather than letting them disagree.
+
 ## The health board — who the output is written for
 
 Cell 10 of the read-only edition is a grid of check ids and numbers. It is the
