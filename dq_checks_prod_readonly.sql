@@ -2455,8 +2455,8 @@ SELECT * FROM dq_page_lookup ORDER BY view_date DESC;
 -- lying on top of each other is healthy; a visible gap between them is the
 -- finding. The axis starts at zero, so the distance between bronze and silver
 -- keeps its true proportion for a single page instead of being magnified.
--- Hovering one chart moves a day marker across all three and shows the three
--- values and the ratios between layers.
+-- Hovering one chart moves a day marker across all three, and each chart shows
+-- its own box for that day: the three layers' values and the ratios between them.
 --
 -- Business days only, as in 10c, because a single page's weekend dip would
 -- otherwise dominate; set BUSINESS_DAYS_ONLY to False to draw weekends too.
@@ -2523,12 +2523,17 @@ def chart(m):
     tips = []
     for i, r in enumerate(rows):
         b, s, g = (r[f"{l}_{m}"] or 0 for l, _ in LAYERS)
-        tips.append(f"<b>{r['view_date']:%a} {r['view_date'].day} {r['view_date']:%b}</b>"
-                    + "".join(f'<br><span style="color:{ink}">&#9632;</span> {l} {num(v)}'
-                              for (l, ink), v in zip(LAYERS, (b, s, g)))
-                    + f"<br>silver of bronze {pct(s, b)}<br>gold of silver {pct(g, s)}")
+        # compact, three lines: three boxes are open at once and must not bury the lines
+        tips.append(f"<b>{r['view_date']:%a} {r['view_date'].day} {r['view_date']:%b}</b><br>"
+                    + " &nbsp;".join(f'<span style="color:{ink}">&#9632;</span> {num(v)}'
+                                     for (l, ink), v in zip(LAYERS, (b, s, g)))
+                    + f'<br><span style="color:#7A7870">silver/bronze</span> {pct(s, b)} &nbsp;'
+                      f'<span style="color:#7A7870">gold/silver</span> {pct(g, s)}')
+    # where each line sits on each day, as a share of the plot height from the top,
+    # so the box can go to whichever edge has fewer lines under it
+    ys = [[round((y(vs[i]) - T) / PH, 3) for _, _, vs in series] for i in range(N)]
     return (f'<svg class="pl" viewBox="0 0 {W} {H}" style="width:100%;height:auto;display:block;overflow:visible" '
-            f'data-tips="{html.escape(json.dumps(tips))}">{"".join(svg)}</svg>')
+            f'data-tips="{html.escape(json.dumps(tips))}" data-ys="{json.dumps(ys)}">{"".join(svg)}</svg>')
 
 def panel(m, title):
     last = rows[-1] if rows else None
@@ -2543,7 +2548,11 @@ def panel(m, title):
             f'<div style="font-size:14px;font-weight:600;color:#000">{title}</div>'
             f'<div style="font-size:12px;color:#404040;white-space:nowrap;margin-left:auto">{now}</div></div>'
             f'<div style="font-size:11px;color:#5A5D5C;margin:1px 0 4px">{keys_html}</div>'
-            f'{chart(m)}{note}</div>')
+            f'<div style="position:relative">{chart(m)}'
+            f'<div class="pl-tip" style="display:none;position:absolute;top:4px;z-index:10;background:rgba(255,255,255,.94);'
+            f'border:1px solid #CCCABC;padding:6px 8px;font-size:11px;line-height:1.4;color:#404040;'
+            f'pointer-events:none;white-space:nowrap"></div></div>'
+            f'{note}</div>')
 
 # When the numbers cannot be read, say so instead of drawing them.
 if not rows:
@@ -2577,35 +2586,48 @@ displayHTML(f"""
       URL containing &lsquo;{html.escape(term)}&rsquo; &middot; {keys} page key{'s' if keys != 1 else ''} &middot; {span}</div>
   </div>
   {body}
-  <div id="pl-tip" style="display:none;position:fixed;z-index:10;background:#fff;border:1px solid #CCCABC;
-       padding:7px 9px;font-size:11.5px;line-height:1.45;color:#404040;pointer-events:none;max-width:240px"></div>
 </div>
 <script>
 (function () {{
+  // One box per chart: hovering any chart shows the same day on all three, each
+  // box beside its own day marker, flipped left when it would leave the chart.
   var N = {N}, L = {L}, PW = {PW}, W = {W};
   var charts = Array.prototype.slice.call(document.querySelectorAll('svg.pl'));
-  var tip = document.getElementById('pl-tip');
+  var T = {T}, PH = {PH}, H = {H};
   charts.forEach(function (c) {{
-    var tips = JSON.parse(c.getAttribute('data-tips'));
+    c._tips = JSON.parse(c.getAttribute('data-tips'));
+    c._ys = JSON.parse(c.getAttribute('data-ys'));
+  }});
+  function show(i) {{
+    var x = L + PW * i / Math.max(N - 1, 1);
+    charts.forEach(function (o) {{
+      var l = o.querySelector('.xh');
+      l.setAttribute('x1', x); l.setAttribute('x2', x); l.setAttribute('visibility', 'visible');
+      var wrap = o.parentNode, tip = wrap.querySelector('.pl-tip');
+      tip.innerHTML = o._tips[i];
+      tip.style.display = 'block';
+      var scale = wrap.clientWidth / W, px = x * scale, left = px + 10;
+      if (left + tip.offsetWidth > wrap.clientWidth) left = px - tip.offsetWidth - 10;
+      tip.style.left = Math.max(0, left) + 'px';
+      var plotTop = T * scale, plotBottom = (T + PH) * scale;
+      var band = (tip.offsetHeight + 4) / (PH * scale);           // the share of the plot the box covers
+      var underTop = o._ys[i].filter(function (f) {{ return f <= band; }}).length;
+      var underBottom = o._ys[i].filter(function (f) {{ return f >= 1 - band; }}).length;
+      tip.style.top = (underBottom < underTop ? Math.max(plotTop, plotBottom - tip.offsetHeight - 4) : plotTop) + 'px';
+    }});
+  }}
+  function hide() {{
+    charts.forEach(function (o) {{
+      o.querySelector('.xh').setAttribute('visibility', 'hidden');
+      o.parentNode.querySelector('.pl-tip').style.display = 'none';
+    }});
+  }}
+  charts.forEach(function (c) {{
     c.addEventListener('mousemove', function (e) {{
       var r = c.getBoundingClientRect();
-      var i = Math.max(0, Math.min(N - 1, Math.round(((e.clientX - r.left) * W / r.width - L) / PW * Math.max(N - 1, 1))));
-      var x = L + PW * i / Math.max(N - 1, 1);
-      charts.forEach(function (o) {{
-        var l = o.querySelector('.xh');
-        l.setAttribute('x1', x); l.setAttribute('x2', x); l.setAttribute('visibility', 'visible');
-      }});
-      tip.innerHTML = tips[i];
-      tip.style.display = 'block';
-      var left = e.clientX + 14;
-      if (left + tip.offsetWidth > window.innerWidth - 8) left = e.clientX - tip.offsetWidth - 14;
-      tip.style.left = left + 'px';
-      tip.style.top = (e.clientY + 14) + 'px';
+      show(Math.max(0, Math.min(N - 1, Math.round(((e.clientX - r.left) * W / r.width - L) / PW * Math.max(N - 1, 1)))));
     }});
-    c.addEventListener('mouseleave', function () {{
-      tip.style.display = 'none';
-      charts.forEach(function (o) {{ o.querySelector('.xh').setAttribute('visibility', 'hidden'); }});
-    }});
+    c.addEventListener('mouseleave', hide);
   }});
 }})();
 </script>
