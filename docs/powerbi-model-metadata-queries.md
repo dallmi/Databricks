@@ -42,16 +42,25 @@ ORDER BY [Table], [Column]
 
 ## 3 — Measures with DAX
 
+Expressions that start with a line break (`Name =` then Enter) look empty in the result
+grid, which only shows the first line of a cell. Line breaks and tabs are therefore
+flattened to spaces; `Len` shows whether an expression exists at all.
+
 ```dax
 EVALUATE
 SELECTCOLUMNS(
     INFO.VIEW.MEASURES(),
     "Table", [Table],
     "Measure", [Name],
-    "DAX", [Expression]
+    "Len", LEN([Expression]),
+    "DAX", TRIM(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(
+        [Expression], UNICHAR(13), " "), UNICHAR(10), " "), UNICHAR(9), " "))
 )
 ORDER BY [Table], [Measure]
 ```
+
+If `Len` is blank everywhere, try `EVALUATE INFO.MEASURES()` (no `.VIEW`), or read the
+measures in **TMDL view** by dragging a measure table onto the editor.
 
 ## 4 — Tables
 
