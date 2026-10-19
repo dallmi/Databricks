@@ -10,8 +10,8 @@
 | **Primary key** | `Id` |
 | **FK** | `EmailId` → `tbl_email.Id`; `TNumber` → `tbl_hr_employee.T_NUMBER` |
 | **Write pattern** | MERGE full-table upsert (Service Principal) |
-| **Approx row count** | **293M** (as of 2026-04-20, timespan Nov 2020 – Apr 2026) |
-| **Per-MERGE delta** | 27–72M rows (full-replace upsert) |
+| **Approx row count** | **Hundreds of millions** (as of 2026-04-20, timespan Nov 2020 – Apr 2026) |
+| **Per-MERGE delta** | Tens of millions of rows (full-replace upsert) |
 
 ---
 
@@ -77,8 +77,8 @@ Full column list: `DESCRIBE imep_bronze.tbl_email_receiver_status` (the schema c
 ## Sample row
 
 ```
-Id             = "3b9c1a8f-..."
-EmailId        = "0a3f6c2e-..."           -- join to tbl_email.Id
+Id             = "00000000-0000-4000-8000-000000000012"
+EmailId        = "00000000-0000-4000-8000-000000000011"  -- join to tbl_email.Id
 TNumber        = "t100200"
 Status         = 1
 LogStatus      = "Open"
@@ -120,8 +120,8 @@ LEFT JOIN imep_bronze.tbl_hr_employee          hr ON hr.T_NUMBER = rs.TNumber
 
 ## Quality caveats
 
-- **Granularity**: 1 row per recipient × mailing. Large mailing × many recipients can quickly yield 100k+ rows per mailing.
-- **Full-table MERGE**: The whole table is upserted (27-72M per run) — not incremental. Delta history shows one "wave" per run, not a stream.
+- **Granularity**: 1 row per recipient × mailing. Large mailing × many recipients can quickly yield over a hundred thousand rows per mailing.
+- **Full-table MERGE**: The whole table is upserted (tens of millions of rows per run) — not incremental. Delta history shows one "wave" per run, not a stream.
 - **`LogStatus` vs `Status`**: `LogStatus` is the readable string (`Open`, `Bounce`, …), `Status` is the numeric code. For dashboards **always use `LogStatus`**.
 - **`DateTime` is send time** — for "when was it opened" check `tbl_analytics_link.CreationDate`.
 
@@ -133,7 +133,7 @@ LEFT JOIN imep_bronze.tbl_hr_employee          hr ON hr.T_NUMBER = rs.TNumber
 
 ```
 imep_bronze.tbl_email                    ┐
-imep_bronze.tbl_email_receiver_status    ├──► imep_gold.final  (~520M rows,
+imep_bronze.tbl_email_receiver_status    ├──► imep_gold.final  (hundreds of millions of rows,
 imep_bronze.tbl_analytics_link           ┘                    denormalized, HR-enriched)
 ```
 
@@ -146,7 +146,6 @@ Send counts from this table also feed the Tier-3 aggregates (`tbl_pbi_mailings_r
 - ER diagram Section 2: [../../architecture_diagram.md](../../architecture_diagram.md)
 - Canonical Bronze join chain: [../../joins/imep_bronze_email_events.md](../../joins/imep_bronze_email_events.md) *(pending)*
 - Join Strategy Contract: [../../joins/join_strategy_contract.md](../../joins/join_strategy_contract.md)
-- Genie findings: `memory/imep_genie_findings_q1_q2_q3.md`, `memory/imep_join_graph_q27_findings.md`, `memory/imep_pipeline_ops_q28_findings.md`
 
 ---
 

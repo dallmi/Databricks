@@ -1,6 +1,6 @@
 # `imep_bronze.tbl_event`
 
-> **Event master table** — Events as a feature in iMEP (not to be confused with "email events" in the sense of Opens/Clicks). Carries **`TrackingId`** (one of only 4 tables with this column). For event registrations see also `imep_silver.eventregistration` (13.7M).
+> **Event master table** — Events as a feature in iMEP (not to be confused with "email events" in the sense of Opens/Clicks). Carries **`TrackingId`** (one of only 4 tables with this column). For event registrations see also `imep_silver.eventregistration` (over ten million rows).
 
 | | |
 |---|---|
@@ -10,7 +10,7 @@
 | **Primary key** | `Id` |
 | **Cross-channel key** | `TrackingId` |
 | **Write pattern** | MERGE |
-| **Approx row count** | ~100K (timespan 2009 – Apr 2026 — oldest dataset in the project!) |
+| **Approx row count** | About a hundred thousand (timespan 2009 – Apr 2026 — oldest dataset in the project!) |
 
 ---
 
@@ -98,9 +98,9 @@ JOIN   imep_gold.tbl_pbi_platform_events     pe ON pe.Id = e.Id
 ```
 imep_bronze.tbl_event
         │
-        ├──► imep_silver.event (84K), invitation, eventregistration (13.7M)  [Silver exists for events!]
+        ├──► imep_silver.event (tens of thousands), invitation, eventregistration (over ten million)  [Silver exists for events!]
         │
-        └──► imep_gold.tbl_pbi_platform_events (84K) with RegistrationCount
+        └──► imep_gold.tbl_pbi_platform_events (tens of thousands) with RegistrationCount
 ```
 
 **Important**: Events are **the one area** where `imep_silver` exists. Email engagement **does not**.

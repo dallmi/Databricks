@@ -48,8 +48,8 @@ This document explains how to build an intranet usage analytics report in Power 
    - `dim_date` → **DateTable**
 
    > **Which table for which metric?** The OFFICIAL AppInsights `session_id`
-   > resets on most navigations on the corp source (92% of sessions span
-   > exactly one page view), so **Sessions** is only used to COUNT visits (the
+   > resets on most navigations on the corp source (the large majority of
+   > sessions span exactly one page view), so **Sessions** is only used to COUNT visits (the
    > company-standard number) — its behavioural columns carry almost no
    > signal. All time, engagement and navigation metrics (bounce, depth,
    > entry/exit, durations) come from **Visits** (reconstructed per person via
@@ -283,7 +283,7 @@ CALCULATE(
 )
 
 // Behavioural KPIs run on Visits — session_id resets on most navigations,
-// which would report ~92% "bounces" and ~1 page per session regardless of
+// which would report a large majority of "bounces" and ~1 page per session regardless of
 // actual behaviour.
 Bounce Rate =
 VAR TotalV = [Total Visits]
@@ -573,7 +573,7 @@ This measure uses the Visits table's own Division column (which is in filter con
 
 ## 8. Page 4 — Visits & Engagement
 
-**Purpose**: How visitors navigate the intranet — visit depth, bounces, entry/exit pages. All on the **Visits** table: the official session_id resets on most navigations, so session-grain navigation metrics would show every page as an entry AND an exit and ~92% bounces.
+**Purpose**: How visitors navigate the intranet — visit depth, bounces, entry/exit pages. All on the **Visits** table: the official session_id resets on most navigations, so session-grain navigation metrics would show every page as an entry AND an exit and a large majority of bounces.
 
 ### KPI Cards
 
@@ -660,10 +660,10 @@ View → Sync Slicers → enable sync across all pages for Date Range and Site.
 
 - Time metrics use `time_on_page_visit_sec` (visit grain). The session-grain
   `time_on_page_sec` is kept for reconciliation/QA only: the official
-  session_id resets on most navigations on the corp source (92% single-view
-  sessions), so `AVERAGE(time_on_page_sec)` degenerates to an average over a
+  session_id resets on most navigations on the corp source (the large majority
+  are single-view sessions), so `AVERAGE(time_on_page_sec)` degenerates to an average over a
   handful of same-instant double-fire artifacts — dashboards showed "0s" on
-  100k-view pages before the switch.
+  pages with very high view counts before the switch.
 - `time_on_page_visit_sec` is NULL for the **last page** of every visit (no
   next view to measure against)
 - DAX `AVERAGE` ignores NULLs — this is correct behaviour, but means the average is based only on measurable views

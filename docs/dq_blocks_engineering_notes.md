@@ -24,13 +24,13 @@ breaks several blocks.
 
 | # | Convention | Why |
 |---|---|---|
-| C1 | **`CAST(\`timestamp\` AS TIMESTAMP)`, never `to_timestamp()`** | The raw value is ISO-8601 UTC with a `T` separator, milliseconds and a `Z` suffix, e.g. `2026-03-02T00:00:00.229Z`. Neither a bare `to_timestamp()` nor the pattern `yyyy-MM-dd HH:mm:ss` matches it; the first run returned NULL for all 2.8M rows. `CAST` accepts ISO-8601. |
+| C1 | **`CAST(\`timestamp\` AS TIMESTAMP)`, never `to_timestamp()`** | The raw value is ISO-8601 UTC with a `T` separator, milliseconds and a `Z` suffix, e.g. `2026-03-02T00:00:00.229Z`. Neither a bare `to_timestamp()` nor the pattern `yyyy-MM-dd HH:mm:ss` matches it; the first run returned NULL for all of the millions of rows. `CAST` accepts ISO-8601. |
 | C2 | **Range-filter on the raw string, not on the cast** | ISO-8601 sorts lexicographically in the same order as chronologically, so `` `timestamp` >= '2026-03-02' `` selects correctly *and* lets Delta skip files on min/max statistics. A predicate wrapped in `CAST` defeats file skipping. BRD NFR-02. |
 | C3 | **Never window on `gmdp_date` or `gmdp_timestamp`** | Those record when the platform ingested a row. A late load would move an event into the wrong day. They have exactly one legitimate use: measuring load latency in A2. |
-| C4 | **Identity ratios are daily, never pooled** | Pooling a fortnight reported 20.0 browser identities per person; the same state daily reads 3.9, because identities do not recur across days while people do. BRD §10.2, FR-DET-08. |
+| C4 | **Identity ratios are daily, never pooled** | Pooling a fortnight reported several times as many browser identities per person as the same state reads daily, because identities do not recur across days while people do. BRD §10.2, FR-DET-08. |
 | C5 | **`DESCRIBE` / Spark schema, never `information_schema`** | The workspace resolves two-part names through the Hive Metastore. `information_schema` is a Unity Catalog feature and raises *Table or view not found*. BRD NFR-03. |
 | C6 | **Bronze is already flat** | There is no `customDimensions` column to parse. The former CustomProps are first-class columns: `GPN`, `Email`, `PageURL`, `PageName`, `PublishingDate`, `SiteId`, `SiteName`, `GICTrackingID`. |
-| C7 | **Absolute bounds sit below the healthy weekend** | Healthy weekday page views per session is 1.94–2.35 but healthy weekend is 1.59–1.71. A bound placed under the weekday would warn every Saturday. BRD FR-CAL-02. |
+| C7 | **Absolute bounds sit below the healthy weekend** | Healthy weekday page views per session sits around 2, but the healthy weekend sits clearly lower. A bound placed under the weekday would warn every Saturday. BRD FR-CAL-02. |
 | C8 | **Writes only into `dq`** | Source tables are read-only. BRD NFR-04. |
 
 ### Column names, confirmed 2026-09-11
@@ -38,7 +38,7 @@ breaks several blocks.
 | Concept | Column | Note |
 |---|---|---|
 | Event time | `` `timestamp` `` | **STRING**, ISO-8601 UTC. Backtick it, it is a reserved word. |
-| Person | `GPN` | Not `user_gpn`. 8-digit. Present on 100 % of rows. |
+| Person | `GPN` | Not `user_gpn`. 8-digit. Present on every row. |
 | Browser identity | `user_Id` | The SDK cookie. The column that broke. |
 | Other identities | `user_AuthenticatedId`, `user_AccountId` | Application-supplied, not yet analysed. BRD OP-08. |
 | Session | `session_Id` | |
@@ -127,7 +127,7 @@ ratios, and the set of SDK versions seen.
   share of sessions of size one. It cannot be expressed in one `GROUP BY`.
 
 **Known limitation.** This block pools a fortnight, and pooling inflates
-per-person identity counts (C4). Its 20.0 is not comparable with the 3.9 that
+per-person identity counts (C4). Its pooled figure is not comparable with the one that
 Block 0c measures daily. The daily figures govern.
 
 ---
@@ -145,8 +145,8 @@ traffic on the SDK version that disappeared.
 **Non-obvious decisions.**
 - Distinct people runs alongside as a control. If the population moved too, the
   cause is something other than the identifier.
-- The weekday is printed next to the date. Weekend traffic is roughly 5 % of a
-  weekday, so a naive reading mistakes every Sunday for an outage.
+- The weekday is printed next to the date. Weekend traffic is a small fraction of a
+  weekday's, so a naive reading mistakes every Sunday for an outage.
 
 **What it found.** Onset on 7 April, completion on 8 April, then a flat plateau:
 a staged rollout, not a switch. The SDK version share was already zero on 25
@@ -245,7 +245,7 @@ forbids retuning them to the current state.
 
 ## Block 2 — The working slice
 
-**Intent.** Read the 173M-row bronze table once per day, not once per check.
+**Intent.** Read the bronze table (more than a hundred million rows) once per day, not once per check.
 BRD NFR-01.
 
 **What it does.** Materialises `dq.pv_window`, a 70-day slice, partitioned by

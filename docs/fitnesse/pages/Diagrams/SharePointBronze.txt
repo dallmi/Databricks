@@ -17,8 +17,8 @@ entity "pages" as pages {
   PageTitle : string
   SiteId : FK
   ..
-  48K rows
-  '''only 4% have __ORG__GICTrackingID'''
+  tens of thousands of rows
+  '''only a small minority have __ORG__GICTrackingID'''
 }
 
 entity "pageviews" as pv {
@@ -30,7 +30,7 @@ entity "pageviews" as pv {
   ViewTime : timestamp
   customDimensions : string
   ..
-  '''173M rows'''
+  '''hundreds of millions of rows'''
 }
 
 entity "customevents" as ce {
@@ -40,7 +40,7 @@ entity "customevents" as ce {
   EventName : string
   EventTime : timestamp
   ..
-  '''262M rows'''
+  '''hundreds of millions of rows'''
 }
 
 entity "sites" as sites {
@@ -49,7 +49,7 @@ entity "sites" as sites {
   SiteName : string
   SiteUrl : string
   ..
-  805 rows
+  hundreds of rows
 }
 
 entity "videos" as vid {
@@ -57,7 +57,7 @@ entity "videos" as vid {
   --
   pageId : FK
   ..
-  3K rows
+  thousands of rows
 }
 
 entity "master_employee_cdm_data" as cdm {
@@ -66,7 +66,7 @@ entity "master_employee_cdm_data" as cdm {
   T_NUMBER : string
   user_gpn : string
   ..
-  24M rows, 246 cols
+  tens of millions of rows, 246 cols
 }
 
 pages ||--o{ pv    : "pageUUID = pageId (to verify)"
@@ -80,12 +80,12 @@ cdm   }o..o{ pv    : "potential user_gpn bridge"
 !2 Volumes & Write Pattern
 
 | '''Table'''            | '''Rows''' | '''Pattern''' |
-| customevents           | 262M       | (presumably Append) |
-| pageviews              | 173M       | '''Append WRITE''', 7 bursts in 1 min (API pagination) |
-| master_employee_cdm_data | 24M      | TBD |
-| pages                  | 48K        | '''MERGE daily snapshot replace''' |
-| videos                 | 3K         | TBD |
-| sites                  | 805        | TBD |
+| customevents           | Hundreds of millions | (presumably Append) |
+| pageviews              | Hundreds of millions | '''Append WRITE''', a handful of bursts in a minute (API pagination) |
+| master_employee_cdm_data | Tens of millions | TBD |
+| pages                  | Tens of thousands | '''MERGE daily snapshot replace''' |
+| videos                 | Thousands  | TBD |
+| sites                  | Hundreds   | TBD |
 
 !2 Critical Distinction: Inventory vs. Interactions
 
@@ -115,8 +115,8 @@ Confirmed bridge runs via iMEP HR: join pageviews.user_gpn = tbl_hr_employee.WOR
 
  * '''Schema inconsistency''': pages.__ORG__GICTrackingID vs. pageviews.GICTrackingID — different column names for the same business key. Harmonization happens in Silver (sharepoint_silver.webpage uses gICTrackingID).
  * '''1:1 URL↔TID mapping''': at the pages level, each URL has at most one TID. Safe for URL-based aggregation.
- * '''Append bursts on pageviews''': 7 fast writes within 1 minute (00:15-00:16 UTC) — not streaming but API pagination, very short windows.
- * '''customevents is ~2x larger than pageviews''' (262M vs 173M). Covers related but distinct interaction scopes.
+ * '''Append bursts on pageviews''': a handful of fast writes within about a minute — not streaming but API pagination, very short windows.
+ * '''customevents is substantially larger than pageviews''' (both hundreds of millions of rows). Covers related but distinct interaction scopes.
 
 !2 Cross References
 

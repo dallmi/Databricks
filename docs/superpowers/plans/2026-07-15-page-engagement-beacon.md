@@ -84,7 +84,7 @@ union pageViews, customEvents
 | extend effective_rate = todouble(logical_rows) / physical_rows
 
 // === V3: volume baseline for the flush estimate =============================
-// The spec (§7) estimates ~2 flushes/page view => up to +350M events/year.
+// The spec (§7) estimates ~2 flushes/page view => up to hundreds of millions of additional events/year.
 // This grounds the estimate in the platform team's own numbers before they
 // push back on it: daily pageViews vs daily customEvents, last 30 days.
 union pageViews, customEvents
@@ -422,7 +422,7 @@ def main() -> None:
         # View B: flush_seq 0 and 2 — seq 1 lost (beacon loss)
         flush("vi-B", 0, 1000, 25, "route",    "2026-07-15 09:00:01"),
         flush("vi-B", 2,  500, 60, "pagehide", "2026-07-15 09:01:00"),
-        # View C: single-flush view (the 73% case the beacon exists for)
+        # View C: single-flush view (the majority case the beacon exists for)
         flush("vi-C", 0, 42000, 100, "pagehide", "2026-07-15 10:00:42"),
     ]
     agg = aggregate_engagement(pd.DataFrame(rows))
@@ -935,7 +935,7 @@ git commit -m "feat: dormant engagement join onto pv store with consistency QA (
 
 **Interfaces:**
 - Consumes: the two final Markdown documents (this plan + the spec).
-- Produces: two self-contained DOCX files Michael can attach/upload in the corporate environment. Re-run this task's pandoc commands whenever either Markdown file changes.
+- Produces: two self-contained DOCX files `<name>` can attach/upload in the corporate environment. Re-run this task's pandoc commands whenever either Markdown file changes.
 
 - [ ] **Step 1: Convert both documents**
 

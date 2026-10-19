@@ -3,7 +3,7 @@ Tests the flattener mappings for the Video sub-domain of click_event.
 
 Regression guard: Video_Title / Video_Address / Video_PlayedTime were present in
 the export's raw CustomProps from day one but never mapped, so "Top videos" fell
-back to Video_Id and rendered opaque asset ids (ASSETID-550417190-2606).
+back to Video_Id and rendered opaque asset ids (ASSETID-123456789-2606).
 
 Plain-assert script (no test framework in this repo):
     python SiteOwnerDashboard/scripts/test_flatten_video.py
@@ -46,7 +46,7 @@ def video_raw() -> pd.DataFrame:
         "PageURL": "https://intranet.example/en/townhall.aspx",
         "ComponentName": "VideoPlayer", "Link_Type": "video",
         "Video_Action": "play",
-        "Video_Id": "ASSETID-550417190-2606",
+        "Video_Id": "ASSETID-123456789-2606",
         "Video_Title": "CEO Town Hall Q3",
         "Video_Type": "OnDemand",
         "Video_Duration": "254",
@@ -72,7 +72,7 @@ def main() -> None:
 
     row = clean.iloc[0]
     assert row["video_title"] == "CEO Town Hall Q3", row["video_title"]
-    assert row["video_id"] == "ASSETID-550417190-2606", row["video_id"]
+    assert row["video_id"] == "ASSETID-123456789-2606", row["video_id"]
     assert str(row["video_played_time"]) == "88", row["video_played_time"]
     assert row["video_address"] == "https://video.corp/watch/townhall"
 
@@ -90,7 +90,7 @@ def main() -> None:
     u = build_clean_interactions_table(flatten_appinsights(untitled))
     assert "video_title" not in u.columns or pd.isna(u.iloc[0].get("video_title")), \
         "absent Video_Title must not fabricate a value"
-    assert u.iloc[0]["video_id"] == "ASSETID-550417190-2606"
+    assert u.iloc[0]["video_id"] == "ASSETID-123456789-2606"
 
     print("OK — flattener maps the Video sub-domain incl. Video_Title")
 

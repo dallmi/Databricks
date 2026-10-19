@@ -17,7 +17,7 @@ entity "tbl_email" as email {
   CreatedBy : FK
   CreationDate : timestamp
   ..
-  145K rows
+  over a hundred thousand rows
 }
 
 entity "tbl_email_receiver_status" as rs {
@@ -30,7 +30,7 @@ entity "tbl_email_receiver_status" as rs {
   EmailLanguage : string
   DateTime : timestamp
   ..
-  '''293M rows — HUB #1'''
+  '''hundreds of millions of rows — HUB #1'''
 }
 
 entity "tbl_analytics_link" as al {
@@ -45,7 +45,7 @@ entity "tbl_analytics_link" as al {
   IsActive : int
   CreationDate : timestamp
   ..
-  '''533M rows — HUB #2'''
+  '''hundreds of millions of rows — HUB #2'''
 }
 
 entity "tbl_email_links" as links {
@@ -62,7 +62,7 @@ entity "tbl_email_components" as comp {
   --
   EmailId : FK
   ..
-  3.3M rows
+  millions of rows
 }
 
 entity "tbl_email_template_images" as img {
@@ -70,7 +70,7 @@ entity "tbl_email_template_images" as img {
   --
   EmailId : FK
   ..
-  1.7M rows
+  millions of rows
 }
 
 entity "tbl_event" as event {
@@ -80,7 +80,7 @@ entity "tbl_event" as event {
   Title : string
   EventDate : timestamp
   ..
-  100K rows
+  about a hundred thousand rows
 }
 
 entity "tbl_hr_employee" as hr {
@@ -90,7 +90,7 @@ entity "tbl_hr_employee" as hr {
   ALTERNATE_WORKER_ID : string
   ORGANIZATIONAL_UNIT : FK
   ..
-  265K rows
+  hundreds of thousands of rows
 }
 
 entity "tbl_hr_costcenter" as cc {
@@ -124,13 +124,13 @@ hr    }o--|| user  : "LOWER(T_NUMBER) = LOWER(__ORG__Id)"
 !2 Volumes & Write Pattern
 
 | '''Table'''                        | '''Rows'''  | '''Pattern'''                   |
-| tbl_email_receiver_status          | '''293M''' | MERGE full-table upsert (27-72M/run) |
-| tbl_analytics_link                 | '''533M''' | MERGE '''incremental''' (3.7-8.5K/run) |
-| tbl_email                          | 145K       | MERGE full-table upsert |
-| tbl_hr_employee                    | 265K       | MERGE full-table upsert |
-| tbl_email_components               | 3.3M       | MERGE |
-| tbl_email_template_images          | 1.7M       | MERGE |
-| tbl_event                          | 100K       | MERGE |
+| tbl_email_receiver_status          | '''Hundreds of millions''' | MERGE full-table upsert (tens of millions/run) |
+| tbl_analytics_link                 | '''Hundreds of millions''' | MERGE '''incremental''' (thousands/run) |
+| tbl_email                          | Over a hundred thousand | MERGE full-table upsert |
+| tbl_hr_employee                    | Hundreds of thousands | MERGE full-table upsert |
+| tbl_email_components               | Millions   | MERGE |
+| tbl_email_template_images          | Millions   | MERGE |
+| tbl_event                          | About a hundred thousand | MERGE |
 
 !2 Three Join Patterns in This Domain
 

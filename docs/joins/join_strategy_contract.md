@@ -39,7 +39,7 @@ ON analytics_link.TNumber = tbl_hr_employee.T_NUMBER   -- both lowercase t######
 - `tbl_hr_user.__ORG__Id` is **UPPERCASE** → join `LOWER(__ORG__Id) = LOWER(T_NUMBER)`
 - GPN comes from `pageviews.user_gpn` (8-digit) → `tbl_hr_employee.WORKER_ID` is the bridge (**no** external source required)
 
-**Why**: TNumber appears in only two tables. For SharePoint person analytics you must resolve separately via `sharepoint_gold.pbi_db_employeecontact` (24M rows) or CDM — that is **not** TNumber-compatible without a bridge.
+**Why**: TNumber appears in only two tables. For SharePoint person analytics you must resolve separately via `sharepoint_gold.pbi_db_employeecontact` (tens of millions of rows) or CDM — that is **not** TNumber-compatible without a bridge.
 
 ---
 
@@ -49,7 +49,7 @@ TrackingId format: `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL` (32 chars, 5 segments,
 
 Segments:
 - **SEG1 = Cluster**
-- **SEG2 = Pack number** → together SEG1-2 identifies the campaign (`QRREP-0000058`)
+- **SEG2 = Pack number** → together SEG1-2 identifies the campaign (`ABCDE-0000123`)
 - SEG3 = YYMMDD of the individual activity
 - SEG4 = activity sequence within the Pack
 - SEG5 = **Channel** (Email/Newsletter/Article/…) — value differs by system vocabulary (iMEP: `EMI`/`NLI`/`TWE`; SharePoint: `IAN`/`ITS`/`OPN`/`ANC`)
@@ -63,7 +63,7 @@ ON  array_join(slice(split(email.TrackingId, '-'), 1, 2), '-')
 
 **DON'T**:
 ```sql
--- WRONG: full-string match (6/1677 hits, Jaccard 0.004)
+-- WRONG: full-string match (only a handful of hits, the two ID sets are almost disjoint)
 ON email.TrackingId = pages.__ORG__GICTrackingID
 
 -- ALSO WRONG: SEG1-4 match (Cluster-Pack-Date-Activity)
@@ -79,7 +79,7 @@ ON email.TrackingId = pages.__ORG__GICTrackingID
 
 ### Rule 4 — Gold is Full Rebuild. Plan for the refresh window.
 
-**Pattern**: iMEP Gold Tier-0 (`final`, 520M rows) and Tier-1/2 aggregates are built as `CREATE OR REPLACE TABLE AS SELECT` — per refresh the table is fully torn down and rewritten, not merged incrementally.
+**Pattern**: iMEP Gold Tier-0 (`final`, hundreds of millions of rows) and Tier-1/2 aggregates are built as `CREATE OR REPLACE TABLE AS SELECT` — per refresh the table is fully torn down and rewritten, not merged incrementally.
 
 **Consequence**:
 - During a refresh run a query can hit a partial / momentarily inconsistent state (old snapshot vs. new snapshot swap atomically at the end, but parallel reads against an ongoing rebuild are more expensive).
@@ -91,15 +91,15 @@ ON email.TrackingId = pages.__ORG__GICTrackingID
 
 ---
 
-### Rule 5 — Coverage reality: ~4% pages, ~1.3% mailings
+### Rule 5 — Coverage reality: few pages, even fewer mailings
 
 **Mandatory caveats** in every dashboard:
 
-1. **SharePoint side**: Only 1,949 / 48,419 pages (~4%) have `__ORG__GICTrackingID`. Only these ~4% of the 84M interaction rows are Pack-attributable. The remaining 96% = "untracked intranet activity" — separate section or labelled transparently.
+1. **SharePoint side**: Only a small minority of pages (low single-digit percent) have `__ORG__GICTrackingID`. Only that small share of the tens of millions of interaction rows is Pack-attributable. The vast remainder = "untracked intranet activity" — separate section or labelled transparently.
 
-2. **iMEP side**: Only 986 / 73,930 mailings (1.3%) have TrackingId. However: strong uptrend (2024: 99 → 2025: 637 → 2026 YTD: 250). **Dashboard default period: from 2025.**
+2. **iMEP side**: Only a small fraction of mailings (low single-digit percent) have TrackingId. However: strong uptrend (2025 several times 2024, 2026 YTD continuing). **Dashboard default period: from 2025.**
 
-3. **Site concentration**: 99.4% of tracked pages live on **a single site** ("News and events"). If the dashboard filters globally → recommend restricting by default to this site.
+3. **Site concentration**: Almost all tracked pages live on **a single site** ("News and events"). If the dashboard filters globally → recommend restricting by default to this site.
 
 **Why**: Without these caveats stakeholders see massive absolute numbers and wrong rate calculations.
 
@@ -107,7 +107,7 @@ ON email.TrackingId = pages.__ORG__GICTrackingID
 
 ## Quick reference — Join patterns
 
-### Pattern A: Per-recipient-event (Bronze chain, the 533M-row truth)
+### Pattern A: Per-recipient-event (Bronze chain, the full-volume truth)
 
 ```sql
 SELECT e.TrackingId, rs.TNumber, al.LinkTypeEnum, al.CreationDate AS event_time, al.Agent
@@ -119,7 +119,7 @@ WHERE  e.TrackingId IS NOT NULL
   AND  al.IsActive  = 1
 ```
 
-→ Full-detail grain, but 533M rows. Ad-hoc analyses only.
+→ Full-detail grain, but hundreds of millions of rows. Ad-hoc analyses only.
 
 ### Pattern B: Gold consumption (when it has to be fast)
 
@@ -129,7 +129,7 @@ FROM   imep_gold.final
 WHERE  /* whatever filter */
 ```
 
-→ 520M rows, already denormalized, HR-enriched. **Default for dashboard backends.**
+→ Hundreds of millions of rows, already denormalized, HR-enriched. **Default for dashboard backends.**
 
 ### Pattern C: Cross-channel funnel (Pack level)
 
@@ -182,7 +182,7 @@ FULL OUTER JOIN sp_side s ON s.tracking_pack_id = e.tracking_pack_id;
 | `__ORG__Id = T_NUMBER` without case norm | 0 hits | `LOWER(__ORG__Id) = LOWER(T_NUMBER)` |
 | Gold query parallel to full rebuild | Partial / momentarily inconsistent state | Build dashboards resilient against Gold (Rule 4) — clarify concrete refresh slots with upstream, we don't see them in the repo |
 | `SUM(views)` without TID filter | Inflated numbers | `WHERE __ORG__GICTrackingID IS NOT NULL` for the attributed funnel |
-| `COUNT(*) FROM imep_gold.final` without filter | ~520M, timeout | Always restrict by time or filter on PartitionKey |
+| `COUNT(*) FROM imep_gold.final` without filter | Hundreds of millions of rows, timeout | Always restrict by time or filter on PartitionKey |
 | Mailing send time from `tbl_email.CreationDate` | Wrong timestamps | Send time lives in `tbl_email_receiver_status.DateTime` |
 | Mixing up `GICTrackingID` vs `__ORG__GICTrackingID` | Schema-inconsistent | `pages` has `__ORG__GICTrackingID`, `pageviews` has `GICTrackingID` — both mean the same, but case variants occur |
 

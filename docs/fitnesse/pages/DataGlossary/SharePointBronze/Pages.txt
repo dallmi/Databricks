@@ -1,16 +1,16 @@
 !1 Pages ('''sharepoint_bronze.pages''')
 
-'''The cross-channel bridge.''' Page inventory with __ORG__GICTrackingID — '''the only place''' where SharePoint-side interactions can be attributed to a Pack. 48K rows, but only '''1,949 (~4%) have __ORG__GICTrackingID populated'''. The most critical coverage blocker in the entire cross-channel model.
+'''The cross-channel bridge.''' Page inventory with __ORG__GICTrackingID — '''the only place''' where SharePoint-side interactions can be attributed to a Pack. Tens of thousands of rows, but only '''a small minority (low single-digit percent) have __ORG__GICTrackingID populated'''. The most critical coverage blocker in the entire cross-channel model.
 
 !2 Meta
 | '''Layer'''          | Bronze |
 | '''Source system'''  | SharePoint -> Change Data Capture (CDC) or Snapshot -> Delta Bronze |
 | '''Grain'''          | 1 row per SharePoint page (snapshot) |
 | '''Primary key'''    | pageUUID (GUID) |
-| '''Cross-channel key''' | __ORG__GICTrackingID — '''only 4% populated''' ⚠️ |
+| '''Cross-channel key''' | __ORG__GICTrackingID — '''only a small minority populated''' ⚠️ |
 | '''Write pattern''' | MERGE daily snapshot replace (Service Principal) |
-| '''Rows'''           | '''~48K''' (timespan 1900 - Apr 2026) |
-| '''Coverage'''       | 1,949 / 48,419 pages (~4%) have TrackingID -> '''article pages only (News/Events)''' |
+| '''Rows'''           | '''Tens of thousands''' (timespan 1900 - Apr 2026) |
+| '''Coverage'''       | A small minority of pages (low single-digit percent) have TrackingID -> '''article pages only (News/Events)''' |
 
 !2 Neighborhood Diagram
 
@@ -54,11 +54,11 @@ pages ||--o| email : "__ORG__GICTrackingID ↔ TrackingId (Pack / SEG1-2)"
 
 | '''Column'''            | '''Type''' | '''Role'''              | '''Notes''' |
 | pageUUID                | string (GUID) | '''PK'''              | Unique per page. Referenced as marketingPageId in all sharepoint_gold.* metric tables. |
-| __ORG__GICTrackingID        | string     | '''Cross-channel key'''  | Format: CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL (32-char, 5-seg, UPPER). '''Only 4% populated.''' |
+| __ORG__GICTrackingID        | string     | '''Cross-channel key'''  | Format: CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL (32-char, 5-seg, UPPER). '''Only a small minority populated.''' |
 | __ORG__ArticleDate          | date       | Publication date         | When the article was published. Often NULL for non-article pages. |
 | PageURL / PageUrl / url | string     | URL                      | Column name varies — verify via DESCRIBE. 1:1 URL↔TID mapping. |
 | PageTitle               | string     | Display                  | Page title |
-| SiteId                  | string     | FK -> sites.SiteId       | 99.4% of tracked pages = "News and events" |
+| SiteId                  | string     | FK -> sites.SiteId       | Almost all tracked pages = "News and events" |
 
 Full list (95 columns total) via !- DESCRIBE sharepoint_bronze.pages -!.
 
@@ -66,10 +66,10 @@ Full list (95 columns total) via !- DESCRIBE sharepoint_bronze.pages -!.
 
 {{{
 pageUUID          = "00000000-0000-4000-8000-000000000001"
-__ORG__GICTrackingID  = "QRREP-0000058-240709-0000060-IAN"     -- SEG5 = IAN (SharePoint)
+__ORG__GICTrackingID  = "ABCDE-0000123-240715-0000046-ITS"     -- SEG5 = ITS (SharePoint)
 __ORG__ArticleDate    = 2024-07-09
-PageURL           = "/sites/news/articles/q2-investor-update.aspx"
-PageTitle         = "Q2 Investor Update 2024"
+PageURL           = "/<site>/<page>.aspx"
+PageTitle         = "<title>"
 SiteId            = "..."
 }}}
 
@@ -122,24 +122,24 @@ JOIN   page_packs  p ON p.seg1_4 = e.seg1_4
 
 !2 Quality Caveats — Critical
 
-!3 ⚠️ 4% coverage blocker
+!3 ⚠️ Low-coverage blocker
 
-Only '''1,949 / 48,419 pages''' have __ORG__GICTrackingID. Consequence:
- * Only ~4% of the 84M SharePoint interaction rows are Pack-attributable
- * The remaining 96% = "untracked intranet activity" (internal tools, settings, collaboration pages etc.)
- * '''The dashboard must make this explicit''' — either (a) show only the 4% subset labelled "Article Pages only", or (b) two separate sections (attributed vs. unattributed)
+Only '''a small minority of pages (low single-digit percent)''' have __ORG__GICTrackingID. Consequence:
+ * Only a low single-digit percentage of the tens of millions of SharePoint interaction rows are Pack-attributable
+ * The vast remainder = "untracked intranet activity" (internal tools, settings, collaboration pages etc.)
+ * '''The dashboard must make this explicit''' — either (a) show only the small tracked subset labelled "Article Pages only", or (b) two separate sections (attributed vs. unattributed)
 
 !3 Site concentration
 
-'''99.4% of tracked pages''' (1,937 of 1,949) live on '''a single site''': "News and events".
+'''Almost all tracked pages''' live on '''a single site''': "News and events".
  * Dashboard default '''should''' be restricted to this site
- * Coverage reality check: 83 Pack IDs (SEG1-2) accessible to this dashboard
+ * Coverage reality check: only several dozen Pack IDs (SEG1-2) accessible to this dashboard
 
 !3 Coverage rollout
 
- * Start of TID population: September 2024 (33.9% coverage for new pages)
- * Peak so far: March 2026 (70.5%)
- * '''Never reached 80%''' — even "current" pages have 25-30% missing TIDs
+ * Start of TID population: September 2024 (only a minority of new pages covered)
+ * Peak so far: March 2026 (a clear majority of new pages)
+ * '''Never reached full coverage''' — even "current" pages have a substantial share of missing TIDs
 
 Default time filter: WHERE __ORG__ArticleDate >= '2024-09-01'.
 

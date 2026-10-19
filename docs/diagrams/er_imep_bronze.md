@@ -1,6 +1,6 @@
 # ER Diagram — `imep_bronze.*`
 
-> Extended version of Section 2 of [architecture_diagram.md](../architecture_diagram.md). Shows the full Bronze topology for iMEP with every join key, row count, and cross-link to HR.
+> Extended version of Section 2 of [architecture_diagram.md](../architecture_diagram.md). Shows the full Bronze topology for iMEP with every join key, order-of-magnitude row count, and cross-link to HR.
 
 ---
 
@@ -21,15 +21,15 @@ erDiagram
     tbl_event                 ||--o{ tbl_email_receiver_status : "? (to verify)"
 
     tbl_email {
-        string Id PK "145K rows"
-        string TrackingId "32-char, 1.3% populated"
+        string Id PK "over a hundred thousand rows"
+        string TrackingId "32-char, rarely populated"
         string Title
         string Subject
         string CreatedBy FK
         timestamp CreationDate "template created"
     }
     tbl_email_receiver_status {
-        string Id PK "293M rows — HUB #1"
+        string Id PK "hundreds of millions of rows — HUB #1"
         string EmailId FK
         string TNumber FK
         string Receiver
@@ -39,7 +39,7 @@ erDiagram
         timestamp DateTime "actual send time"
     }
     tbl_analytics_link {
-        string Id PK "533M rows — HUB #2"
+        string Id PK "hundreds of millions of rows — HUB #2"
         string EmailId FK
         string EmailReceiverStatusId FK
         string TNumber FK
@@ -57,21 +57,21 @@ erDiagram
         string LinkLabel
     }
     tbl_email_components {
-        string Id PK "3.3M rows"
+        string Id PK "millions of rows"
         string EmailId FK
     }
     tbl_email_template_images {
-        string Id PK "1.7M rows"
+        string Id PK "millions of rows"
         string EmailId FK
     }
     tbl_event {
-        string Id PK "100K rows"
+        string Id PK "about a hundred thousand rows"
         string TrackingId
         string Title
         timestamp EventDate
     }
     tbl_hr_employee {
-        string T_NUMBER PK "265K rows, lowercase"
+        string T_NUMBER PK "hundreds of thousands of rows, lowercase"
         string WORKER_ID "= GPN, 8-digit"
         string ALTERNATE_WORKER_ID
         string ORGANIZATIONAL_UNIT FK
@@ -97,13 +97,13 @@ erDiagram
 
 | Table | Rows | Pattern |
 |---|---|---|
-| `tbl_email_receiver_status` | **293M** | MERGE full-table upsert (27-72M/run) |
-| `tbl_analytics_link` | **533M** | MERGE **incremental** (3.7-8.5K/run) |
-| `tbl_email` | 145K | MERGE full-table upsert |
-| `tbl_hr_employee` | 265K | MERGE full-table upsert |
-| `tbl_email_components` | 3.3M | MERGE |
-| `tbl_email_template_images` | 1.7M | MERGE |
-| `tbl_event` | 100K | MERGE |
+| `tbl_email_receiver_status` | **Hundreds of millions** | MERGE full-table upsert (tens of millions/run) |
+| `tbl_analytics_link` | **Hundreds of millions** | MERGE **incremental** (thousands/run) |
+| `tbl_email` | Over a hundred thousand | MERGE full-table upsert |
+| `tbl_hr_employee` | Hundreds of thousands | MERGE full-table upsert |
+| `tbl_email_components` | Millions | MERGE |
+| `tbl_email_template_images` | Millions | MERGE |
+| `tbl_event` | About a hundred thousand | MERGE |
 
 ---
 

@@ -5,10 +5,10 @@ Gold topology for SharePoint. '''Strict 4-tier hierarchy''' (20 tables + 3 Video
 !2 4-Tier Hierarchy
 
 | '''Tier''' | '''Role''' | '''# Tables''' | '''Representative members''' |
-| Tier 0 — Atomic Interaction Facts | Per-Visitor × Page × Date | 4 | pbi_db_interactions_metrics (84M), pageviewed_metric (84M), pagevisited_metric (81M), 90_days_interactions_metric (9M) |
-| Tier 1 — Pre-Aggregated Overview | Rolling Windows (7/14/21/28d) over Page × Date × Division | 3 | datewise_overview_fact_tbl (7.5M, 27 cols) |
-| Tier 2 — Engagement / Social Signals | Likes, Comments, CTA | 3 | pageliked_metric (400K), pagecommented_metric (500K), page_like_int_fact (30K) |
-| Tier 3 — Dimension Tables | Person + Page + Calendar + Referrer | ~7 | employeecontact (24.3M, candidate person-bridge), website_page_inventory, calendar, referer_application |
+| Tier 0 — Atomic Interaction Facts | Per-Visitor × Page × Date | 4 | pbi_db_interactions_metrics (tens of millions), pageviewed_metric (tens of millions), pagevisited_metric (tens of millions), 90_days_interactions_metric (millions) |
+| Tier 1 — Pre-Aggregated Overview | Rolling Windows (7/14/21/28d) over Page × Date × Division | 3 | datewise_overview_fact_tbl (millions of rows, 27 cols) |
+| Tier 2 — Engagement / Social Signals | Likes, Comments, CTA | 3 | pageliked_metric (hundreds of thousands), pagecommented_metric (hundreds of thousands), page_like_int_fact (tens of thousands) |
+| Tier 3 — Dimension Tables | Person + Page + Calendar + Referrer | ~7 | employeecontact (tens of millions of rows, candidate person-bridge), website_page_inventory, calendar, referer_application |
 
 Plus '''Video Sub-Domain (3 tables)''' — the only tables in the entire system produced by a managed Declarative Pipeline (Spark 3.5.2/4.0.0, ChangeDataFeed, proper comments). The rest is Notebook-basierter Full Rebuild (Spark 3.2.1)..
 
@@ -26,8 +26,8 @@ entity "pages" as pages {
   __ORG__GICTrackingID : string
   PageURL : string
   ..
-  '''48K — THE DIMENSION'''
-  '''only 4% have TrackingID ⚠️'''
+  '''tens of thousands — THE DIMENSION'''
+  '''only a small minority have TrackingID ⚠️'''
 }
 
 entity "pbi_db_interactions_metrics" as im {
@@ -40,7 +40,7 @@ entity "pbi_db_interactions_metrics" as im {
   durationsum : double
   commentss : bigint
   ..
-  '''84M — Master Fact'''
+  '''tens of millions — Master Fact'''
 }
 
 entity "pbi_db_pageviewed_metric" as pvm {
@@ -50,7 +50,7 @@ entity "pbi_db_pageviewed_metric" as pvm {
   viewingcontactid : string
   views : bigint
   ..
-  84M — lightweight 5 cols
+  tens of millions — lightweight 5 cols
 }
 
 entity "pbi_db_pagevisited_metric" as pvsm {
@@ -60,7 +60,7 @@ entity "pbi_db_pagevisited_metric" as pvsm {
   durationsum : double
   visitedPageId : string
   ..
-  81M — visit-oriented
+  tens of millions — visit-oriented
 }
 
 entity "pbi_db_datewise_overview_fact_tbl" as dw {
@@ -71,7 +71,7 @@ entity "pbi_db_datewise_overview_fact_tbl" as dw {
   page_div_date_views_7d : bigint
   page_div_date_views_14d : bigint
   ..
-  7.5M — page × date × division
+  millions — page × date × division
 }
 
 entity "pbi_db_90_days_interactions_metric" as ninety {
@@ -79,7 +79,7 @@ entity "pbi_db_90_days_interactions_metric" as ninety {
   --
   views_90d : bigint
   ..
-  9M — 90-day window
+  millions — 90-day window
 }
 
 entity "pbi_db_employeecontact" as ec {
@@ -87,13 +87,13 @@ entity "pbi_db_employeecontact" as ec {
   --
   T_NUMBER : string
   ..
-  '''24M — potential T-Number bridge'''
+  '''tens of millions — potential T-Number bridge'''
 }
 
 entity "pbi_db_page_visitedkey_view" as pvkv {
   * visitkey : string <<PK>>
   ..
-  76M — visit-key list
+  tens of millions — visit-key list
 }
 
 entity "tbl_email" as email {
@@ -116,15 +116,15 @@ pages }o--|| email : "__ORG__GICTrackingID ↔ TrackingId (Pack / SEG1-2)"
 !2 Volumes & Use Cases
 
 | '''Table'''                          | '''Rows''' | '''Cols''' | '''Use Case''' |
-| pbi_db_interactions_metrics          | '''84M'''  | 11         | '''Default''' — Views + Visits + Duration + Comments in one table |
-| pbi_db_pageviewed_metric             | 84M        | 5          | View counts only, super fast |
-| pbi_db_pagevisited_metric            | 81M        | 9          | Visit-oriented (with dedup) |
-| pbi_db_datewise_overview_fact_tbl    | '''7.5M''' | 31         | Pre-aggregated page × date × division, rolling windows (7/14/21/28d) |
-| pbi_db_90_days_interactions_metric   | 9M         | 11         | 90-day window, small, for short-term dashboards |
-| pbi_db_page_visitedkey_view          | 76M        | 1          | Visit-key filter view |
-| pbi_db_employeecontact               | '''24M'''  | 17         | '''Potential person bridge''' (viewingcontactid ↔ T_NUMBER) |
+| pbi_db_interactions_metrics          | '''Tens of millions''' | 11 | '''Default''' — Views + Visits + Duration + Comments in one table |
+| pbi_db_pageviewed_metric             | Tens of millions | 5    | View counts only, super fast |
+| pbi_db_pagevisited_metric            | Tens of millions | 9    | Visit-oriented (with dedup) |
+| pbi_db_datewise_overview_fact_tbl    | '''Millions''' | 31     | Pre-aggregated page × date × division, rolling windows (7/14/21/28d) |
+| pbi_db_90_days_interactions_metric   | Millions   | 11         | 90-day window, small, for short-term dashboards |
+| pbi_db_page_visitedkey_view          | Tens of millions | 1    | Visit-key filter view |
+| pbi_db_employeecontact               | '''Tens of millions''' | 17 | '''Potential person bridge''' (viewingcontactid ↔ T_NUMBER) |
 
-Plus sharepoint_clicks_gold.pbi_db_ctalabel_intr_fact_gold (3M) for CTA click attribution.
+Plus sharepoint_clicks_gold.pbi_db_ctalabel_intr_fact_gold (millions of rows) for CTA click attribution.
 
 !2 Three Critical Rules
 
@@ -142,9 +142,9 @@ WHERE  p.__ORG__GICTrackingID IS NOT NULL
 GROUP BY p.__ORG__GICTrackingID
 }}}
 
-!3 Rule 2 — ~96% of rows are "untracked"
+!3 Rule 2 — the vast majority of rows are "untracked"
 
-Only 4% of pages have a TrackingID. Of 84M interaction rows, '''~80M are unattributable'''. The dashboard must make this explicit — e.g. two separate sections.
+Only a small minority of pages (low single-digit percent) have a TrackingID. Of the tens of millions of interaction rows, '''the vast majority are unattributable'''. The dashboard must make this explicit — e.g. two separate sections.
 
 !3 Rule 3 — viewingcontactid ≠ TNumber
 
@@ -166,7 +166,7 @@ entity "pbi_db_ctalabel_intr_fact_gold" as cta {
   ctalabel : string
   clicks : bigint
   ..
-  3M rows
+  millions of rows
 }
 entity "pages" as p {
   * pageUUID : string <<PK>>
@@ -203,7 +203,7 @@ Cross-channel match to imep_bronze.tbl_email.TrackingId (Pack / SEG1-2)
 
 '''Gold co-location with iMEP Gold''': both schemas live in the same ADLS gold account → cross-channel joins inside Fabric/Spark without cross-account auth.
 
-'''⚠️ Zero partitioning''' on any of the 20 tables — interactions_metrics (84M) + pageviewed_metric (84M) trigger full scans on any query without a date filter.
+'''⚠️ Zero partitioning''' on any of the 20 tables — interactions_metrics + pageviewed_metric (tens of millions of rows each) trigger full scans on any query without a date filter.
 
 !2 Cross References
 

@@ -57,7 +57,7 @@ Supporting:
 32 characters, 5 segments, `-`-separated:
 
 ```
-QRREP-0000058-240709-0000060-EMI
+ABCDE-0000123-240709-0000045-EMI
   │       │       │       │     └── tracking_channel_abbr  (EMI / INT / EVT / BAN)
   │       │       │       └──────── tracking_activity_number
   │       │       └──────────────── tracking_pub_date (YYMMDD)
@@ -252,7 +252,7 @@ The following points are to be clarified **before** implementation starts, with 
 - ~~**OP-03**~~ ✅ Unique dedup: `RecipientID + EmailId`. Multi-device via CTE `HAVING COUNT(DISTINCT Agent) > 1`.
 - ~~**OP-04**~~ ✅ Tracking ID lives on `imep_bronze.tbl_email.TrackingId` (mailing level). Cross-channel join via `tbl_analytics_link.EmailId → tbl_email.Id → tbl_email.TrackingId`. Naming mapping: `TrackingId` (iMEP) ↔ `GICTrackingID` (SharePoint, with case variants) ↔ `tracking_id` (CPLAN).
 - **OP-05** Audience size per pack: does this come from iMEP (distribution list size) or CPLAN (`pack.target_audience_size`)?
-- ~~**OP-06**~~ ✅ Historisation: `tbl_pbi_platform_mailings` from 2020-11-18 (5+ years, 73.8k rows), `tbl_pbi_platform_events` from 2013-10-10 (12+ years, 84k rows). Both refreshed daily. Bronze tables to be checked separately, but gold coverage shows: sufficiently long history.
+- ~~**OP-06**~~ ✅ Historisation: `tbl_pbi_platform_mailings` from November 2020 (5+ years, tens of thousands of rows), `tbl_pbi_platform_events` from October 2013 (12+ years, tens of thousands of rows). Both refreshed daily. Bronze tables to be checked separately, but gold coverage shows: sufficiently long history.
 - ~~**OP-07**~~ ✅ Recipient runs via `TNumber` (format `t100200`) — HR join in iMEP via `TBL_HR_EMPLOYEES.T_NUMBER` (**case warning**: `tbl_hr_user.__ORG__Id` is uppercase `T100200`, `T_NUMBER` is lowercase — normalisation mandatory).
 - **OP-07b** `TBL_HR_COSTCENTER.ORGANIZATIONAL_UNIT` join: uniqueness (1:1) and historisation (org changes)?
 - **OP-07c** `TBL_EMAIL.CreatedBy` — is this required in the dashboard as a filter / dimension (creator reporting)?
@@ -260,13 +260,13 @@ The following points are to be clarified **before** implementation starts, with 
 - ~~**OP-07e**~~ ✅ Resolved by the OP-07d finding. **Consequence**: in the silver ETL for `fact_page_view`, immediately resolve the GPN via `WORKER_ID` to `T_NUMBER`. After that, `t_number` is the only recipient key across the entire silver/gold layer.
 - ~~**OP-07f**~~ ✅ **iMEP Gold fully evaluated** (Q16 finding, see [findings/q16-imep-gold-inventory.md](findings/q16-imep-gold-inventory.md)):
   - **Gold does contain engagement aggregates after all.** The Q1b search was too narrow — only `tbl_pbi_platform_mailings` was inspected, not the full schema.
-  - **5-tier architecture**: atomic fact (`Final`, 525M), rolling-timespan aggs (Tier 2), **mailing-level engagement summaries** (Tier 3 — `tbl_pbi_engagement`, `tbl_pbi_mailingreciever_region`, `_division`), platform metadata (Tier 4), reference (Tier 5).
-  - **`tbl_pbi_engagement`** (1.38M rows) — Mailing × Link/Component with `UniqueOpens`, `UniqueClicks`, `Count`.
-  - **`tbl_pbi_mailingreciever_region`** (697K) — Mailing × Region/Country/Town.
-  - **`tbl_pbi_mailingreciever_division`** (290K) — Mailing × Business Division.
+  - **5-tier architecture**: atomic fact (`Final`, hundreds of millions of rows), rolling-timespan aggs (Tier 2), **mailing-level engagement summaries** (Tier 3 — `tbl_pbi_engagement`, `tbl_pbi_mailingreciever_region`, `_division`), platform metadata (Tier 4), reference (Tier 5).
+  - **`tbl_pbi_engagement`** (over a million rows) — Mailing × Link/Component with `UniqueOpens`, `UniqueClicks`, `Count`.
+  - **`tbl_pbi_mailingreciever_region`** (hundreds of thousands of rows) — Mailing × Region/Country/Town.
+  - **`tbl_pbi_mailingreciever_division`** (hundreds of thousands of rows) — Mailing × Business Division.
   - **Consequence**: `silver.fact_email` is **not built from bronze**, but is a direct SELECT from Tier-3 gold. No multi-device CTE, no HR join — everything pre-aggregated.
   - **Aggregates have NO historisation** (rebuild on pipeline run). For long-term trend analysis we must persist snapshots.
-- **OP-07g** (new, **critical**) **66% NULL-region in gold** — `184M of 278M recipients` have no region assignment due to a failing `tbl_hr_employee.ORGANIZATIONAL_UNIT ↔ tbl_hr_costcenter` JOIN. Per Genie, this is *the* dominant data-quality blocker. Dashboard must communicate this transparently. Root-cause analysis needed: are the affected employees ex-staff with stale cost centres? Is there a cost-centre history we could use?
+- **OP-07g** (new, **critical**) **Majority NULL-region in gold** — the majority of recipients (out of hundreds of millions) have no region assignment due to a failing `tbl_hr_employee.ORGANIZATIONAL_UNIT ↔ tbl_hr_costcenter` JOIN. Per Genie, this is *the* dominant data-quality blocker. Dashboard must communicate this transparently. Root-cause analysis needed: are the affected employees ex-staff with stale cost centres? Is there a cost-centre history we could use?
 
 ### 9.2 TrackingId (formerly CammsTrackingID)
 
@@ -283,9 +283,9 @@ The following points are to be clarified **before** implementation starts, with 
 
 ### 9.4 AppInsights / PageViews
 
-- **OP-15** **Partially clarified**: `__ORG__GICTrackingID` in `sharepoint_bronze.pages` only for news/event articles. Per Q17 confirmed: `sharepoint_gold` provides PageView aggregates (20 tables, 270M rows) — whether dimensioned per TrackingId or only per page is clarified by Q17b. Coverage analysis Q15/Q15b remains relevant.
-- **OP-15b** (new) **Use `sharepoint_gold` contents**: primary PageView fact tables are `pbi_db_interactions_metrics` (84M), `pbi_db_pageviewed_metric` (84M), `pbi_db_pagevisited_metric` (81M). To be clarified via Q17b: join gold metric directly by TrackingId or via page_id → `sharepoint_bronze.pages.__ORG__GICTrackingID`.
-- **OP-15c** (new) **CPLAN directly in Databricks**: `sharepoint_cplan` contains `trackingcluster_bronze` (17 clusters), `communicationspacks_bronze` (280 packs), `internalcommunicationactivities_bronze` (4,349 activities). This replaces the external CPLAN repo as the source for `silver.dim_pack`. To be clarified via Q17e: FK relationships between these tables and the link to iMEP gold.
+- **OP-15** **Partially clarified**: `__ORG__GICTrackingID` in `sharepoint_bronze.pages` only for news/event articles. Per Q17 confirmed: `sharepoint_gold` provides PageView aggregates (20 tables, hundreds of millions of rows) — whether dimensioned per TrackingId or only per page is clarified by Q17b. Coverage analysis Q15/Q15b remains relevant.
+- **OP-15b** (new) **Use `sharepoint_gold` contents**: primary PageView fact tables are `pbi_db_interactions_metrics` (tens of millions), `pbi_db_pageviewed_metric` (tens of millions), `pbi_db_pagevisited_metric` (tens of millions). To be clarified via Q17b: join gold metric directly by TrackingId or via page_id → `sharepoint_bronze.pages.__ORG__GICTrackingID`.
+- **OP-15c** (new) **CPLAN directly in Databricks**: `sharepoint_cplan` contains `trackingcluster_bronze` (a short list of clusters), `communicationspacks_bronze` (hundreds of packs), `internalcommunicationactivities_bronze` (thousands of activities). This replaces the external CPLAN repo as the source for `silver.dim_pack`. To be clarified via Q17e: FK relationships between these tables and the link to iMEP gold.
 - **OP-15d** (new, governance) **Request `pbi_gold` access**: 60 tables, presumably the central semantic model. Currently inaccessible. File an access request with the catalog admin (Q17f).
 - **OP-16** Attribution window: how long after email send can a PageView still be attributed to the campaign when `CammsTrackingID` is missing (orphan)?
 - **OP-17** Banner (`BAN`): how are banner impressions delivered in AppInsights? Own event type?
@@ -326,7 +326,7 @@ The following points are to be clarified **before** implementation starts, with 
 
 ## Appendix A — iMEP Genie Code Reference Patterns
 
-Source: Databricks Genie notebook (cells 6/7/24/25). Screenshots: `pictures/16. April 2026/IMG_7331..7334.jpeg`.
+Source: Databricks Genie notebook (cells 6/7/24/25).
 
 ### Table overview
 

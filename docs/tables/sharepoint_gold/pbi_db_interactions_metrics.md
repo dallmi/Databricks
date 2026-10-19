@@ -1,6 +1,6 @@
 # `sharepoint_gold.pbi_db_interactions_metrics`
 
-> **Master interaction fact for SharePoint.** 84M rows, 11 columns. Central table for pageview, visit, duration and comment metrics on page × date × contact grain. **Carries no direct TrackingID** — cross-channel attribution always runs via `marketingPageId -> pageUUID -> __ORG__GICTrackingID` through `sharepoint_bronze.pages`.
+> **Master interaction fact for SharePoint.** Tens of millions of rows, 11 columns. Central table for pageview, visit, duration and comment metrics on page × date × contact grain. **Carries no direct TrackingID** — cross-channel attribution always runs via `marketingPageId -> pageUUID -> __ORG__GICTrackingID` through `sharepoint_bronze.pages`.
 
 | | |
 |---|---|
@@ -11,7 +11,7 @@
 | **Cross-channel key** | **none directly** — only via FK chain `marketingPageId -> pageUUID -> __ORG__GICTrackingID` |
 | **Tier** | **Tier 0 — atomic interaction fact** |
 | **Write pattern** | Notebook-based Full Rebuild (Spark 3.2.1), no managed pipeline |
-| **Approx row count** | **~84M**, 35,544 distinct pages |
+| **Approx row count** | **Tens of millions**, tens of thousands of distinct pages |
 | **Physical storage** | External Delta, ADLS path `abfss://gold@<gold-acc>/.../employee_analytics/pbi_db_interactions_metrics`, **no partitioning** -> full-scan risk |
 
 ---
@@ -39,7 +39,7 @@ erDiagram
     }
     pages {
         string pageUUID PK "GUID"
-        string __ORG__GICTrackingID "only 4% populated!"
+        string __ORG__GICTrackingID "rarely populated!"
         string PageURL
     }
     tbl_email {
@@ -65,8 +65,8 @@ erDiagram
 | `viewingcontactid` | string (GUID) | `00000000-0000…` | **Person key** — not TNumber, but a bridge via `pbi_db_employeecontact` is possible |
 | `flag` | string | `1` | Meaning unclear — follow-up |
 | `visits` | bigint | `1` | Distinct visit count (with dedup) |
-| `durationsum` | double | `7.72` | Time on page (seconds, summed) |
-| `durationavg` | double | `7.72` | Average duration |
+| `durationsum` | double | `30.0` | Time on page (seconds, summed) |
+| `durationavg` | double | `30.0` | Average duration |
 | `commentss` | bigint | `0` | Comment count (typo in column name — **`commentss`** with double s) |
 | `marketingPageIdGuid` | bigint | `NULL` | Always NULL — presumably a legacy column |
 
@@ -84,7 +84,7 @@ FROM   sharepoint_gold.pbi_db_interactions_metrics m
 LEFT JOIN sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
 ```
 
--> **LEFT JOIN**, otherwise you lose the ~96% of rows without a set TrackingID.
+-> **LEFT JOIN**, otherwise you lose the vast majority of rows without a set TrackingID.
 
 ### -> Pack-level cross-channel funnel
 
@@ -116,7 +116,7 @@ LEFT JOIN sharepoint_gold.pbi_db_employeecontact ec ON ec.contactId = m.viewingc
 ## Quality caveats
 
 - **⚠️ No direct TrackingID** — if someone looks directly for `WHERE ...TrackingId = ...`, they won't find it. Always go via `pages.__ORG__GICTrackingID`.
-- **4% coverage blocker** (critical!): only 1,949/48,419 pages have `__ORG__GICTrackingID`. Meaning: of 84M interaction rows, **only ~3.3M are pack-attributable** (4%). The remaining 96% are "untracked intranet activity". The dashboard **must** label this section explicitly.
+- **Low-coverage blocker** (critical!): only a small minority of pages (low single-digit percent) have `__ORG__GICTrackingID`. Meaning: of the tens of millions of interaction rows, **only a few million are pack-attributable** (low single-digit percent). The vast remainder is "untracked intranet activity". The dashboard **must** label this section explicitly.
 - **`viewingcontactid` != TNumber** — SharePoint-native person ID (GUID). If person-level attribution is needed, it runs via `pbi_db_employeecontact` (still to validate).
 - **Column typo**: `commentss` (with double s). Don't fix it — you'd break every query.
 - **`marketingPageIdGuid`** is always NULL — ignore.
@@ -143,11 +143,11 @@ For **different grain requirements** there are more specialized gold tables:
 
 | Table | Rows | Cols | When to use |
 |---|---|---|---|
-| **`pbi_db_interactions_metrics`** | 84M | 11 | Default — everything in one table |
-| `pbi_db_pageviewed_metric` | 84M | 5 | View counts only, fast aggregation |
-| `pbi_db_pagevisited_metric` | 81M | 9 | Visit-oriented (with dedup) |
-| `pbi_db_datewise_overview_fact_tbl` | 7.5M | 31 | Pre-aggregated page × date × division with rolling windows (7/14/21/28d) |
-| `pbi_db_90_days_interactions_metric` | 9M | 11 | 90-day window, smaller, faster |
+| **`pbi_db_interactions_metrics`** | Tens of millions | 11 | Default — everything in one table |
+| `pbi_db_pageviewed_metric` | Tens of millions | 5 | View counts only, fast aggregation |
+| `pbi_db_pagevisited_metric` | Tens of millions | 9 | Visit-oriented (with dedup) |
+| `pbi_db_datewise_overview_fact_tbl` | Millions | 31 | Pre-aggregated page × date × division with rolling windows (7/14/21/28d) |
+| `pbi_db_90_days_interactions_metric` | Millions | 11 | 90-day window, smaller, faster |
 
 Rule of thumb: for ad-hoc queries use `interactions_metrics`; for dashboards with time rollups use `datewise_overview_fact_tbl`; for pure count queries use `pageviewed_metric`.
 
@@ -157,7 +157,6 @@ Rule of thumb: for ad-hoc queries use `interactions_metrics`; for dashboards wit
 
 - [pages.md](../sharepoint/pages.md) — the dimension lookup for TrackingID
 - [join_strategy_contract.md](../../joins/join_strategy_contract.md) — cross-channel join rules
-- Memory: `sharepoint_gold_inventory.md`, `sharepoint_gold_schemas_q22.md`
 
 ---
 

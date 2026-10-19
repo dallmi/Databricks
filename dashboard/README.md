@@ -39,8 +39,8 @@ expects this shape:
   "generated_at": "2026-04-15T09:00:00Z",
   "packs": [
     {
-      "pack_id":       "QRREP-0000058",
-      "cluster":       "QRREP",
+      "pack_id":       "ABCDE-0000123",
+      "cluster":       "ABCDE",
       "name":          "Q1 2026 Earnings Call",
       "publish_date":  "2026-03-05",
       "channels":      ["EMI", "INT", "EVT"],
@@ -51,21 +51,21 @@ expects this shape:
     }
   ],
   "email_events": [
-    { "pack_id": "QRREP-0000058", "tracking_id": "QRREP-0000058-260305-0000100-EMI",
+    { "pack_id": "ABCDE-0000123", "tracking_id": "ABCDE-0000123-260305-0000100-EMI",
       "event": "opened", "count": 21500, "timestamp": "2026-03-05T10:00:00Z",
-      "cluster": "QRREP", "channel": "EMI", "pack_name": "..." }
+      "cluster": "ABCDE", "channel": "EMI", "pack_name": "..." }
   ],
   "page_views": [
     { "timestamp": "2026-03-05T11:00:00Z", "page_id": "...", "page_name": "...",
       "site_id": "...", "site_name": "News", "time_on_page_sec": 98.3,
       "hr_division": "Investment Bank", "hr_region": "EMEA",
-      "tracking_pack_id": "QRREP-0000058", "tracking_cluster_id": "QRREP",
+      "tracking_pack_id": "ABCDE-0000123", "tracking_cluster_id": "ABCDE",
       "tracking_channel_abbr": "INT", "channel": "INT", "weight": 1 }
   ],
   "event_regs": [
-    { "pack_id": "QRREP-0000058", "status": "attended", "count": 780,
+    { "pack_id": "ABCDE-0000123", "status": "attended", "count": 780,
       "event_datetime": "2026-03-19T14:00:00Z", "channel": "EVT",
-      "tracking_id": "QRREP-0000058-260305-0000300-EVT" }
+      "tracking_id": "ABCDE-0000123-260305-0000300-EVT" }
   ]
 }
 ```

@@ -64,7 +64,7 @@ GROUP BY 1
 
 ### Variant B — Date × Division (pre-aggregated)
 
-Use `pbi_db_datewise_overview_fact_tbl` — much smaller (7.5M instead of 84M), already grouped by Division and equipped with rolling windows (7/14/21/28d):
+Use `pbi_db_datewise_overview_fact_tbl` — much smaller (millions instead of tens of millions of rows), already grouped by Division and equipped with rolling windows (7/14/21/28d):
 
 ```sql
 SELECT
@@ -119,7 +119,7 @@ GROUP BY 1, 2
 
 ### 1. `LEFT JOIN` for unattributed pages
 
-If you also want to count "untracked" pages (the 96%), use LEFT JOIN and `NVL`:
+If you also want to count "untracked" pages (the vast majority), use LEFT JOIN and `NVL`:
 
 ```sql
 SELECT
@@ -174,7 +174,7 @@ If you find `GICTrackingID` filters on Gold in old dashboards / SQL files: it is
 
 ## Performance tuning
 
-- **Pre-filter on `pages`**: If you only need tracked pages, materialize the 1,949 pages with `__ORG__GICTrackingID` first, then run the large join:
+- **Pre-filter on `pages`**: If you only need tracked pages, materialize the small set of pages with `__ORG__GICTrackingID` first, then run the large join:
 
   ```sql
   WITH tracked_pages AS (
@@ -187,11 +187,11 @@ If you find `GICTrackingID` filters on Gold in old dashboards / SQL files: it is
   GROUP BY 1;
   ```
 
-  This reduces the join partner to ~4% of the pages size.
+  This reduces the join partner to a small fraction (low single-digit percent) of the pages size.
 
-- **`datewise_overview_fact_tbl` instead of `interactions_metrics`** wherever possible — 10× smaller.
+- **`datewise_overview_fact_tbl` instead of `interactions_metrics`** wherever possible — about an order of magnitude smaller.
 
-- **Set time filters** — 84M rows × wide columns without filter = timeout risk.
+- **Set time filters** — tens of millions of rows × wide columns without filter = timeout risk.
 
 ---
 

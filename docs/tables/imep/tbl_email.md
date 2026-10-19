@@ -10,7 +10,7 @@
 | **Primary key** | `Id` |
 | **Cross-channel key** | `TrackingId` (32-char, 5 segments) |
 | **Write pattern** | MERGE full-table upsert on Id (Service Principal) |
-| **Approx row count** | ~145K (as of 2026-04-20, timespan Nov 2020 – Apr 2026) |
+| **Approx row count** | Over a hundred thousand (as of 2026-04-20, timespan Nov 2020 – Apr 2026) |
 
 ---
 
@@ -83,10 +83,10 @@ Full column list: `DESCRIBE imep_bronze.tbl_email` in Databricks.
 ## Sample row
 
 ```
-Id            = "0a3f6c2e-..."
-TrackingId    = "QRREP-0000058-240709-0000060-EMI"
-Title         = "Q2 Investor Update — DE"
-Subject       = "Your quarterly report for Q2 2024"
+Id            = "00000000-0000-4000-8000-000000000011"
+TrackingId    = "ABCDE-0000123-240709-0000045-EMI"
+Title         = "<title>"
+Subject       = "<subject>"
 CreatedBy     = "t100200"
 CreationDate  = 2024-07-08 14:22:31
 ```
@@ -125,7 +125,7 @@ Same `Id`, but enriched with content metrics. **We consume Gold**, not Bronze (s
 
 ## Quality caveats
 
-- **TrackingId NULL rate**: Not every mailing is tracked. For cross-channel attribution, apply `WHERE TrackingId IS NOT NULL`. Only 986/73,930 mailings (1.3%) have a TrackingId, but strong uptrend (2024: 99 → 2025: 637 → 2026 YTD: 250).
+- **TrackingId NULL rate**: Not every mailing is tracked. For cross-channel attribution, apply `WHERE TrackingId IS NOT NULL`. Only a small minority of mailings (low single-digit percent) have a TrackingId, but strong uptrend (2024 → 2025: several-fold increase; 2026 YTD continues the trend).
 - **TrackingId format**: Always 32 characters, 5 segments separated by `-`, UPPER. Structure: `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL`. SEG5 = channel (Email/Newsletter/Article/…). For cross-channel match with SharePoint compare only **SEG1-2 (Pack)** — email and intranet page of the same pack carry different dates/activities/channels. See [joins/cross_channel_via_tracking_id.md](../../joins/cross_channel_via_tracking_id.md).
 - **Cross-channel path**: TrackingId is a **dimension**, not a fact key — it **never** co-exists with EmailId in the same table. Cross-channel therefore runs `tbl_email.TrackingId ↔ sharepoint_bronze.pages.__ORG__GICTrackingID`, **not** via engagement rows (`pageviews` / `tbl_analytics_link`).
 - **`CreationDate` ≠ send time**: For "when did it go out" join `tbl_email_receiver_status.DateTime`.
@@ -139,7 +139,7 @@ Same `Id`, but enriched with content metrics. **We consume Gold**, not Bronze (s
 
 ```
 imep_bronze.tbl_email
-imep_bronze.tbl_email_receiver_status   ───►   imep_gold.final  (~520M rows)
+imep_bronze.tbl_email_receiver_status   ───►   imep_gold.final  (hundreds of millions of rows)
 imep_bronze.tbl_analytics_link                    │
                                                   ├─ denormalized join over Bronze
                                                   ├─ HR enrichment applied late
@@ -171,7 +171,6 @@ See [findings/q26-imep-silver.md](../../findings/q26-imep-silver.md) for full fi
 - ER diagram: Section 2 in [../../architecture_diagram.md](../../architecture_diagram.md)
 - Canonical join chain: [../../joins/imep_bronze_join.md](../../joins/imep_bronze_join.md) *(tbd)*
 - Cross-channel TrackingId match: [../../joins/cross_channel_trackingid.md](../../joins/cross_channel_trackingid.md) *(tbd)*
-- Genie findings: `memory/imep_genie_findings_q1_q2_q3.md`
 
 ---
 

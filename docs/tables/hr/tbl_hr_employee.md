@@ -10,7 +10,7 @@
 | **Primary key** | `T_NUMBER` |
 | **Bridge columns** | `T_NUMBER` (iMEP) + `WORKER_ID` (SharePoint/GPN) |
 | **Write pattern** | MERGE (Service Principal) |
-| **Approx row count** | ~265K (as of today) |
+| **Approx row count** | Hundreds of thousands (as of today) |
 
 ---
 
@@ -36,7 +36,7 @@ Full schema via `DESCRIBE imep_bronze.tbl_hr_employee` (~30-40 columns).
 ```
 T_NUMBER              = "t100200"
 WORKER_ID             = "00100200"
-ORGANIZATIONAL_UNIT   = "CH-ZH-0041"
+ORGANIZATIONAL_UNIT   = "XX-XX-0001"
 ALTERNATE_WORKER_ID   = "..."
 ```
 
@@ -102,7 +102,6 @@ HR system (SQL Server) --[CDC + MERGE]--> imep_bronze.tbl_hr_employee
 - [hr_enrichment.md](../../joins/hr_enrichment.md) — Canonical join patterns
 - [tbl_hr_costcenter.md](tbl_hr_costcenter.md) — Region/Division/Area lookup
 - [tbl_hr_user.md](tbl_hr_user.md) — Town/__ORG__Id lookup
-- Memory: `employee_identifiers.md`, `hr_gpn_tnumber_bridge_resolved.md`
 
 ---
 

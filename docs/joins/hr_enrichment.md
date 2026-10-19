@@ -13,7 +13,7 @@
 | `WORKER_ID` | HR | 8-digit numeric (= GPN) | `00100200` |
 | `user_gpn` | SharePoint `pageviews` | 8-digit numeric | `00100200` |
 | `__ORG__Id` | `tbl_hr_user` | UPPERCASE `T######` | `T100200` |
-| `viewingcontactid` | `sharepoint_gold.*` | GUID | `1254e21a-...` |
+| `viewingcontactid` | `sharepoint_gold.*` | GUID | `00000000-0000-4000-8000-000000000001` |
 
 **Core fact**: `tbl_hr_employee` is the only table that carries **both** `T_NUMBER` and `WORKER_ID` simultaneously → a simple JOIN instead of an external bridge source.
 
@@ -147,7 +147,7 @@ Not all TNumbers in iMEP engagement are in HR (former employees, external addres
 ### 6. `viewingcontactid` on SP Gold is **not** a TNumber
 
 When working in `sharepoint_gold.pbi_db_interactions_metrics`, do **not** use `viewingcontactid` for HR joins. It is a GUID, not a GPN. Bridge candidates:
-- `sharepoint_gold.pbi_db_employeecontact` (24M rows, potential bridge — not validated)
+- `sharepoint_gold.pbi_db_employeecontact` (tens of millions of rows, potential bridge — not validated)
 - or fall back to `sharepoint_bronze.pageviews.user_gpn`
 
 ---
@@ -155,8 +155,6 @@ When working in `sharepoint_gold.pbi_db_interactions_metrics`, do **not** use `v
 ## References
 
 - HR cards: `tbl_hr_employee.md`, `tbl_hr_costcenter.md`, `tbl_hr_user.md` *(pending)*
-- Employee identifier overview: `memory/employee_identifiers.md`
-- Bridge resolution: `memory/hr_gpn_tnumber_bridge_resolved.md`
 - ER diagram Section 3: [architecture_diagram.md](../architecture_diagram.md)
 
 ---

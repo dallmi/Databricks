@@ -118,7 +118,7 @@ beige = imported table in an otherwise live model · dashed = hidden auto-date t
 | 4 | `tbl_pbi_email_language` | `tbl_pbi_mailingid` | `EmailId` → `Id` | both | yes |
 | 5 | `tbl_pbi_event_tag` | `tbl_pbi-events` | `id` → `Id` | both | yes |
 | 6 | `tbl_pbi_kpi` | `tbl_pbi_mailingid` | `Mailingid` → `Id` | both | yes |
-| 7 | `tbl_pbi_kpi` | `LocalDateTable_d7ea9dc3…` | `Startsentdatetime` → `Date` | single | yes |
+| 7 | `tbl_pbi_kpi` | `LocalDateTable_00000000…` | `Startsentdatetime` → `Date` | single | yes |
 | 8 | `tbl_pbi_mailing_tag` | `tbl_pbi_mailingid` | `id` → `Id` | both | yes |
 | 9 | `tbl_pbi_mailingaccess` | `tbl_pbi_event_folder` | `folderid` → `folderid` | single | **no** |
 | 10 | `tbl_pbi_mailingaccess` | `tbl_pbi_mailingid` | `id` → `Id` | both | yes |

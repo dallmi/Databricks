@@ -9,7 +9,7 @@
 | **Grain** | 1 row per Organizational Unit |
 | **Primary key** | `ORGANIZATIONAL_UNIT` |
 | **Write pattern** | MERGE (Service Principal) |
-| **Approx row count** | < 10K (cost center list) |
+| **Approx row count** | Small (cost center list, thousands at most) |
 
 ---
 
@@ -17,7 +17,7 @@
 
 | Column | Type | Role | Notes |
 |---|---|---|---|
-| `ORGANIZATIONAL_UNIT` | string | **PK** | Code such as `CH-ZH-0041` |
+| `ORGANIZATIONAL_UNIT` | string | **PK** | Code such as `XX-XX-0001` |
 | `REGION` | string | | `EMEA`, `Americas`, `APAC`, `Switzerland`, ... |
 | `DIVISION` | string | | Business area (e.g. `Wealth Management`, `Group Insurance Management`) |
 | `AREA` | string | | Finer than Division, coarser than Country |
@@ -28,7 +28,7 @@
 ## Sample row
 
 ```
-ORGANIZATIONAL_UNIT = "CH-ZH-0041"
+ORGANIZATIONAL_UNIT = "XX-XX-0001"
 REGION              = "Switzerland"
 DIVISION            = "Wealth Management"
 AREA                = "Zurich"
@@ -55,7 +55,7 @@ LEFT JOIN imep_bronze.tbl_hr_costcenter cc ON cc.ORGANIZATIONAL_UNIT = hr.ORGANI
 
 - **Current state, no history**: Cost centers can be reorganized. On division renames, that propagates into **all** existing engagement rows after the next rebuild run of `imep_gold.final`.
 - **`DIVISION` values are not enumerated** — free-form string. Dashboards must maintain dedup + case-normalization + mapping tables themselves if, for example, "Group Insurance Management" should be treated as the same bucket as "GIM".
-- **66% NULL-Region problem**: In the Tier-3 aggregates (`tbl_pbi_mailings_region`), up to 66% of rows have NULL Region. Cause: `ORGANIZATIONAL_UNIT` values on engagement events were **not** listed in `tbl_hr_costcenter` at build time. Dashboards must provide an "Unknown" bucket for this.
+- **Mostly-NULL Region problem**: In the Tier-3 aggregates (`tbl_pbi_mailings_region`), up to the majority of rows have NULL Region. Cause: `ORGANIZATIONAL_UNIT` values on engagement events were **not** listed in `tbl_hr_costcenter` at build time. Dashboards must provide an "Unknown" bucket for this.
 
 ---
 

@@ -1,14 +1,14 @@
 !1 ER Diagram — iMEP Gold
 
-Gold topology for iMEP. '''Strict 4-tier hierarchy''' (31 tables classified). All tables join via MailingId = tbl_pbi_platform_mailings.Id = tbl_email.Id back to the master. final is the sole Tier-0 atomic fact and carries 520M rows.
+Gold topology for iMEP. '''Strict 4-tier hierarchy''' (31 tables classified). All tables join via MailingId = tbl_pbi_platform_mailings.Id = tbl_email.Id back to the master. final is the sole Tier-0 atomic fact and carries hundreds of millions of rows.
 
 !2 4-Tier Hierarchy
 
 | '''Tier''' | '''Role''' | '''# Tables''' | '''Representative members''' |
-| Tier 0 — Atomic Fact | Per-Recipient × Event × Hour | 1 | final (520M, 64K mailings) |
+| Tier 0 — Atomic Fact | Per-Recipient × Event × Hour | 1 | final (hundreds of millions of rows, tens of thousands of mailings) |
 | Tier 1 — Timespan × Dim Aggregates | 24h / 72h / 1w / 15w / 15m+ × Date/DateHour/DivArea/RegCntry | 15 | dateonly, datetime, divarea, regcntry variants |
-| Tier 2 — Per-Mailing Summaries | UniqueOpens/UniqueClicks per Mailing × Dim | ~8 | mailingreceiver_*, engagement (1.8M, 117K mailings — '''mixed mail+event'''!), log_mail |
-| Tier 3 — Platform & Reference Dims | Master + lookup tables | ~7 | tbl_pbi_platform_mailings (73,920 / 927 TIDs), tbl_pbi_platform_events (84,052) |
+| Tier 2 — Per-Mailing Summaries | UniqueOpens/UniqueClicks per Mailing × Dim | ~8 | mailingreceiver_*, engagement (millions of rows, over a hundred thousand mailings — '''mixed mail+event'''!), log_mail |
+| Tier 3 — Platform & Reference Dims | Master + lookup tables | ~7 | tbl_pbi_platform_mailings (tens of thousands / hundreds of TIDs), tbl_pbi_platform_events (tens of thousands) |
 
 !2 Central Tier Relations
 
@@ -24,7 +24,7 @@ entity "tbl_pbi_platform_mailings" as master {
   Subject : string
   ContentMetrics : int
   ..
-  '''73,920 rows — TIER 3 DIMENSION (927 TIDs)'''
+  '''tens of thousands of rows — TIER 3 DIMENSION (hundreds of TIDs)'''
 }
 
 entity "tbl_pbi_mailings_region" as region {
@@ -34,7 +34,7 @@ entity "tbl_pbi_mailings_region" as region {
   UniqueOpens : bigint
   UniqueClicks : bigint
   ..
-  73K rows
+  tens of thousands of rows
 }
 
 entity "tbl_pbi_mailings_division" as div {
@@ -44,7 +44,7 @@ entity "tbl_pbi_mailings_division" as div {
   UniqueOpens : bigint
   UniqueClicks : bigint
   ..
-  '''697K rows'''
+  '''hundreds of thousands of rows'''
 }
 
 entity "tbl_pbi_kpi" as kpi {
@@ -54,13 +54,13 @@ entity "tbl_pbi_kpi" as kpi {
   MailingReceiverStatus : string
   value : bigint
   ..
-  245K rows, pivoted
+  hundreds of thousands of rows, pivoted
 }
 
 entity "tbl_pbi_analytics" as ana {
   * MailingId : FK
   ..
-  290K rows
+  hundreds of thousands of rows
 }
 
 entity "tbl_pbi_platform_events" as events {
@@ -69,7 +69,7 @@ entity "tbl_pbi_platform_events" as events {
   TrackingId : string
   RegistrationCount : bigint
   ..
-  84K rows — event master
+  tens of thousands of rows — event master
 }
 
 entity "final" as final {
@@ -83,7 +83,7 @@ entity "final" as final {
   Division : string
   event_hour : timestamp
   ..
-  '''520M rows — TIER 0 ATOMIC FACT'''
+  '''hundreds of millions of rows — TIER 0 ATOMIC FACT'''
   '''grain: mailing × recipient × event × hour'''
 }
 
@@ -106,14 +106,14 @@ final  }o..o{ master : "denormalized join contains Id"
 !2 Volumes & Write Pattern
 
 | '''Table'''                    | '''Rows'''  | '''Pattern''' |
-| '''final'''                    | '''~520M''' | '''Full Rebuild''' ⚠️ |
-| tbl_pbi_platform_mailings      | 73K         | Full Rebuild |
-| tbl_pbi_platform_events        | 84K         | Full Rebuild |
-| tbl_pbi_analytics              | 290K        | Full Rebuild |
-| tbl_pbi_kpi                    | 245K        | Full Rebuild |
-| tbl_pbi_mailings_region        | 73K         | Full Rebuild |
-| tbl_pbi_mailings_division      | 697K        | Full Rebuild |
-| (1 additional)                 | 1,384K      | Full Rebuild |
+| '''final'''                    | '''Hundreds of millions''' | '''Full Rebuild''' ⚠️ |
+| tbl_pbi_platform_mailings      | Tens of thousands | Full Rebuild |
+| tbl_pbi_platform_events        | Tens of thousands | Full Rebuild |
+| tbl_pbi_analytics              | Hundreds of thousands | Full Rebuild |
+| tbl_pbi_kpi                    | Hundreds of thousands | Full Rebuild |
+| tbl_pbi_mailings_region        | Tens of thousands | Full Rebuild |
+| tbl_pbi_mailings_division      | Hundreds of thousands | Full Rebuild |
+| (1 additional)                 | Millions    | Full Rebuild |
 
 '''All Gold tables are completely rebuilt on every run — no incrementality.''' Refresh cadence deliberately not documented, we don't have a complete job scheduler view.
 
@@ -124,7 +124,7 @@ final  }o..o{ master : "denormalized join contains Id"
 tbl_email (Bronze)
     |  [1:1 Full Rebuild]
     v
-tbl_pbi_platform_mailings (Tier 1, 73K)
+tbl_pbi_platform_mailings (Tier 1, tens of thousands)
     |
     +--> tbl_pbi_mailings_region    (aggregated × Region)
     +--> tbl_pbi_mailings_division  (aggregated × Division)
@@ -136,7 +136,7 @@ tbl_pbi_platform_mailings (Tier 1, 73K)
 !3 Path 2: Denormalized Event Stream (final)
 {{{
 tbl_email                           -+
-tbl_email_receiver_status           -|--[Full Rebuild]--> final (520M)
+tbl_email_receiver_status           -|--[Full Rebuild]--> final (hundreds of millions)
 tbl_analytics_link                  -|
 tbl_hr_employee + tbl_hr_costcenter -+
 }}}
@@ -147,9 +147,9 @@ tbl_hr_employee + tbl_hr_costcenter -+
 tbl_pbi_kpi is '''not''' wide format. Instead:
 
 | '''MailingId''' | '''measure''' | '''MailingReceiverStatus''' | '''value''' |
-| a1b2c3…         | OpenCount     | Open                         | 1523        |
-| a1b2c3…         | ClickCount    | Click                        | 189         |
-| a1b2c3…         | SentCount     | Sent                         | 8500        |
+| a1b2c3…         | OpenCount     | Open                         | 1234        |
+| a1b2c3…         | ClickCount    | Click                        | 123         |
+| a1b2c3…         | SentCount     | Sent                         | 12345       |
 
 For dashboard consumption pivot it:
 
@@ -165,9 +165,9 @@ GROUP BY MailingId
 !2 NULL Semantics in Tier-3 Aggregates
 
 In tbl_pbi_mailings_region and _division:
- * UniqueOpens NULL ~28-35% — mailings without a single open event in the region. NOT a data error.
- * UniqueClicks NULL ~66-81% — mailings without clicks in the region. Click rate is naturally lower than open rate.
- * Match rate Mailing ↔ Tier-3: 72-98% — not all mailings have Tier-3 entries at all.
+ * UniqueOpens NULL for a sizeable minority — mailings without a single open event in the region. NOT a data error.
+ * UniqueClicks mostly NULL — mailings without clicks in the region. Click rate is naturally lower than open rate.
+ * Match rate Mailing ↔ Tier-3: varies widely — not all mailings have Tier-3 entries at all.
 
 Semantic NULLs, not defects. Use COALESCE(value, 0) for aggregations.
 
@@ -180,7 +180,7 @@ Semantic NULLs, not defects. Use COALESCE(value, 0) for aggregations.
 
 !2 Engagement-Table Anomaly
 
-engagement (Tier 2, 1.8M rows) carries '''117,185 distinct mailingIds''', while tbl_pbi_platform_mailings only has 73,930. The delta (~44K) = event-IDs from tbl_pbi_platform_events. iMEP Gold treats '''emails + events as the same engagement unit''' in Tier-2 aggregates. Filter explicitly on the 73K mailing-IDs for mailing-specific analyses.
+engagement (Tier 2, millions of rows) carries '''over a hundred thousand distinct mailingIds''', while tbl_pbi_platform_mailings only has tens of thousands. The delta (tens of thousands) = event-IDs from tbl_pbi_platform_events. iMEP Gold treats '''emails + events as the same engagement unit''' in Tier-2 aggregates. Filter explicitly on the mailing-IDs of tbl_pbi_platform_mailings for mailing-specific analyses.
 
 !2 Cross References
 

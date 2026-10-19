@@ -1,6 +1,6 @@
 # `sharepoint_bronze.customevents`
 
-> **Click and interaction telemetry** from Application Insights — every user click on the intranet (link, button, file download, video action). 262M rows in Bronze. Schema reverse-engineered from the sister projects [Clicks](../../../../Clicks) and [CampaignWe](../../../../CampaignWe), where the AppInsights stream is consumed directly via Kusto Query Language (KQL).
+> **Click and interaction telemetry** from Application Insights — every user click on the intranet (link, button, file download, video action). Hundreds of millions of rows in Bronze. Schema reverse-engineered from the sister projects [Clicks](../../../../Clicks) and [CampaignWe](../../../../CampaignWe), where the AppInsights stream is consumed directly via Kusto Query Language (KQL).
 
 | | |
 |---|---|
@@ -10,8 +10,8 @@
 | **Primary key** | `Id` (App Insights event GUID) |
 | **Cross-channel key** | **None directly** — must JOIN to `pages` via `pageId = pageUUID` |
 | **Write pattern** | Append (presumed; not yet verified via `DESCRIBE HISTORY`) |
-| **Approx row count** | **~262M** (~2× the size of `pageviews`) |
-| **Historical snapshot** | `customevents_history` (13.3M, ad-hoc) |
+| **Approx row count** | **Hundreds of millions** (substantially larger than `pageviews`) |
+| **Historical snapshot** | `customevents_history` (over ten million rows, ad-hoc) |
 
 ---
 
@@ -131,15 +131,15 @@ The CTA-clicks gold table aggregates per `marketingPageId × ctalabel`. The pres
 | `GPN` | CustomProps | 8-digit, one per employee | the real person ID — but inside JSON |
 | `session_Id` | App Insights | per session | window key |
 
-Clicks/clicks_explorer.kql Query 0a explicitly compares these — `user_Id` cardinality is typically 1.5-3× `GPN`, because the same employee has multiple devices/browsers.
+Clicks/clicks_explorer.kql Query 0a explicitly compares these — `user_Id` cardinality is typically well above `GPN`, because the same employee has multiple devices/browsers.
 
 ### ⚠️ No partition pruning
 
-Bronze table is unpartitioned (consistent with all Bronze tables we've audited — see `storage_architecture_q30_findings`). Always filter on `timestamp` first to limit scan cost.
+Bronze table is unpartitioned (consistent with all Bronze tables we've audited — see [findings/q30-storage-architecture.md](../../findings/q30-storage-architecture.md)). Always filter on `timestamp` first to limit scan cost.
 
 ### ⚠️ `CustomProps` not flattened in Bronze
 
-Every analytical query has to double-parse JSON. A `sharepoint_silver.customevents_flat` (analogous to `sharepoint_silver.webpageviewed`) does **not yet exist** — verified absent from the silver inventory in `imep_silver_q26_findings`.
+Every analytical query has to double-parse JSON. A `sharepoint_silver.customevents_flat` (analogous to `sharepoint_silver.webpageviewed`) does **not yet exist** — verified absent from the silver inventory in [findings/q26-imep-silver.md](../../findings/q26-imep-silver.md).
 
 ### Event-family schema divergence
 
@@ -154,11 +154,11 @@ App Insights (Azure)
         │  customEvents stream
         │  (timestamp, name, user_Id, session_Id, customDimensions)
         ▼
-sharepoint_bronze.customevents          (262M, presumed Append)
+sharepoint_bronze.customevents          (hundreds of millions, presumed Append)
         │
         ├──[double-parse JSON]──> Clicks pipeline  → DuckDB → fact_clicks.parquet
         ├──[double-parse JSON]──> CampaignWe pipeline → DuckDB → events_anonymized.parquet
-        └──[unverified]──────────> sharepoint_clicks_gold.pbi_db_ctalabel_intr_fact_gold (3M)
+        └──[unverified]──────────> sharepoint_clicks_gold.pbi_db_ctalabel_intr_fact_gold (millions)
 ```
 
 Raw export path for ad-hoc analysis: see [`kql/customevents_clicks.kql`](../../../kql/customevents_clicks.kql).
@@ -168,7 +168,7 @@ Raw export path for ad-hoc analysis: see [`kql/customevents_clicks.kql`](../../.
 ## Related cards
 
 - [pages.md](pages.md) — the dimension to attach `__ORG__GICTrackingID`
-- `pageviews.md` *(pending)* — sister fact (173M, has `GICTrackingID` directly)
+- `pageviews.md` *(pending)* — sister fact (hundreds of millions, has `GICTrackingID` directly)
 - `pbi_db_ctalabel_intr_fact_gold.md` *(pending)* — gold CTA aggregate, lineage unverified
 
 ---
@@ -187,7 +187,6 @@ Raw export path for ad-hoc analysis: see [`kql/customevents_clicks.kql`](../../.
 
 - [er_sharepoint_bronze.md](../../diagrams/er_sharepoint_bronze.md) — bronze topology
 - [knowledge_base.md](../../knowledge_base.md) — table catalog
-- Memory: `appinsights_source.md`, `sharepoint_pages_inventory.md`
 
 ---
 

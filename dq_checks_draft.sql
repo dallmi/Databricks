@@ -10,13 +10,14 @@
 -- App Insights envelope and the 57-column bronze schema; BLOCK 0 confirms them.
 --
 -- Table map used here (see docs/data-integrity-checks.md §9):
---   sharepoint_bronze.pageviews               173M  App Insights pageViews landing
---   sharepoint_bronze.customevents            262M  App Insights customEvents landing
---   sharepoint_bronze.pages                    48K  page inventory (pageUUID, __ORG__GICTrackingID)
+--   (row counts as orders of magnitude)
+--   sharepoint_bronze.pageviews              100M+  App Insights pageViews landing
+--   sharepoint_bronze.customevents           100M+  App Insights customEvents landing
+--   sharepoint_bronze.pages                   10K+  page inventory (pageUUID, __ORG__GICTrackingID)
 --   sharepoint_silver.pageviewed / pagevisited       refined view / visit facts
---   sharepoint_gold.pbi_db_interactions_metrics 84M  page × date × contact fact (views, visits)
---   sharepoint_gold.pbi_db_employeecontact      24M  contact dimension (contactId = unique visitor)
---   imep_bronze.tbl_hr_employee               265K  HR master (WORKER_ID = GPN, T_NUMBER)
+--   sharepoint_gold.pbi_db_interactions_metrics 10M+ page × date × contact fact (views, visits)
+--   sharepoint_gold.pbi_db_employeecontact     10M+  contact dimension (contactId = unique visitor)
+--   imep_bronze.tbl_hr_employee              100K+  HR master (WORKER_ID = GPN, T_NUMBER)
 --
 -- Conventions: copy a block (between two `-- ---` separators) into a notebook
 -- cell. Each block is self-contained. Results land in dq.dq_check_result.
@@ -491,25 +492,25 @@ INSERT INTO dq.check_def VALUES
   -- MEASURED PER DAY by Block 0c, 25 Mar - 23 Apr 2026. Use the DAILY figures:
   -- Block 0b pooled a fortnight, which inflates any per-person identity count
   -- because browser ids do not recur across days while people do. Pooled, the
-  -- broken state reads 20.0 browser ids per person; per day it reads about 3.9.
+  -- broken state reads several times as many browser ids per person as per day.
   -- The checks run daily, so the daily numbers are the ones that belong here.
   --
-  --                        healthy weekday | healthy weekend | broken (from 8 Apr)
-  --   views_per_session          1.94-2.35 |       1.59-1.71 | 1.05-1.08
-  --   browser_ids_per_person     1.11-1.15 |       1.06-1.08 | 3.70-4.15
-  --   single_view_session_share  0.54-0.65 |       0.73-0.76 | 0.93-0.95
-  --   identified_share                1.00 |            1.00 | 1.00
+  --                        healthy weekday     | healthy weekend      | broken (from 8 Apr)
+  --   views_per_session          around 2      | lower, above the warn bound | barely above 1
+  --   browser_ids_per_person     just above 1  | just above 1         | several per person
+  --   single_view_session_share  about half to two thirds | about three quarters | almost all
+  --   identified_share           complete      | complete             | complete
   --
   -- Absolute bounds sit BELOW the healthy weekend, not below the healthy weekday,
   -- or every Saturday would raise a warning. The same-weekday corridor in Block 4
   -- does the fine-grained work; these bounds only catch the gross break.
   -- They describe HEALTHY data, so B1, B4 and B5 flag today by design and keep
   -- firing until the source is fixed. Do not retune them to the broken state.
-  ('B1','identity','bronze','views_per_session',         1.30, 1.50, NULL, NULL, NULL, NULL, 0.10, 0.25, 'page views per visit; healthy 1.94-2.35 weekday, broken 1.06'),
+  ('B1','identity','bronze','views_per_session',         1.30, 1.50, NULL, NULL, NULL, NULL, 0.10, 0.25, 'page views per visit; healthy well above 1 on weekdays, broken near 1'),
   ('B2','identity','bronze','sessions_per_browser_7d',   1.02, 1.10, NULL, NULL, NULL, NULL, 0.15, 0.30, 'visits per browser identity over a rolling week; not yet measured'),
-  ('B4','identity','bronze','browser_ids_per_person',    NULL, NULL, 1.5, 2.5, NULL, NULL, 0.15, 0.30, 'distinct user_Id per GPN per DAY; healthy 1.06-1.15, broken 3.7-4.15'),
-  ('B5','identity','bronze','single_view_session_share', NULL, NULL, 0.80, 0.90, NULL, NULL, 0.10, 0.20, 'share of single-view sessions; healthy 0.54-0.76, broken 0.93-0.95'),
-  ('B8','identity','bronze','identified_share',          0.90, 0.97, NULL, NULL, NULL, NULL, 0.05, 0.15, 'views with a valid GPN; measured 1.000, every row carries a GPN'),
+  ('B4','identity','bronze','browser_ids_per_person',    NULL, NULL, 1.5, 2.5, NULL, NULL, 0.15, 0.30, 'distinct user_Id per GPN per DAY; healthy slightly above 1, broken several'),
+  ('B5','identity','bronze','single_view_session_share', NULL, NULL, 0.80, 0.90, NULL, NULL, 0.10, 0.20, 'share of single-view sessions; healthy clearly below the warn level, broken near all sessions'),
+  ('B8','identity','bronze','identified_share',          0.90, 0.97, NULL, NULL, NULL, NULL, 0.05, 0.15, 'views with a valid GPN; every row carries a GPN'),
   ('C8','schema','silver','double_fire_share',           NULL, NULL, 0.10, 0.25, NULL, NULL, 0.05, NULL, 'same person, same page, < 1 s apart'),
   ('D1a','plausibility','gold','gold_views',             NULL, NULL, NULL, NULL, 0.25, 0.50, NULL, NULL, 'gold views per day corridor'),
   ('D1b','plausibility','gold','gold_visits',            NULL, NULL, NULL, NULL, 0.25, 0.50, 0.25, 0.50, 'gold visits per day corridor + step change'),
@@ -521,7 +522,7 @@ INSERT INTO dq.check_def VALUES
 
 -- ----------------------------------------------------------------------------
 -- BLOCK 2 — Working slice of bronze pageviews (one scan per day, 70 days)
--- 173M rows, unpartitioned: materialise the window once, every check reads it.
+-- Hundreds of millions of rows, unpartitioned: materialise the window once, every check reads it.
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE TABLE dq.pv_window
 PARTITIONED BY (view_date) AS
@@ -535,7 +536,7 @@ PARTITIONED BY (view_date) AS
 -- The raw value is ISO-8601 UTC with a T separator, milliseconds and a Z suffix,
 -- e.g. 2026-03-02T00:00:00.229Z. Neither a bare to_timestamp() nor the pattern
 -- 'yyyy-MM-dd HH:mm:ss' matches it; both return NULL for every row (the first
--- Block 0b run had unparsed_timestamps = rows_scanned, 2.8M of 2.8M).
+-- Block 0b run had unparsed_timestamps = rows_scanned, every row of the window).
 -- CAST handles ISO-8601 including the T and the Z, so CAST is used everywhere.
 -- The values are UTC. Any local-time reporting grain must convert explicitly.
 SELECT

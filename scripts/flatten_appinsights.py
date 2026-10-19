@@ -12,8 +12,8 @@ Engagement metrics come at two grains: the OFFICIAL AppInsights session_id
 (reconciles with other company reports; kept for counts + QA) and the
 reconstructed visit (person via CustomProps.GPN + 30-min inactivity rule).
 Time metrics MUST use the visit grain: on the corp source the session_id is
-minted fresh on most navigations (92% single-view sessions), so session-based
-time-on-page/bounce/depth have almost no signal.
+minted fresh on most navigations (the vast majority of sessions are
+single-view), so session-based time-on-page/bounce/depth have almost no signal.
 
 Usage:
     # Process all files in input/ (default, no args needed)
@@ -410,7 +410,7 @@ def parse_tracking_id(flat: pd.DataFrame) -> pd.DataFrame:
     """Consolidate CammsTrackingID/CommsTrackingID and split into components.
 
     Format: <cluster>-<pack_number>-<YYMMDD>-<activity_number>-<channel_abbr>
-    Example: QRREP-0000058-240709-0000060-EMI
+    Example (synthetic): ABCDE-0000123-240709-0000045-EMI
 
     Adds columns: tracking_id, tracking_cluster_id, tracking_pack_number,
     tracking_pub_date, tracking_activity_number, tracking_channel_abbr,
@@ -551,9 +551,10 @@ def build_fact_page_view(flat: pd.DataFrame, source_file: str) -> pd.DataFrame:
 
 # --- Person / visit derivation (shared; metrics only — source columns kept) --
 # The official AppInsights session_id is minted fresh on most navigations on
-# the corp source (92% of sessions span exactly ONE view — verified via
-# SiteOwnerDashboard/scripts/reconcile_visit_session.py on the real store), so
-# session-grouped metrics (time-on-page, bounce, depth) have almost no signal.
+# the corp source (the vast majority of sessions span exactly ONE view —
+# verified via SiteOwnerDashboard/scripts/reconcile_visit_session.py on the
+# real store), so session-grouped metrics (time-on-page, bounce, depth) have
+# almost no signal.
 # person_id (GPN, else anonymous device id) + visit_id (30-min inactivity rule,
 # calibrated to the source's own session timeout) are the usable grouping.
 # Consumers: SiteOwnerDashboard store (re-run on the FULL store) and the star
@@ -686,8 +687,8 @@ def build_agg_session(fact: pd.DataFrame) -> pd.DataFrame:
 def build_agg_visit(fact: pd.DataFrame) -> pd.DataFrame:
     """Aggregate pageViews into reconstructed visits — the visit-grain twin of
     build_agg_session. On the corp source session_id resets on most navigations
-    (92% single-view sessions), so session-grain engagement metrics have almost
-    no signal; this table carries the usable ones. Requires derive_person_visit
+    (the vast majority of sessions are single-view), so session-grain
+    engagement metrics have almost no signal; this table carries the usable ones. Requires derive_person_visit
     to have run (visit_id / person_id / time_on_page_visit_sec present)."""
     if "visit_id" not in fact.columns or "timestamp" not in fact.columns:
         return pd.DataFrame()

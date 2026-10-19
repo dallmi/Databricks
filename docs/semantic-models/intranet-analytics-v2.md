@@ -162,7 +162,7 @@ own date, division and referrer tables; `marketingpageid` is the only thing they
 | 10 | `fact` | `employee_contact` | `viewingcontactid` → `contactId` | both |
 | 11 | `fact` | `date_data_extract` | `visitdatekey` → `date_key` | both |
 | 12 | `marketingPageId_division` | `division_overview` | `employeebusinessdivision` → `gcrs_busn_div_name` | both |
-| 13 | `meta_data` | `LocalDateTable_086eb602…` | `__ORG__ArticleDate` → `Date` | single |
+| 13 | `meta_data` | `LocalDateTable_00000000…` | `__ORG__ArticleDate` → `Date` | single |
 | 14 | `meta_data_table` | `webpage_inventory` | `URL Column` → `article url` | **both, many-to-many** |
 | 15 | `overview_fact` | `division_overview` | `employeebusinessdivision` → `gcrs_busn_div_name` | both |
 | 16 | `overview_fact` | `marketingpageid` | `marketingpageid` | both |
@@ -332,7 +332,7 @@ organisation, article × channel, …) and drop the numbered columns. Keep one m
 
 ### 6. Auto date/time is switched on — Confirmed
 
-`LocalDateTable_086eb602…` and `DateTableTemplate_14338259…` are hidden tables Power BI
+`LocalDateTable_00000000…` and `DateTableTemplate_00000000…` are hidden tables Power BI
 creates on its own for date columns.
 
 **Example.** `meta_data[__ORG__ArticleDate]` has its own private calendar. A slicer on the

@@ -2,7 +2,7 @@
 Tests for build_payloads() in build_standalone_dashboard.py — the embed-time
 slice/prune/anonymise seam.
 
-Background (2026-07-17): the distributed standalone reached 236 MB and shipped
+Background (2026-07-17): the distributed standalone reached hundreds of MB and shipped
 plaintext GPNs — person_id IS the GPN, and in production visit_id is
 "person_id#n", so it carries the GPN as a prefix. (The demo generator fabricates
 session-like visit_ids, so the demo parquet hides this — the fixture below
@@ -28,7 +28,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_standalone_dashboard import build, build_payloads, DEFAULT_TEMPLATE  # noqa: E402
 
-GPN_A, GPN_B, GPN_C = "06297360", "01892018", "07001234"
+GPN_A, GPN_B, GPN_C = "00100200", "00100201", "00100202"
 
 
 def check(label: str, actual, expected) -> None:

@@ -41,7 +41,8 @@ union pageViews, customEvents
 | extend effective_rate = todouble(logical_rows) / physical_rows
 
 // === V3: volume baseline for the flush estimate =============================
-// The spec (§7) estimates ~2 flushes/page view => up to +350M events/year.
+// The spec (§7) estimates ~2 flushes/page view => up to several hundred million
+// additional events/year.
 // This grounds the estimate in the platform team's own numbers before they
 // push back on it: daily pageViews vs daily customEvents, last 30 days.
 union pageViews, customEvents

@@ -34,7 +34,7 @@ Usage (from the SiteOwnerDashboard project root; raw exports go in input/):
     python scripts/process_site_pageviews.py input/news_and_events.csv --site "News and events"
 
     # By SiteID instead of name:
-    python scripts/process_site_pageviews.py --site-id 5313b145-...
+    python scripts/process_site_pageviews.py --site-id <site-guid>
 
     # Override / disable HR enrichment:
     python scripts/process_site_pageviews.py --hr /path/hr_history.parquet
@@ -100,8 +100,8 @@ from flatten_appinsights import (  # noqa: E402
 
 # --- Language derived from PageURL ------------------------------------------
 # Intranet URLs carry non-English content as a path segment, e.g.
-#   https://intranet/sites/news/de/cawb.aspx  -> DE
-# English has NO language segment (…/cawb.aspx), so a valid URL with no /de|/fr|
+#   https://intranet/sites/<site>/de/<page>.aspx  -> DE
+# English has NO language segment (…/<page>.aspx), so a valid URL with no /de|/fr|
 # /it segment is English. Matched case-insensitively as a standalone segment.
 LANG_SEGMENTS = {"en": "EN", "de": "DE", "fr": "FR", "it": "IT"}
 _LANG_RE = re.compile(r"/(en|de|fr|it)(?=/|$|\?|#)", re.IGNORECASE)
@@ -116,8 +116,8 @@ def derive_language(url) -> str:
 
 
 # --- Language-agnostic page key ---------------------------------------------
-# The SAME logical page exists once per language (…/de/cawb.aspx, …/cawb.aspx,
-# …/fr/cawb.aspx, …/it/cawb.aspx), each with its own PageId — so grouping the
+# The SAME logical page exists once per language (…/de/<page>.aspx, …/<page>.aspx,
+# …/fr/<page>.aspx, …/it/<page>.aspx), each with its own PageId — so grouping the
 # Pages table by page_id shows one page several times. page_key strips the
 # language segment (and lowercases / trims a trailing slash) so all language
 # variants collapse to ONE key; the dashboard groups pages by page_key and the
@@ -259,8 +259,9 @@ def upsert_store(store: pd.DataFrame | None, new: pd.DataFrame,
 # The dashboard counts VISITS on the official AppInsights `session_id` (the
 # company standard, so our numbers reconcile with other company reports), and
 # TIME metrics (Avg time / Avg. Session) on the reconstructed `visit_id` — the
-# official session_id resets on most navigations (92% single-view sessions on
-# corp data), so session-based time-on-page has (almost) no measurable rows.
+# official session_id resets on most navigations (the vast majority of sessions
+# are single-view on corp data), so session-based time-on-page has (almost) no
+# measurable rows.
 # Unique Visitors = `person_id` (CustomProps.GPN; user_Id is per-device).
 #
 # The implementation is SHARED with the repo star schema:

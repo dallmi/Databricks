@@ -1,6 +1,6 @@
 # `imep_gold.final`
 
-> **The denormalized consumption endpoint for email engagement.** 520M rows, rebuilt completely via Full Rebuild (no incrementality). Combines `tbl_email` + `tbl_email_receiver_status` + `tbl_analytics_link` with HR enrichment (Region, Division, etc.) — in a single table. Email engagement has **deliberately no silver layer**; `final` **is** the silver-skip endpoint.
+> **The denormalized consumption endpoint for email engagement.** Hundreds of millions of rows, rebuilt completely via Full Rebuild (no incrementality). Combines `tbl_email` + `tbl_email_receiver_status` + `tbl_analytics_link` with HR enrichment (Region, Division, etc.) — in a single table. Email engagement has **deliberately no silver layer**; `final` **is** the silver-skip endpoint.
 
 | | |
 |---|---|
@@ -10,7 +10,7 @@
 | **Primary key** | `Id` |
 | **Cross-channel key** | `TrackingId` (inherited via join onto mailing master) |
 | **Write pattern** | **Full Rebuild** — complete `CREATE OR REPLACE TABLE AS SELECT`, **no incrementality** (Service Principal) |
-| **Approx row count** | **~520M**, 64,196 distinct mailings (as of 2026-04-20) |
+| **Approx row count** | **Hundreds of millions**, tens of thousands of distinct mailings (as of 2026-04-20) |
 | **Physical storage** | External Delta, ADLS path `abfss://gold@<gold-acc>/.../final`, **no partitioning** — full-scan risk on queries without a time filter |
 
 ---
@@ -84,8 +84,8 @@ erDiagram
 
 ```
 Id           = "..."
-MailingId    = "0a3f6c2e-..."      -- = tbl_email.Id
-TrackingId   = "QRREP-0000058-240709-0000060-EMI"
+MailingId    = "00000000-0000-4000-8000-000000000011"  -- = tbl_email.Id
+TrackingId   = "ABCDE-0000123-240709-0000045-EMI"
 TNumber      = "t100200"
 LogStatus    = "Click"
 Agent        = "Desktop Outlook"
@@ -132,10 +132,10 @@ See [join_strategy_contract.md](../../joins/join_strategy_contract.md) Pattern C
 
 - **⚠️ Full Rebuild** — the table is destroyed and rebuilt entirely, not merged incrementally. Long-running queries in parallel with a rebuild run may hit a temporarily inconsistent state. Refresh cadence not documented — we do not have a complete job-scheduler overview.
 - **No incrementality on the gold side** — any bronze change only lands in `final` after the next rebuild run. For out-of-band questions about newer events -> use bronze tables directly.
-- **Full scan is costly**: 520M rows × wide schema. **Always** constrain queries with an `event_time` or `TrackingId` filter. The Gold Full Rebuild has **no Z-Order** — there are no queries optimized on specific columns.
+- **Full scan is costly**: hundreds of millions of rows × wide schema. **Always** constrain queries with an `event_time` or `TrackingId` filter. The Gold Full Rebuild has **no Z-Order** — there are no queries optimized on specific columns.
 - **⚠️ No partitioning** — zero partitioning is the biggest structural performance gap in the whole system. Partitioning by date would drastically reduce scan I/O and rebuild cost, but that is an architecture change on the iMEP team, not on us.
 - **HR snapshot at build time**: `Region`/`Division` reflect the HR state at the rebuild timestamp. If an employee moves on July 1 from EMEA -> APAC, all older `final` events show the new value **after the next Full Rebuild** — not the historical one. For true temporal HR analyses, join from bronze with a `tbl_hr_employee` snapshot.
-- **Biggest compute hotspot in the entire pipeline budget** — full rebuild of a 520M-row table. Identified as the top optimization lever, but not our area.
+- **Biggest compute hotspot in the entire pipeline budget** — full rebuild of a table with hundreds of millions of rows. Identified as the top optimization lever, but not our area.
 
 ---
 
@@ -143,7 +143,7 @@ See [join_strategy_contract.md](../../joins/join_strategy_contract.md) Pattern C
 
 ```
 imep_bronze.tbl_email                   +
-imep_bronze.tbl_email_receiver_status   +--[Full Rebuild]--> imep_gold.final (520M)
+imep_bronze.tbl_email_receiver_status   +--[Full Rebuild]--> imep_gold.final (hundreds of millions of rows)
 imep_bronze.tbl_analytics_link          |
 imep_bronze.tbl_hr_employee             |
 imep_bronze.tbl_hr_costcenter           +
@@ -168,7 +168,7 @@ For new cross-channel analyses the rule is:
 | Item | State |
 |---|---|
 | Name | ✅ `imep_gold.final` (explicitly confirmed, earlier label confusion resolved) |
-| Rows | ✅ 520M, 64,196 distinct mailings |
+| Rows | ✅ Hundreds of millions, tens of thousands of distinct mailings |
 | Tier classification | ✅ Tier 0 (atomic fact) |
 | Grain | ✅ `mailing × recipient × event × hour` (events are hour-bucketed) |
 | Storage | ✅ External Delta, ADLS path `abfss://gold@<gold-acc>/.../final`, no partitioning |
@@ -180,7 +180,6 @@ For new cross-channel analyses the rule is:
 
 - [Join Strategy Contract](../../joins/join_strategy_contract.md)
 - [architecture_diagram.md](../../architecture_diagram.md)
-- Memory: `imep_silver_q26_findings.md`, `imep_join_graph_q27_findings.md`, `imep_pipeline_ops_q28_findings.md`, `imep_gold_full_inventory.md`
 
 ---
 

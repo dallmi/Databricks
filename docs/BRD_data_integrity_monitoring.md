@@ -17,7 +17,7 @@ correct, the dashboards stayed plausible, and the defect was found by people
 several weeks later rather than by the pipeline.
 
 Measured after the fact, a single ratio would have raised an alarm on day one:
-page views per session fell from about 2.2 to 1.06 while the number of distinct
+page views per session collapsed to about one while the number of distinct
 employees did not move at all. Nothing in the platform was watching that ratio.
 
 This document specifies the monitoring that closes the gap. It defines 37 checks
@@ -50,12 +50,12 @@ phasing in §11, and resolve the open points in §13.
 
 | Day | Page views per session | Browser ids per person | Distinct people | Distinct browser ids |
 |---|---|---|---|---|
-| Tue 31 Mar | 2.272 | 1.13 | 56,081 | 63,234 |
-| Wed 1 Apr | 2.018 | 1.12 | 56,677 | 63,426 |
-| Mon 6 Apr | 1.755 | 1.15 | 34,041 | 38,989 |
-| **Tue 7 Apr** | **1.665** | **1.66** | 59,684 | **98,861** |
-| **Wed 8 Apr** | **1.059** | **3.98** | 54,849 | **218,078** |
-| Thu 23 Apr | 1.058 | 3.84 | 56,559 | 217,020 |
+| Tue 31 Mar | well above one | slightly above one | normal weekday level | slightly above distinct people |
+| Wed 1 Apr | well above one | slightly above one | normal weekday level | slightly above distinct people |
+| Mon 6 Apr | lower, still above one (holiday) | slightly above one | holiday low | slightly above distinct people |
+| **Tue 7 Apr** | **falling** | **rising sharply** | normal weekday level | **jumps** |
+| **Wed 8 Apr** | **about one** | **several** | normal weekday level | **several times distinct people** |
+| Thu 23 Apr | about one | several | normal weekday level | several times distinct people |
 
 Source: `dq_checks_draft.sql` Block 0c, executed 2026-09-11 against
 `sharepoint_bronze.pageviews`.
@@ -118,9 +118,9 @@ result was stored anywhere a person or an alert could read it.
 flowchart LR
   SRC[Source telemetry<br/>pageViews · customEvents]
   LZ[Landing zone<br/>storage container]
-  BRZ[bronze<br/>pageviews 173M · customevents 262M]
+  BRZ[bronze<br/>pageviews · customevents<br/>each over a hundred million rows]
   SLV[silver<br/>pageviewed · pagevisited · webpagevisited]
-  GLD[gold<br/>pbi_db_interactions_metrics 84M]
+  GLD[gold<br/>pbi_db_interactions_metrics<br/>tens of millions of rows]
   SEM[Semantic layer]
   RPT[Report]
   DQ[(dq.dq_check_result<br/>one row per day and check)]
@@ -217,7 +217,7 @@ and each hop is reconciled.
 
 | # | Requirement | Priority |
 |---|---|---|
-| NFR-01 | The daily run materialises one bounded slice; no check scans the full 173M-row table | Must |
+| NFR-01 | The daily run materialises one bounded slice; no check scans the full table of over a hundred million rows | Must |
 | NFR-02 | Range predicates must remain file-skippable; no predicate wrapped in `CAST` | Must |
 | NFR-03 | Compatible with the Hive Metastore; `information_schema` is not available | Must |
 | NFR-04 | Read-only against source tables; writes confined to the `dq` schema | Must |
@@ -252,8 +252,8 @@ Ten signals, the subset a non-specialist should be able to read.
 
 | # | Signal | Healthy | Broken looks like | Caught April |
 |---|---|---|---|---|
-| 1 | Page views per visit | 1.94–2.35 weekday | 1.06 | Day 1 |
-| 2 | Browser identities per employee | 1.06–1.15 | 3.7–4.15 | Day 1 |
+| 1 | Page views per visit | well above 1 on a weekday | about 1 | Day 1 |
+| 2 | Browser identities per employee | slightly above 1 | several per employee | Day 1 |
 | 3 | Recurring browser identities | high, stable | near 0 % | Day 1 |
 | 4 | Visits per browser identity, weekly | above 1 | 1.0 | Day 1–2 |
 | 5 | Cookie visits vs person visits | about 1 | inflates | Day 1 |
@@ -385,10 +385,10 @@ From Block 0c, 25 March to 23 April 2026, daily grain.
 
 | Metric | Healthy weekday | Healthy weekend | Broken, from 8 April |
 |---|---|---|---|
-| Page views per session | 1.94–2.35 | 1.59–1.71 | 1.05–1.08 |
-| Browser identities per person | 1.11–1.15 | 1.06–1.08 | 3.70–4.15 |
-| Single-view session share | 0.54–0.65 | 0.73–0.76 | 0.93–0.95 |
-| Views carrying an employee number | 1.00 | 1.00 | 1.00 |
+| Page views per session | well above 1 | above 1, lower than weekdays | about 1 |
+| Browser identities per person | slightly above 1 | slightly above 1, lower than weekdays | several per person |
+| Single-view session share | a majority | a larger majority than weekdays | almost all |
+| Views carrying an employee number | virtually all | virtually all | virtually all |
 
 Because these describe healthy data, checks B1, B4 and B5 flag today by design
 and will keep flagging until the source is repaired. Retuning them to the current
@@ -396,15 +396,15 @@ state would define the incident away and is explicitly forbidden by FR-CAL-03.
 
 ### 10.2 Daily, never pooled
 
-A fortnight-pooled measurement reported 20.0 browser identities per person for
-the broken state. The same state measured daily reads about 3.9. Pooling inflates
+A fortnight-pooled measurement reported several times more browser identities per
+person for the broken state than the same state measured daily. Pooling inflates
 any per-person identity count, because browser identities do not recur across
 days while people do. The checks run daily, so the daily figures govern.
 
 ### 10.3 Holidays
 
-Good Friday on 3 April drew 29,845 page views against roughly 220,000 on a normal
-Friday, and Easter Monday 108,580 against roughly 316,000. Without a holiday
+Good Friday on 3 April drew a small fraction of a normal Friday's page views, and
+Easter Monday well under half of a normal Monday's. Without a holiday
 calendar, check A1 raises a critical result on both days every year. A calendar table is
 a prerequisite for phase 1, not an enhancement.
 

@@ -17,7 +17,7 @@ Convention:
 
 > *Show me all columns in `TBL_EMAIL`, `TBL_EMAIL_LINKS`, `TBL_ANALYTICS_LINK` and `TBL_EMAIL_RECEIVER_STATUS` whose name contains "tracking", "camms", "cpid" or "cplan" (case-insensitive). Include the data type and a non-null sample value for each column.*
 
-→ **Answer**: column is called `TrackingId` (not `CammsTrackingID`), lives on `imep_bronze.tbl_email` (mailing level), example `QRREP-0000058-240709-0000060-EMI`. Cross-channel join via `tbl_analytics_link.EmailId → tbl_email.Id → tbl_email.TrackingId`. SharePoint uses `GICTrackingID` (with case variants), CPLAN uses `tracking_id`.
+→ **Answer**: column is called `TrackingId` (not `CammsTrackingID`), lives on `imep_bronze.tbl_email` (mailing level), example `ABCDE-0000123-240709-0000045-EMI`. Cross-channel join via `tbl_analytics_link.EmailId → tbl_email.Id → tbl_email.TrackingId`. SharePoint uses `GICTrackingID` (with case variants), CPLAN uses `tracking_id`.
 
 ### ~~Q1b~~ ✅ Evaluate iMEP Gold layer **(OP-07f — resolved)**
 
@@ -246,29 +246,29 @@ Background: per the user, Gold **necessarily** contains engagement aggregates (s
 
 > *List ALL tables AND views in the `imep_gold` schema …*
 
-→ **Answer**: 5-tier architecture found. Tier 1 = atomic `Final` (525M). Tier 2 = rolling-timespan aggs (`tbl_pbi_date*`, `_divarea*`, `_regcntry*`, `_deviceTypeall`) — pattern `EngagementType + Count`, no separate Open/Click KPIs. **Tier 3 = engagement summaries WITH UniqueOpens/UniqueClicks**: `tbl_pbi_engagement` (Mailing×Link, 1.38M), `tbl_pbi_mailingreciever_region` (697K), `tbl_pbi_mailingreciever_division` (290K). Tier 4 = platform metadata. Tier 5 = reference. Daily refresh; aggregations without historisation. 66% NULL-region as data-quality blocker. **Full table list**: see [findings/q16-imep-gold-inventory.md](findings/q16-imep-gold-inventory.md).
+→ **Answer**: 5-tier architecture found. Tier 1 = atomic `Final` (hundreds of millions of rows). Tier 2 = rolling-timespan aggs (`tbl_pbi_date*`, `_divarea*`, `_regcntry*`, `_deviceTypeall`) — pattern `EngagementType + Count`, no separate Open/Click KPIs. **Tier 3 = engagement summaries WITH UniqueOpens/UniqueClicks**: `tbl_pbi_engagement` (Mailing×Link, over a million rows), `tbl_pbi_mailingreciever_region` (hundreds of thousands), `tbl_pbi_mailingreciever_division` (hundreds of thousands). Tier 4 = platform metadata. Tier 5 = reference. Daily refresh; aggregations without historisation. NULL region for the majority of recipients as data-quality blocker. **Full table list**: see [findings/q16-imep-gold-inventory.md](findings/q16-imep-gold-inventory.md).
 
 ### Q16b — `Final` table: grain and partitioning **(follow-up)**
 
-> *For `imep_gold.Final` (525M rows, 30 columns): show complete column list with types. Is the table partitioned (by date, by MailingId, by EventType)? Show `MIN/MAX(send_datetime)` to understand temporal coverage. Show distinct values and row counts for `EventType` and `EngagementType` columns.*
+> *For `imep_gold.Final` (hundreds of millions of rows, 30 columns): show complete column list with types. Is the table partitioned (by date, by MailingId, by EventType)? Show `MIN/MAX(send_datetime)` to understand temporal coverage. Show distinct values and row counts for `EventType` and `EngagementType` columns.*
 
 → Understand whether we can use `Final` directly for ad-hoc queries or whether Tier 2/3 is always preferable.
 
 ### Q16c — `tbl_pbi_kpi` schema **(follow-up)**
 
-> *Full column list with types for `imep_gold.tbl_pbi_kpi` (244K rows). Which KPI columns exist (open rate, click rate, bounce rate, unsubscribe rate)? Is it per mailing or per (mailing, segment)?*
+> *Full column list with types for `imep_gold.tbl_pbi_kpi` (hundreds of thousands of rows). Which KPI columns exist (open rate, click rate, bounce rate, unsubscribe rate)? Is it per mailing or per (mailing, segment)?*
 
 → Could be a direct pack-level summary that saves us the Silver aggregation.
 
 ### Q16d — NULL-region root cause **(data quality, critical)**
 
-> *In `imep_gold.tbl_pbi_mailingreciever_region`: for the 66% of recipients with NULL region — what is the distribution of their `MailingId` (is it concentrated in certain campaigns)? Join via MailingId to `tbl_pbi_platform_mailings` and show the distribution by CreationDate year. Also: for a sample of 100 affected TNumbers, check directly against `tbl_hr_employee` — do they exist there? If yes, what's their `ORGANIZATIONAL_UNIT`, and does that OU exist in `tbl_hr_costcenter`?*
+> *In `imep_gold.tbl_pbi_mailingreciever_region`: for the majority of recipients with NULL region — what is the distribution of their `MailingId` (is it concentrated in certain campaigns)? Join via MailingId to `tbl_pbi_platform_mailings` and show the distribution by CreationDate year. Also: for a sample of 100 affected TNumbers, check directly against `tbl_hr_employee` — do they exist there? If yes, what's their `ORGANIZATIONAL_UNIT`, and does that OU exist in `tbl_hr_costcenter`?*
 
 → Decides the fix strategy: stale cost-center snapshots? Ex-employees? Or a genuine reference-data gap?
 
 ### ~~Q17~~ ✅ Do further Gold schemas exist **(resolved 2026-04-17)**
 
-→ **Answer**: **SharePoint Gold exists** (`sharepoint_gold`, 20 tables, ~270M+ rows). Key: `pbi_db_interactions_metrics` (84M, 11 cols), `pbi_db_pageviewed_metric` (84M, 5 cols), `pbi_db_pagevisited_metric` (81M, 9 cols), `pbi_db_employeecontact` (24M, 17 cols), `pbi_db_datewise_overview_fact_tbl` (7.5M, 31 cols). Separately: **`sharepoint_clicks_gold`** with `pbi_db_ctalabel_intr_fact_gold` (3M, CTA labels). **CPLAN data already in Databricks** (`sharepoint_cplan`): Clusters (17), Packs (280), Activities (4,349). **`pbi_gold` (60 tables, inaccessible)** — request access, presumably the semantic model. Full list: see [findings/q17-sharepoint-gold-inventory.md](findings/q17-sharepoint-gold-inventory.md).
+→ **Answer**: **SharePoint Gold exists** (`sharepoint_gold`, 20 tables, hundreds of millions of rows). Key: `pbi_db_interactions_metrics` (tens of millions, 11 cols), `pbi_db_pageviewed_metric` (tens of millions, 5 cols), `pbi_db_pagevisited_metric` (tens of millions, 9 cols), `pbi_db_employeecontact` (tens of millions, 17 cols), `pbi_db_datewise_overview_fact_tbl` (millions, 31 cols). Separately: **`sharepoint_clicks_gold`** with `pbi_db_ctalabel_intr_fact_gold` (millions, CTA labels). **CPLAN data already in Databricks** (`sharepoint_cplan`): Clusters (a short list), Packs (hundreds), Activities (thousands). **`pbi_gold` (60 tables, inaccessible)** — request access, presumably the semantic model. Full list: see [findings/q17-sharepoint-gold-inventory.md](findings/q17-sharepoint-gold-inventory.md).
 
 ### Q17b — TrackingID columns in `sharepoint_gold` **(follow-up)**
 
@@ -278,13 +278,13 @@ Background: per the user, Gold **necessarily** contains engagement aggregates (s
 
 ### Q17c — `pbi_db_datewise_overview_fact_tbl` as pre-joined fact **(follow-up)**
 
-> *Full column list for `sharepoint_gold.pbi_db_datewise_overview_fact_tbl` (7.5M rows, 31 cols). Is this already a pre-joined fact (date × page × employee × metrics)? Show 3 sample rows with all columns to understand what it aggregates.*
+> *Full column list for `sharepoint_gold.pbi_db_datewise_overview_fact_tbl` (millions of rows, 31 cols). Is this already a pre-joined fact (date × page × employee × metrics)? Show 3 sample rows with all columns to understand what it aggregates.*
 
 → If this is a pre-joined fact, our Gold cross-channel build is almost done.
 
 ### Q17d — `pbi_db_employeecontact` as alternative HR bridge **(follow-up)**
 
-> *Full schema of `sharepoint_gold.pbi_db_employeecontact` (24M rows, 17 cols). Does it contain both TNumber and GPN/WORKER_ID? Can we use it instead of `imep_bronze.tbl_hr_employee` for the identity bridge (might be faster / pre-cleaned)?*
+> *Full schema of `sharepoint_gold.pbi_db_employeecontact` (tens of millions of rows, 17 cols). Does it contain both TNumber and GPN/WORKER_ID? Can we use it instead of `imep_bronze.tbl_hr_employee` for the identity bridge (might be faster / pre-cleaned)?*
 
 → Simplifies `silver.dim_employee_temporal` if the resolution is already done here.
 
@@ -344,10 +344,10 @@ Goal: the final schema details and volume checks we need to start the concrete S
 ### Q22 — SharePoint Gold metric schemas
 
 > *For the following SharePoint Gold tables, return full column list with types and nullability:*
-> *- `sharepoint_gold.pbi_db_interactions_metrics` (84M × 11 cols)*
-> *- `sharepoint_gold.pbi_db_pageviewed_metric` (84M × 5 cols)*
-> *- `sharepoint_gold.pbi_db_pagevisited_metric` (81M × 9 cols)*
-> *- `sharepoint_gold.pbi_db_datewise_overview_fact_tbl` (7.5M × 31 cols)*
+> *- `sharepoint_gold.pbi_db_interactions_metrics` (tens of millions of rows × 11 cols)*
+> *- `sharepoint_gold.pbi_db_pageviewed_metric` (tens of millions of rows × 5 cols)*
+> *- `sharepoint_gold.pbi_db_pagevisited_metric` (tens of millions of rows × 9 cols)*
+> *- `sharepoint_gold.pbi_db_datewise_overview_fact_tbl` (millions of rows × 31 cols)*
 >
 > *For each: (a) identify the page-identifying FK column (`page_id`, `pageId`, `url_hash`, etc.) that joins back to `sharepoint_bronze.pages`; (b) check whether any of these tables carries a direct `GICTrackingID` / `__ORG__GICTrackingID` column (so we can skip the pages-JOIN).*
 
@@ -372,11 +372,11 @@ Goal: the final schema details and volume checks we need to start the concrete S
 > *(c) Of the rows with TrackingId, what percentage has the channel-suffix `-EMI` (= email)? And what's the distribution of the other suffixes (EVT, BAN, etc.)?*
 > *(d) Assuming we filter `WHERE TrackingId IS NOT NULL AND RIGHT(TrackingId, 3) = 'EMI'` — how many distinct `tracking_pack_id` (first 2 segments) does that leave us?*
 
-→ Shows how much of the 278M-recipients universe survives the filter for our email page, and how many distinct packs we should expect in the dashboard.
+→ Shows how much of the recipient universe (hundreds of millions) survives the filter for our email page, and how many distinct packs we should expect in the dashboard.
 
 ### Q25 — __ORG__GICTrackingID distribution in `pages` (time + site breakdown)
 
-> **Domain context**: `sharepoint_bronze.pages` is the SharePoint page inventory (~48k rows). `__ORG__GICTrackingID` is populated only for News- and Event-Articles (~4% per Q22). `__ORG__ArticleDate` is the temporal anchor. Each page belongs to a Site — FK likely `siteId` / `webId` / `siteUrl`, use whichever column joins to `sharepoint_bronze.sites`.
+> **Domain context**: `sharepoint_bronze.pages` is the SharePoint page inventory (tens of thousands of rows). `__ORG__GICTrackingID` is populated only for News- and Event-Articles (a small minority, low single-digit percent, per Q22). `__ORG__ArticleDate` is the temporal anchor. Each page belongs to a Site — FK likely `siteId` / `webId` / `siteUrl`, use whichever column joins to `sharepoint_bronze.sites`.
 
 > *Analyze `__ORG__GICTrackingID` coverage in `sharepoint_bronze.pages` in four steps. Return only aggregates — do NOT return sample TrackingID values.*
 >
@@ -410,7 +410,7 @@ Goal: the final schema details and volume checks we need to start the concrete S
 >
 > *If the FK between `pages` and `sites` is not obvious, first run `DESCRIBE TABLE sharepoint_bronze.pages` and `DESCRIBE TABLE sharepoint_bronze.sites`, identify matching GUID/ID columns, and explain your join choice before running step 4.*
 
-→ Refines Q22: the global 4% coverage is broken down by time and site. Goal: (1) realistic dashboard default time range, (2) Pareto subset of sites where coverage is actually high enough for a credible funnel.
+→ Refines Q22: the global low single-digit-percent coverage is broken down by time and site. Goal: (1) realistic dashboard default time range, (2) Pareto subset of sites where coverage is actually high enough for a credible funnel.
 
 ---
 
@@ -424,11 +424,11 @@ Goal: the final schema details and volume checks we need to start the concrete S
 
 → **Answer**: **17 Silver schemas exist**, all with the suffix `_silver`. **Zero hits** for alternative naming patterns (stage/staging/curated/std/standardized/intermediate/harmonized/conformed/enriched). The medallion pattern is **asymmetric**:
 > - `bronze → silver → gold` for SharePoint, Adobe, Dynamics, Ads
-> - `bronze → gold` (skipping silver) for **email engagement (iMEP)** → direct write to `imep_gold.final` (~520M rows, denormalised join, HR enrichment late)
+> - `bronze → gold` (skipping silver) for **email engagement (iMEP)** → direct write to `imep_gold.final` (hundreds of millions of rows, denormalised join, HR enrichment late)
 >
-> **`sharepoint_silver`** (5 tables): `webpageviewed` ~262M · `pageviewed` ~136M · `pageposted` ~105M + dims `webpage`, `website`. → the SharePoint source of choice for our cross-channel SQL.
+> **`sharepoint_silver`** (5 tables): `webpageviewed` hundreds of millions · `pageviewed` over a hundred million · `pageposted` over a hundred million + dims `webpage`, `website`. → the SharePoint source of choice for our cross-channel SQL.
 >
-> **`imep_silver`** exists only for events: `invitation`, `eventregistration` ~13.7M, `event` ~84K. **No Silver for email.**
+> **`imep_silver`** exists only for events: `invitation`, `eventregistration` over ten million rows, `event` tens of thousands. **No Silver for email.**
 >
 > Other relevant silvers: `adobe_silver` (15), `dynamics_silver` (7), `email_campaign_forms_silver` (5), `adform_silver` (3), `profile_silver` (~6), `linkedin_silver`, `google_silver`, `facebook_silver`, `oii_silver`, `bid_silver`, `persona_data_silver`.
 >
@@ -445,10 +445,10 @@ Goal: the final schema details and volume checks we need to start the concrete S
 → **Answer**: **93 tables / 8 schemas** have hits. Core findings:
 >
 > **Two sole full-key fact hubs** (Id + EmailId + TNumber):
-> - `imep_bronze.tbl_analytics_link` — **533M** rows
-> - `imep_bronze.tbl_email_receiver_status` — **293M** rows
+> - `imep_bronze.tbl_analytics_link` — **hundreds of millions of** rows
+> - `imep_bronze.tbl_email_receiver_status` — **hundreds of millions of** rows
 >
-> **Row counts confirmed**: `imep_gold.final` 520M · `sharepoint_bronze.pageviews` 173M · `tbl_email` 145K · `tbl_pbi_platform_mailings` 73K · `sharepoint_bronze.pages` 48K · `tbl_hr_employee` 265K.
+> **Row counts confirmed** (order of magnitude): `imep_gold.final` hundreds of millions · `sharepoint_bronze.pageviews` over a hundred million · `tbl_email` over a hundred thousand · `tbl_pbi_platform_mailings` tens of thousands · `sharepoint_bronze.pages` tens of thousands · `tbl_hr_employee` hundreds of thousands.
 >
 > **Join-graph topology**:
 > - `EmailId` → **12 tables** (backbone for email domain)
@@ -458,7 +458,7 @@ Goal: the final schema details and volume checks we need to start the concrete S
 >
 > **Cross-channel**: email ↔ SharePoint goes **dimensionally** (TrackingId ↔ GICTrackingID via `pages`), **not** via engagement rows. SharePoint has no person-key equivalent to TNumber.
 >
-> **New schema sighted**: `page_metadata_bronze` (pagelikesview 40K, comments 3.4K, reportedcomments, moderatedcomments, metadata-pageviews 293) — separate from the main pageview fact.
+> **New schema sighted**: `page_metadata_bronze` (pagelikesview tens of thousands, comments thousands, reportedcomments, moderatedcomments, metadata-pageviews hundreds) — separate from the main pageview fact.
 >
 > Full details: [findings/q27-imep-join-graph.md](findings/q27-imep-join-graph.md).
 
@@ -480,23 +480,23 @@ Goal: the final schema details and volume checks we need to start the concrete S
 >
 > **Uniform rhythm pattern**: `MERGE/WRITE → OPTIMIZE (Z-Order) → VACUUM`, 7-day retention.
 >
-> **iMEP Bronze — MERGE upsert 2×/day @ 00:00/12:00 UTC**:
-> - `tbl_email`: ~145K full-table upsert
-> - `tbl_email_receiver_status`: 27–72M per run (full upsert)
-> - `tbl_analytics_link`: **3.7–8.5K per run → truly incremental** (new click events)
+> **iMEP Bronze — MERGE upsert 2×/day**:
+> - `tbl_email`: full-table upsert (whole table)
+> - `tbl_email_receiver_status`: tens of millions per run (full upsert)
+> - `tbl_analytics_link`: **thousands per run → truly incremental** (new click events)
 >
-> **SharePoint Bronze — 1×/day @ 02:00 UTC**:
-> - `pages`: MERGE daily snapshot (48K)
-> - `pageviews`: **append WRITE, 7 bursts within 1 minute** (API pagination pattern, micro-batched, **not** streaming)
+> **SharePoint Bronze — 1×/day**:
+> - `pages`: MERGE daily snapshot (tens of thousands)
+> - `pageviews`: **append WRITE, a handful of bursts within about 1 minute** (API pagination pattern, micro-batched, **not** streaming)
 >
-> **iMEP Gold — full rebuild 2×/day @ ~00:23/12:25 UTC**:
+> **iMEP Gold — full rebuild 2×/day**:
 > - **No incrementality** — every gold table completely destroyed and rebuilt
-> - **520M-row table** (labelled `tbl_pbi_platform_mailings` in the image — ⚠️ contradicts Q27's 73K, most likely `imep_gold.final`; to be clarified via Q30) rewritten twice daily → **largest compute cost item**
-> - Further gold full rebuilds: `tbl_pbi_mailings_region` (73,530), `tbl_pbi_mailings_division` (697,787), `tbl_pbi_analytics` (290,723), `tbl_pbi_kpi` (245,040), +1 (1,384,800)
+> - **Table with hundreds of millions of rows** (labelled `tbl_pbi_platform_mailings` in the image — ⚠️ contradicts Q27's tens of thousands, most likely `imep_gold.final`; to be clarified via Q30) rewritten twice daily → **largest compute cost item**
+> - Further gold full rebuilds: `tbl_pbi_mailings_region` (tens of thousands), `tbl_pbi_mailings_division` (hundreds of thousands), `tbl_pbi_analytics` (hundreds of thousands), `tbl_pbi_kpi` (hundreds of thousands), +1 (over a million)
 >
 > **Writer**: `userName` empty everywhere → **service principal**. Fully automated pipeline, no human writer.
 >
-> **Dashboard implication**: refresh-window risk around 00:23/12:25 UTC (gold rebuild phase) — queries in this window may hit a partial/inconsistent state. Cache or schedule around it.
+> **Dashboard implication**: refresh-window risk during the twice-daily gold rebuild phase — queries in this window may hit a partial/inconsistent state. Cache or schedule around it.
 >
 > **Optimisation hint** (not our remit): gold full rebuild → incremental MERGE would significantly reduce compute.
 >
@@ -507,16 +507,16 @@ Goal: the final schema details and volume checks we need to start the concrete S
 > *For every table in `imep_gold` AND `sharepoint_gold`, return: table name, all column names, row count, `COUNT(DISTINCT <id-like column>)`, presence of dimension/metric columns as boolean flags. Goal: bucket tables by grain.*
 
 → **Answer**: 52 gold tables in a strict 4-tier hierarchy. **iMEP Gold (31 tables)**:
-> - **Tier 0** — atomic fact (1 table): `final` (520M, grain `mailing × recipient × event × hour`) — **definitively resolves the Q28 label confusion** ✅
+> - **Tier 0** — atomic fact (1 table): `final` (hundreds of millions of rows, grain `mailing × recipient × event × hour`) — **definitively resolves the Q28 label confusion** ✅
 > - **Tier 1** — timespan × dimension aggregates (15 tables): 24h/72h/1w/15w/15m+, Date/DateHour/DivArea/RegCntry
-> - **Tier 2** — per-mailing summaries (~8 tables): `mailingreceiver_*`, `engagement` (1.8M, **117K distinct mailingIds → emails+events mixed**), `log_mail`
-> - **Tier 3** — platform & reference dimensions (~7): `tbl_pbi_platform_mailings` (73,920 rows, **927 TrackingIds**), `tbl_pbi_platform_events` (84,052), mailing access, logins, etc.
+> - **Tier 2** — per-mailing summaries (~8 tables): `mailingreceiver_*`, `engagement` (over a million rows, **more distinct mailingIds than the mailing master has rows → emails+events mixed**), `log_mail`
+> - **Tier 3** — platform & reference dimensions (~7): `tbl_pbi_platform_mailings` (tens of thousands of rows, **hundreds of distinct TrackingIds**), `tbl_pbi_platform_events` (tens of thousands), mailing access, logins, etc.
 >
 > **SharePoint Gold (20 tables)**:
-> - Tier 0 — atomic interaction facts (4): `interactions_metrics` 84M, `pageviewed_metric`, `pagevisited_metric`, `90_days`
-> - Tier 1 — pre-aggregated overview (3): `datewise_overview_fact_tbl` (7.5M, 27 rolling-window stats)
+> - Tier 0 — atomic interaction facts (4): `interactions_metrics` tens of millions, `pageviewed_metric`, `pagevisited_metric`, `90_days`
+> - Tier 1 — pre-aggregated overview (3): `datewise_overview_fact_tbl` (millions of rows, 27 rolling-window stats)
 > - Tier 2 — engagement/social (3): `pageliked_metric`, `pagecommented_metric`, `page_like_int_fact`
-> - Tier 3 — dimensions (7): `employeecontact` (24.3M, person-bridge candidate), `website_page_inventory`, calendar, referer-app
+> - Tier 3 — dimensions (7): `employeecontact` (tens of millions, person-bridge candidate), `website_page_inventory`, calendar, referer-app
 > - **Video sub-domain (3 tables)**: `fact_video_engagement_gold` etc. — the only managed Declarative Pipeline tables in the whole system
 >
 > **Cross-system join mechanism**: iMEP Gold + SP Gold share **no FK** — the only bridge is `tbl_pbi_platform_mailings.TrackingId → pages.__ORG__GICTrackingID → pages.pageUUID → marketingPageId`, and it only works after a SEG1–4 match.
@@ -539,7 +539,7 @@ Goal: the final schema details and volume checks we need to start the concrete S
 >
 > **3 structural findings**:
 > 1. **Pipeline reality check**: of 114 tables, **only 3 (video) are managed Declarative Pipelines** — the other 111 are notebook-based jobs without pipeline metadata. The folder layout suggests 2–3 large orchestration notebooks instead of a layered framework.
-> 2. **⚠️ Zero partitioning across all 114 tables** — particularly impactful for `imep_gold.final` (520M, full rebuild 2×/day) and `sharepoint_gold.interactions_metrics` (84M). Partitioning by date would massively reduce rebuild cost and improve Power BI latency. **Biggest structural performance gap.**
+> 2. **⚠️ Zero partitioning across all 114 tables** — particularly impactful for `imep_gold.final` (hundreds of millions of rows, full rebuild 2×/day) and `sharepoint_gold.interactions_metrics` (tens of millions). Partitioning by date would massively reduce rebuild cost and improve Power BI latency. **Biggest structural performance gap.**
 > 3. **Gold co-location is intentional**: both gold schemas sit in **one** ADLS gold account → cross-system joins possible directly inside Fabric/Spark, no cross-account auth required. Deliberate architectural alignment for analytics.
 >
 > **One-page summary**: the physical layout reveals the architectural truth — everything is notebook-driven (except video), gold is rebuilt wholesale (not incrementally), no partitioning is the biggest performance gap, gold co-location is the correct design for cross-channel.

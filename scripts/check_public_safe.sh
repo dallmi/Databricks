@@ -30,6 +30,8 @@ PATTERNS=(
   '/Users/[A-Za-z]'                                        # local macOS path
   '[Cc]:\\Users\\'                                         # local Windows path
   '\.claude/projects/'                                     # local Claude memory path
+  "([Pp]epper|[Ss]ecret|[Tt]oken|[Pp]assword|[Aa][Pp][Ii]_?[Kk]ey)[^'\"]{0,40}['\"][A-Za-z0-9+/=_-]{20,}['\"]"  # secret literal
+  "['\"][0-9a-fA-F]{40,}['\"]"                             # long hex literal (possible key or pepper)
 )
 # Synthetic examples and tool signatures that may appear.
 ALLOW='t100200|T100200|noreply@anthropic\.com|@example\.(com|org)'

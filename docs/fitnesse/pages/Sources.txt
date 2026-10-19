@@ -19,7 +19,7 @@ Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/
 !3 Q1 — Where does TrackingId live?
  * '''Date''': 2026-04-16
  * '''Scope''': tbl_email, tbl_email_links, tbl_analytics_link, tbl_email_receiver_status — search for columns tracking/camms/cpid/cplan.
- * '''Finding''': TrackingId exists '''only''' on imep_bronze.tbl_email (mailing level), not on engagement tables. Example: QRREP-0000058-240709-0000060-EMI. Cross-channel is a dimension, not a fact key.
+ * '''Finding''': TrackingId exists '''only''' on imep_bronze.tbl_email (mailing level), not on engagement tables. Example: ABCDE-0000123-240709-0000045-EMI. Cross-channel is a dimension, not a fact key.
 
 !3 Q1b — Evaluate iMEP Gold layer
  * '''Date''': 2026-04-16
@@ -53,22 +53,22 @@ Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/
 !3 Q16 — iMEP Gold inventory + attribution lag
  * '''Date''': 2026-04-18
  * '''Scope''': Which Gold tables carry UniqueOpens/UniqueClicks per Mailing × Region/Division. Raw inventory of the 5-tier architecture.
- * '''Finding''': 22%/1.8% global open/click rates. 66% NULL-Region share on Tier-3 aggregates → data quality blocker. Tier-3 pivot of tbl_pbi_kpi documented.
+ * '''Finding''': Global open/click rates computable (clicks far rarer than opens; rates differ markedly by region). NULL region for the majority of recipients on Tier-3 aggregates → data quality blocker. Tier-3 pivot of tbl_pbi_kpi documented.
 
 !3 Q17 — SharePoint Gold + CPLAN inventory
  * '''Date''': 2026-04-18
  * '''Scope''': Which tables in sharepoint_gold, sharepoint_clicks_gold, sharepoint_cplan are accessible; which carry PageView/CTA metrics.
- * '''Finding''': sharepoint_gold (20 tables, 270M+ rows) + sharepoint_clicks_gold (CTA) + sharepoint_cplan (Clusters/Packs/Activities) are all in Databricks. pbi_gold (60 tables) '''not''' accessible.
+ * '''Finding''': sharepoint_gold (20 tables, hundreds of millions of rows) + sharepoint_clicks_gold (CTA) + sharepoint_cplan (Clusters/Packs/Activities) are all in Databricks. pbi_gold (60 tables) '''not''' accessible.
 
 !3 Q21 — iMEP Gold Tier-3 schemas
  * '''Date''': 2026-04-19
  * '''Scope''': DESCRIBE + sample for tbl_pbi_mailings_region, _division, tbl_pbi_kpi, tbl_pbi_platform_mailings — join keys and data types.
- * '''Finding''': Join key MailingId is lowercase mailingid on the engagement side! Match rates 72-98% (not all mailings have Tier-3 entries). UniqueOpens NULL ~28-35%, UniqueClicks NULL ~66-81% — '''semantic NULLs''', not defects. tbl_pbi_kpi is pivoted (measure + MailingReceiverStatus).
+ * '''Finding''': Join key MailingId is lowercase mailingid on the engagement side! Match rates vary widely by table (not all mailings have Tier-3 entries). UniqueOpens NULL for a substantial minority of rows, UniqueClicks NULL for the majority — '''semantic NULLs''', not defects. tbl_pbi_kpi is pivoted (measure + MailingReceiverStatus).
 
 !3 Q22 — SharePoint Gold metric schemas
  * '''Date''': 2026-04-19
  * '''Scope''': Which Gold table carries TrackingID? FK chain between pbi_db_interactions_metrics and sharepoint_bronze.pages.
- * '''Finding''': '''No direct TrackingID''' on Gold metric tables. FK chain: metrics.marketingPageId → pages.pageUUID → pages.__ORG__GICTrackingID. ⚠️ Only 1,949/48,419 pages (~4%) have __ORG__GICTrackingID → cross-channel coverage is sparse.
+ * '''Finding''': '''No direct TrackingID''' on Gold metric tables. FK chain: metrics.marketingPageId → pages.pageUUID → pages.__ORG__GICTrackingID. ⚠️ Only a small minority of pages (low single-digit percent) have __ORG__GICTrackingID → cross-channel coverage is sparse.
 
 ----
 
@@ -77,17 +77,17 @@ Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/
 !3 Q23 — TrackingId format consistency iMEP ↔ SharePoint
  * '''Date''': 2026-04-20
  * '''Scope''': Structural comparison tbl_email.TrackingId ↔ sharepoint_bronze.pages.__ORG__GICTrackingID — length, case, segments, value overlap.
- * '''Finding''': Format identical (32-char 5-seg UPPER clean) '''but''' values nearly disjoint (Jaccard 0.004, 6/1677 overlap). SEG5 = channel (iMEP: EMI/NLI/TWE; SharePoint: IAN/ITS/OPN/ANC). '''Business-refined 2026-04-20: Cross-channel match is Pack-Level (SEG1-2) ONLY''' — SEG1-4 also fails because email and page of the same pack have different dates (SEG3) and activity sequences (SEG4).
+ * '''Finding''': Format identical (32-char 5-seg UPPER clean) '''but''' values nearly disjoint (only a handful of values appear on both sides). SEG5 = channel (iMEP: EMI/NLI/TWE; SharePoint: IAN/ITS/OPN/ANC). '''Business-refined 2026-04-20: Cross-channel match is Pack-Level (SEG1-2) ONLY''' — SEG1-4 also fails because email and page of the same pack have different dates (SEG3) and activity sequences (SEG4).
 
 !3 Q24 — TrackingId volume & adoption
  * '''Date''': 2026-04-20
  * '''Scope''': How many mailings actually have a TrackingId? Adoption over time + channel distribution.
- * '''Finding''': Only 986/73,930 mailings (1.3%) have TrackingId. Adoption ramps: 2024 = 99, 2025 = 637, 2026 YTD = 250. 80% are EMI. '''791 EMI rows → 696 distinct TIDs → 54 distinct Pack IDs (SEG1-2)'''. Dashboard universe = 54 packs, default time window from 2025.
+ * '''Finding''': Only a small minority of mailings (low single-digit percent) have TrackingId. Adoption starts in 2024 and ramps up steeply (2025 several times 2024, 2026 YTD on track to exceed 2025). The large majority are EMI. '''Hundreds of EMI rows → slightly fewer distinct TIDs → a few dozen distinct Pack IDs (SEG1-2)'''. Dashboard universe = a few dozen packs, default time window from 2025.
 
 !3 Q25 — __ORG__GICTrackingID distribution in pages
  * '''Date''': 2026-04-20
  * '''Scope''': Which SharePoint sites have tracking coverage, over which time spans, with which URL mapping?
- * '''Finding''': 99.4% of tracked pages on '''one single site''' ("News and events", 83 packs). Coverage rollout Sep 2024 (33.9%), peak 70.5% March 2026, never 80%. 1:1 URL↔TID mapping. Dashboard → restrict to News-and-events + floor 2024-09-01.
+ * '''Finding''': Virtually all tracked pages on '''one single site''' ("News and events", several dozen packs). Coverage rollout Sep 2024 (jump from near zero to a substantial share), peak March 2026, never 80%. 1:1 URL↔TID mapping. Dashboard → restrict to News-and-events + floor 2024-09-01.
 
 ----
 
@@ -96,27 +96,27 @@ Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/
 !3 Q26 — Silver existence via schema naming
  * '''Date''': 2026-04-20
  * '''Scope''': SHOW SCHEMAS scan — which schemas end in _silver, which in _bronze / _gold?
- * '''Finding''': 17 _silver schemas exist. '''SharePoint uses the full Bronze→Silver→Gold''' (sharepoint_silver ~262M webpagevisited). '''imep_silver exists only for events''', email engagement skips Silver → imep_gold.final ~520M rows is the direct consumption endpoint. Medallion asymmetric. Stop planning silver.fact_email.
+ * '''Finding''': 17 _silver schemas exist. '''SharePoint uses the full Bronze→Silver→Gold''' (sharepoint_silver, webpagevisited with hundreds of millions of rows). '''imep_silver exists only for events''', email engagement skips Silver → imep_gold.final (hundreds of millions of rows) is the direct consumption endpoint. Medallion asymmetric. Stop planning silver.fact_email.
 
 !3 Q27 — Join graph via column fingerprint
  * '''Date''': 2026-04-20
  * '''Scope''': Scan all table schemas × 8 schemas for EmailId/TrackingId/TNumber/GPN columns; reconstruct the join graph.
- * '''Finding''': 93 tables / 8 schemas mapped. Two full-key hubs: tbl_analytics_link (533M) + tbl_email_receiver_status (293M). EmailId in 12 tables, TNumber in only 2 (→ person analytics = email-grain only), TrackingId in exactly 4 and '''never co-occurring with EmailId''' → TrackingId is dimension, not fact. Cross-channel = TrackingId ↔ GICTrackingID via pages, '''not''' via engagement. New schema page_metadata_bronze discovered.
+ * '''Finding''': 93 tables / 8 schemas mapped. Two full-key hubs: tbl_analytics_link + tbl_email_receiver_status (hundreds of millions of rows each). EmailId in 12 tables, TNumber in only 2 (→ person analytics = email-grain only), TrackingId in exactly 4 and '''never co-occurring with EmailId''' → TrackingId is dimension, not fact. Cross-channel = TrackingId ↔ GICTrackingID via pages, '''not''' via engagement. New schema page_metadata_bronze discovered.
 
 !3 Q28 — Pipeline hints from Delta History
  * '''Date''': 2026-04-20
  * '''Scope''': DESCRIBE HISTORY on the largest tables — write operations, Service Principal, operation types (MERGE/CTAS/Append).
- * '''Finding''': Unified MERGE → OPTIMIZE → VACUUM rhythm, 7-day retention. iMEP Bronze MERGE Upsert (tbl_analytics_link truly incremental 3-8K/run; tbl_email / tbl_email_receiver_status full-replace 27-72M/run). SharePoint Bronze: pages MERGE snapshot, pageviews Append WRITE (7 bursts = API pagination). iMEP Gold Full Rebuild — the 520M-row final is completely rewritten = biggest compute cost. All writes via Service Principal (identity not recorded here). '''Scope limit''': concrete UTC refresh slots only visible in History, no complete scheduler view.
+ * '''Finding''': Unified MERGE → OPTIMIZE → VACUUM rhythm, 7-day retention. iMEP Bronze MERGE Upsert (tbl_analytics_link truly incremental, thousands/run; tbl_email / tbl_email_receiver_status full-replace, up to tens of millions/run). SharePoint Bronze: pages MERGE snapshot, pageviews Append WRITE (a handful of bursts = API pagination). iMEP Gold Full Rebuild — the final table (hundreds of millions of rows) is completely rewritten = biggest compute cost. All writes via Service Principal (identity not recorded here). '''Scope limit''': concrete UTC refresh slots only visible in History, no complete scheduler view.
 
 !3 Q29 — Gold tier structure from table shape
  * '''Date''': 2026-04-20
  * '''Scope''': Scan 52 Gold tables (iMEP + SharePoint) for row count, distinct-key count, column count; derive 4-tier hierarchy.
- * '''Finding''': Strict 4-tier hierarchy. '''Tier 0''' = atomic fact (imep_gold.final 520M grain mailing × recipient × event × hour; sharepoint_gold.pbi_db_interactions_metrics 84M). '''Tier 1''' = timespan × dim (15 tables). '''Tier 2''' = per-mailing summaries (incl. anomaly: engagement mixes emails+events with 117K vs 73K mailingIds). '''Tier 3''' = platform & reference dims (tbl_pbi_platform_mailings 73,920 rows, 927 TrackingIds). Cross-system bridge = dimensional via tbl_pbi_platform_mailings.TrackingId → pages → marketingPageId. SharePoint Gold has video sub-domain (3 tables, managed Declarative Pipeline).
+ * '''Finding''': Strict 4-tier hierarchy. '''Tier 0''' = atomic fact (imep_gold.final, hundreds of millions of rows, grain mailing × recipient × event × hour; sharepoint_gold.pbi_db_interactions_metrics, tens of millions). '''Tier 1''' = timespan × dim (15 tables). '''Tier 2''' = per-mailing summaries (incl. anomaly: engagement mixes emails+events, with more distinct mailingIds than the mailing master has rows). '''Tier 3''' = platform & reference dims (tbl_pbi_platform_mailings, tens of thousands of rows, hundreds of distinct TrackingIds). Cross-system bridge = dimensional via tbl_pbi_platform_mailings.TrackingId → pages → marketingPageId. SharePoint Gold has video sub-domain (3 tables, managed Declarative Pipeline).
 
 !3 Q30 — Table properties & storage location
  * '''Date''': 2026-04-20
  * '''Scope''': DESCRIBE DETAIL / SHOW CREATE TABLE on 114 tables — ADLS paths, partitioning, formats, pipeline owners.
- * '''Finding''': 114 External Delta tables across 3 ADLS accounts (iMEP-bronze, SP-bronze, shared Gold). '''Gold is co-located''' → cross-channel joins possible inside Fabric/Spark. '''111/114 via notebook-CTAS''', only 3 video tables via Declarative Pipeline. '''⚠️ Zero partitioning on all tables''' — biggest structural performance gap; impacts 520M final + 84M interactions_metrics. SharePoint Bronze has ad-hoc historical snapshots (pageviews_09_27_2023 etc.). iMEP Gold paths: /final root + /tbl_pbi/* + outlier /imep/tbl_active_employee_month.
+ * '''Finding''': 114 External Delta tables across 3 ADLS accounts (iMEP-bronze, SP-bronze, shared Gold). '''Gold is co-located''' → cross-channel joins possible inside Fabric/Spark. '''111/114 via notebook-CTAS''', only 3 video tables via Declarative Pipeline. '''⚠️ Zero partitioning on all tables''' — biggest structural performance gap; impacts final (hundreds of millions of rows) + interactions_metrics (tens of millions). SharePoint Bronze has ad-hoc historical snapshots (pageviews_09_27_2023 etc.). iMEP Gold paths: /final root + /tbl_pbi/* + outlier /imep/tbl_active_employee_month.
 
 ----
 

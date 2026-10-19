@@ -71,7 +71,7 @@ pip install pandas duckdb openpyxl pyarrow
 | timestamp | Event time (CET) |
 | page_id | FK to dim_page |
 | user_id | Anonymous browser ID (source column; near-unique per view on the corp source — do NOT count visitors on it) |
-| session_id | OFFICIAL AppInsights session id (company standard for visit counts; resets on most navigations — 92% single-view sessions on corp data) |
+| session_id | OFFICIAL AppInsights session id (company standard for visit counts; resets on most navigations — the vast majority of sessions are single-view on corp data) |
 | person_id | Derived: GPN where present, else `anon:<user_id>` — the unique-visitor unit |
 | visit_id | Derived: person + 30-min inactivity rule — the time/engagement grouping unit |
 | page_load_ms | Page load time (performance metric) |
@@ -89,8 +89,8 @@ pip install pandas duckdb openpyxl pyarrow
 ### agg_session (1 row per OFFICIAL session, derived from fact_page_view)
 
 Kept because the official session_id is the company standard for visit counts.
-Its engagement columns have almost no signal on corp data (92% single-view
-sessions) — use agg_visit for time/engagement analysis.
+Its engagement columns have almost no signal on corp data (the vast majority
+of sessions are single-view) — use agg_visit for time/engagement analysis.
 
 | Column | Description |
 |---|---|
@@ -169,8 +169,10 @@ user journey across channels.
 
 ### Format
 
+Synthetic example:
+
 ```
-QRREP-0000058-240709-0000060-EMI
+ABCDE-0000123-240709-0000045-EMI
   |       |       |       |     |
   |       |       |       |     +-- Channel abbreviation  (EMI=Email, INT=Intranet, EVT=Event, ...)
   |       |       |       +-------- Activity sequence number
@@ -183,12 +185,12 @@ QRREP-0000058-240709-0000060-EMI
 
 | Segment | Column | Example |
 |---|---|---|
-| 1 | `tracking_cluster_id` | `QRREP` |
-| 2 | `tracking_pack_number` | `0000058` |
+| 1 | `tracking_cluster_id` | `ABCDE` |
+| 2 | `tracking_pack_number` | `0000123` |
 | 3 | `tracking_pub_date` | `240709` |
-| 4 | `tracking_activity_number` | `0000060` |
+| 4 | `tracking_activity_number` | `0000045` |
 | 5 | `tracking_channel_abbr` | `EMI` |
-| 1+2 | `tracking_pack_id` | `QRREP-0000058` |
+| 1+2 | `tracking_pack_id` | `ABCDE-0000123` |
 
 `flatten_appinsights.py` splits the raw ID into these 7 columns so every
 segment can be filtered or joined independently.
@@ -271,6 +273,8 @@ FULL JOIN events   v USING (tracking_pack_id);
 Email sent ──► Email opened ──► Email link clicked ──► Intranet page view ──► Event registered
    100%            45%                8%                     6%                       1.5%
 ```
+
+The percentages are illustrative.
 
 The dashboard (see [`dashboard/multi_channel.html`](dashboard/multi_channel.html))
 computes this funnel per pack, per cluster and per date range. Seed data is

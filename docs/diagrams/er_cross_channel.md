@@ -17,45 +17,45 @@ erDiagram
     pages                     }o--|| sites                         : "SiteId = SiteId"
 
     tbl_email {
-        string Id PK "145K"
-        string TrackingId "1.3% populated"
+        string Id PK "over a hundred thousand"
+        string TrackingId "rarely populated"
         string Title
     }
     tbl_email_receiver_status {
-        string Id PK "293M"
+        string Id PK "hundreds of millions"
         string EmailId FK
         string TNumber
         string LogStatus
         timestamp DateTime
     }
     tbl_analytics_link {
-        string Id PK "533M"
+        string Id PK "hundreds of millions"
         string EmailId FK
         string TNumber
         string LinkTypeEnum
     }
     tbl_hr_employee {
-        string T_NUMBER PK "265K"
+        string T_NUMBER PK "hundreds of thousands"
         string WORKER_ID "= GPN"
         string ORGANIZATIONAL_UNIT
     }
     pages {
-        string pageUUID PK "48K"
-        string __ORG__GICTrackingID "4% populated ⚠️"
+        string pageUUID PK "tens of thousands"
+        string __ORG__GICTrackingID "rarely populated ⚠️"
         string SiteId FK
     }
     pageviews {
-        string Id PK "173M"
+        string Id PK "hundreds of millions"
         string user_gpn "8-digit"
         string pageId FK
     }
     pbi_db_interactions_metrics {
-        string marketingPageId FK "84M"
+        string marketingPageId FK "tens of millions"
         bigint views
         string viewingcontactid
     }
     sites {
-        string SiteId PK "805"
+        string SiteId PK "hundreds"
         string SiteName
     }
 ```
@@ -80,9 +80,9 @@ ON  array_join(slice(split(UPPER(email.TrackingId),         '-'), 1, 2), '-')
 **Why not match more narrowly?** Email and intranet page of the same pack typically run on different days (SEG3), with different activity sequencing (SEG4), and on a different channel (SEG5). Only pack-level finds the activities that belong together semantically.
 
 **Coverage reality**:
-- iMEP side: 986/73,930 mailings (1.3%) have a TrackingId
-- SP side: 1,949/48,419 pages (4%) have a TrackingID
-- **Realistic pack intersection**: 54 packs — the dashboard universe
+- iMEP side: a small minority of mailings (low single-digit percent) have a TrackingId
+- SP side: a small minority of pages (low single-digit percent) have a TrackingID
+- **Realistic pack intersection**: a few dozen packs — the dashboard universe
 
 ### Bridge 2: Employee identity (person-level)
 
@@ -153,16 +153,16 @@ flowchart LR
 ## Typical funnel numbers
 
 ```
-1,000 mailings sent      (from the 1.3%-tracked universe, from 2025)
+N mailings sent          (from the small tracked universe, from 2025)
   │
-  │ ~22% open rate
+  │ open rate: a minority of sends
   ▼
-  220 opens
+  opens
   │
-  │ ~1.8% click rate
+  │ click rate: low single-digit percent of sends
   ▼
-   18 clicks
-  │ ↓ cross-channel break (only 4% attributable on the SP side)
+  clicks
+  │ ↓ cross-channel break (only a small minority attributable on the SP side)
   ▼
     X page views  (highly variable, depends on site coverage)
 ```
@@ -174,7 +174,6 @@ flowchart LR
 - [join_strategy_contract.md](../joins/join_strategy_contract.md) — rules 1 + 5
 - [cross_channel_via_tracking_id.md](../joins/cross_channel_via_tracking_id.md) — full SQL recipe
 - [hr_enrichment.md](../joins/hr_enrichment.md) — GPN bridge
-- Memory: `imep_join_graph_q27_findings.md`, `tracking_id_format_q23.md`, `tracking_id_volume_q24.md`
 
 ---
 

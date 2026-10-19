@@ -1,6 +1,6 @@
 # Overview KPI Groups — CampaignWe-style themed collection cards
 
-**Date**: 2026-07-15 · **Status**: approved (Michael: replace the flat Overview cards; all five groups)
+**Date**: 2026-07-15 · **Status**: approved (replace the flat Overview cards; all five groups)
 
 ## Context
 

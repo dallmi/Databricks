@@ -13,8 +13,8 @@ ships?
 Our repositories: `Clicks/`, `CampaignWe/`, `Databricks/` (including
 `SiteOwnerDashboard/`). NOT covered: the platform team's bronze→gold
 notebooks — flagged as their checklist item in the proposal (spec §4, V3);
-we have no visibility into that code (per `imep_pipeline_ops_q28_findings`,
-even DESCRIBE HISTORY only shows write timestamps, not query logic).
+we have no visibility into that code (even DESCRIBE HISTORY only shows
+write timestamps, not query logic).
 
 **Grep command** (from the parent folder that holds the sibling projects):
 

@@ -7,56 +7,57 @@
 -- Status: Q16 + Q17 + Q21 + Q22 + Q23 + Q24 + Q25 — ALL READINESS QUESTIONS ANSWERED.
 -- =============================================================================
 --
--- Q25 CONFIRMED (2026-04-20, IMG_7390..7393):
---   • Overall Page-Coverage: 1,959 / 48,419 (4.05%). 99.9% der tracked pages haben auch __ORG__ArticleDate.
---   • 🎯 99.4% der tracked pages sitzen auf EINER Site: "News and events" (1,947 pages, 83 Packs).
---     Die restlichen 12 Pages sind Test-/Edge-Artefakte (Training playground, ORM APAC, etc.).
---   • Site-FK bestätigt: pages.SPT_Siteld = sites.SPT_Siteld (100% match, 48,419/48,419).
---   • Rollout-Zeitlinie: vor Jul 2024 praktisch 0% → Sep 2024 Inflection (33.9%)
---       → Okt-Dez 2024: 47-65% → 2025: 35-62% volatile → Peak Mar 2026 (70.5%), NIE 80%.
---   • 1:1 PageURL ↔ TrackingID Mapping: 0 URLs mit multiple TIDs → stabile Identity.
+-- Q25 CONFIRMED (2026-04-20):
+--   • Overall Page-Coverage: nur ein kleiner Bruchteil der Pages (niedriger einstelliger %-Bereich).
+--     Praktisch alle tracked pages haben auch __ORG__ArticleDate.
+--   • 🎯 Fast alle tracked pages sitzen auf EINER Site: "News and events" (einige Dutzend Packs).
+--     Die restlichen wenigen Pages sind Test-/Edge-Artefakte (Test-Sites u. ä.).
+--   • Site-FK bestätigt: pages.SPT_Siteld = sites.SPT_Siteld (vollständiger Match, alle Pages).
+--   • Rollout-Zeitlinie: vor Jul 2024 praktisch keine Abdeckung → Sep 2024 Inflection
+--       → Okt-Dez 2024: rund die Hälfte → 2025: volatil → Peak Mar 2026 (gut zwei Drittel), NIE 80%.
+--   • 1:1 PageURL ↔ TrackingID Mapping: keine URL mit multiple TIDs → stabile Identity.
 --   ⇒ Dashboard-Konsequenzen:
---     a) Site-Filter: WHERE pages.SiteName = 'News and events' (99.4% Coverage, 83 Packs)
+--     a) Site-Filter: WHERE pages.SiteName = 'News and events' (fast vollständige Coverage, einige Dutzend Packs)
 --     b) Effective Date Floor: 2024-09-01 (Rollout-Inflection, dominant über iMEP-2025-Floor)
 --     c) Coverage-KPI im Dashboard Pflicht ("tracked/total articles this month")
 --
--- Q24 CONFIRMED (2026-04-20, IMG_7387..7389):
---   • TrackingId-Befüllungsgrad in platform_mailings: NUR 986 / 73,930 (1.30%).
---     Rest (98.7%) ist NULL → TrackingId-basierte Analyse deckt standardmässig 1.3% ab.
---   • Jahres-Adoption: 2024=99, 2025=637, 2026 YTD (3.5 Mo)=250 → Run-Rate ~860/Jahr.
+-- Q24 CONFIRMED (2026-04-20):
+--   • TrackingId-Befüllungsgrad in platform_mailings: NUR ein kleiner Bruchteil (um 1%).
+--     Rest (fast alles) ist NULL → TrackingId-basierte Analyse deckt standardmässig nur rund 1% ab.
+--   • Jahres-Adoption: 2024 noch wenige, 2025 deutlich mehr, 2026 YTD steigende Run-Rate.
 --     ⇒ Default-Zeitfenster im Dashboard: ab 2025-01-01.
---   • Suffix-Verteilung: EMI=80.2%, TWE=8.9%, NLI=8.6%, Rest <2%.
+--   • Suffix-Verteilung: EMI dominiert (rund vier Fünftel), TWE und NLI je knapp ein Zehntel, Rest marginal.
 --     ⇒ EMI-Filter ist unstrittig die richtige Wahl.
---   • 🎯 DASHBOARD-UNIVERSUM: 791 EMI-Rows → 696 distinct TIDs → nur 54 distinct Pack-IDs.
---     ⇒ Pack-Level-Aggregat liefert ≤54 Rows. Ø 13 Varianten pro Pack kollabiert durch SEG1-2-Cut.
+--   • 🎯 DASHBOARD-UNIVERSUM: einige hundert EMI-Rows → einige hundert distinct TIDs → nur einige Dutzend distinct Pack-IDs.
+--     ⇒ Pack-Level-Aggregat liefert nur einige Dutzend Rows. Rund ein Dutzend Varianten pro Pack kollabiert durch SEG1-2-Cut.
 --
--- Q23 CONFIRMED (2026-04-20, IMG_7384..7386):
+-- Q23 CONFIRMED (2026-04-20):
 --   • Format identisch zwischen TrackingId und __ORG__GICTrackingID: 32 chars, 5 segments (5-7-6-7-3),
 --     alles UPPERCASE, keine Whitespace-Issues → UPPER/TRIM defensiv ok, funktional unnötig.
---   • ⚠️ Werte fast DISJOINT: Jaccard=0.004, nur 6 Exact-Matches aus 1,677 distinct IDs.
+--   • ⚠️ Werte fast DISJOINT: Jaccard nahe null, nur eine Handvoll Exact-Matches unter über tausend distinct IDs.
 --     → TrackingId ist KEIN direkter FK. Es ist ein shared FORMAT, kein shared ID-SPACE.
 --   • Channel-Suffix (SEG5) kodiert System-Ownership:
---       iMEP:     EMI (81%), NLI (9%), TWE (8%)
---       SharePoint: IAN (38%), ITS (34%), OPN (19%), ANC (5%)
+--       iMEP:     EMI (dominant), NLI, TWE (je knapp ein Zehntel)
+--       SharePoint: IAN und ITS (zusammen gut zwei Drittel), OPN, ANC (klein)
 --   • Korrekte Linking-Strategie: match SEG1-4, ignore SEG5.
 --     Für unseren Pack-Grain (SEG1-SEG2) passt das automatisch.
 --
--- Q21 CONFIRMED (2026-04-20, IMG_7375..7378):
+-- Q21 CONFIRMED (2026-04-20):
 --   tbl_pbi_mailingreciever_region   → MailingId, GCRS_REGION_NAME, GCRS_CNTRY_NAME, Count, UniqueOpens, UniqueClicks
 --   tbl_pbi_mailingreciever_division → MailingId, GCRS_BUSN_DIV_NAME, Count, UniqueOpens, UniqueClicks
 --   tbl_pbi_engagement               → mailingid (LOWERCASE!), senderlanguage, linklabel, sourcecomponentname, url, Count, componentorder, Linkorder, ComponentName
 --   tbl_pbi_kpi                      → MailingId, MailingTitle, MailingCreatedBy, MailingReceiverStatus, OverallMailingStatus, StartsendDateTime, measure, RecipientLanguage (PIVOTED)
--- Match rates to platform_mailings.Id: region 97.7%, division 98.1%, engagement 72.2%, kpi 97.8%
--- NULL semantics: UniqueOpens NULL 28-35%, UniqueClicks NULL 66-81% → COALESCE(..., 0) vor SUM Pflicht.
+-- Match rates to platform_mailings.Id: region, division and kpi near-complete (>95%); engagement clearly lower (roughly three quarters)
+-- NULL semantics: UniqueOpens NULL in rund einem Drittel, UniqueClicks NULL in der Mehrheit der Rows → COALESCE(..., 0) vor SUM Pflicht.
 --
--- Q22 CONFIRMED (2026-04-20, IMG_7379..7383):
+-- Q22 CONFIRMED (2026-04-20):
 --   SharePoint Gold Metriken (interactions_metrics, pageviewed_metric, pagevisited_metric, datewise_overview_fact_tbl)
 --   teilen ALLE den FK `marketingPageId` (string GUID)
 --   → sharepoint_bronze.pages.pageUUID
 --       → pages.__ORG__GICTrackingID
 --           → imep_gold.tbl_pbi_platform_mailings.TrackingId
 --   KEIN direktes TrackingID auf Gold-Metriken.
---   ⚠️ COVERAGE-BLOCKER: nur 1,949 / 48,419 Pages (~4%) haben __ORG__GICTrackingID.
+--   ⚠️ COVERAGE-BLOCKER: nur ein kleiner Bruchteil der Pages (niedriger einstelliger %-Bereich) hat __ORG__GICTrackingID.
 --   Dominante Gold-Metric-Cols: marketingPageId, visitdatekey, viewingcontactid, views, visits, durationsum.
 --
 -- Offen: Q23 (Format-Konsistenz), Q24 (Volumen/EMI-Share).
@@ -135,20 +136,20 @@ FROM imep_gold.tbl_pbi_platform_mailings;
 -- PART C — Cross-Channel MVP Query (tracking_pack_id grain)
 -- =============================================================================
 -- Status:
---  A1 ✅ MailingId = platform_mailings.Id (Q21, 97.7% match on region)
+--  A1 ✅ MailingId = platform_mailings.Id (Q21, near-complete match on region)
 --  A2 ✅ Kein direktes TrackingID auf Gold-Metric — JOIN via
 --        metrics.marketingPageId = pages.pageUUID, dann pages.__ORG__GICTrackingID (Q22)
 --  A3 ✅ NULLs in UniqueOpens/UniqueClicks sind semantisch → COALESCE(..., 0) vor SUM (Q21)
 --  A4 ✅ tracking_pack_id = SEG1-SEG2 — Format sauber, UPPER/TRIM defensiv (Q23)
---  A5 ✅ iMEP-Filter `RIGHT(TrackingId, 3) = 'EMI'` deckt 81% der iMEP-TIDs ab (Q23)
+--  A5 ✅ iMEP-Filter `RIGHT(TrackingId, 3) = 'EMI'` deckt den Grossteil der iMEP-TIDs ab (Q23)
 --  A6 ✅ SharePoint-Filter `RIGHT(__ORG__GICTrackingID, 3) IN ('IAN','ITS','OPN','ANC')` (Q23)
---  A7 ⚠️ Nur ~4% der Pages (1,949/48,419) haben __ORG__GICTrackingID → sparse Coverage (Q22)
---  A8 ⚠️ Exact-TID-Intersection = 6 (Jaccard 0.004)! Pack-Level-JOIN ist die EINZIGE
+--  A7 ⚠️ Nur ein kleiner Bruchteil der Pages (niedriger einstelliger %-Bereich) hat __ORG__GICTrackingID → sparse Coverage (Q22)
+--  A8 ⚠️ Exact-TID-Intersection nur eine Handvoll (Jaccard nahe null)! Pack-Level-JOIN ist die EINZIGE
 --        sinnvolle Brücke — direkter TrackingId-Match wäre leer (Q23)
 -- =============================================================================
 
 WITH
--- ---------- Email side: iMEP Gold Tier-3 region aggregate (97.7% match, most complete) ----------
+-- ---------- Email side: iMEP Gold Tier-3 region aggregate (near-complete match, most complete) ----------
 email_pack AS (
   SELECT
     CONCAT_WS('-',
@@ -163,14 +164,14 @@ email_pack AS (
   LEFT JOIN imep_gold.tbl_pbi_mailingreciever_region r
          ON r.MailingId = m.Id                   -- Q21 confirmed
   WHERE m.TrackingId IS NOT NULL
-    AND RIGHT(m.TrackingId, 3) = 'EMI'           -- Q23/Q24: 80% der iMEP-TIDs = Dashboard-Scope
+    AND RIGHT(m.TrackingId, 3) = 'EMI'           -- Q23/Q24: Grossteil der iMEP-TIDs = Dashboard-Scope
     AND m.CreationDate >= '2024-09-01'           -- Q25: SharePoint-Rollout Sep 2024 = effective floor           -- Q24: Adoption ramp ab 2025 → realistischer Default
   GROUP BY 1
 ),
 
 -- ---------- SharePoint side: page-view aggregates per tracking_pack_id ----------
 -- Q22: JOIN-Pfad ist metrics.marketingPageId → pages.pageUUID → pages.__ORG__GICTrackingID
--- Only 4% of pages have __ORG__GICTrackingID → INNER JOIN auf pages mit WHERE-Filter.
+-- Only a small minority of pages (low single-digit %) have __ORG__GICTrackingID → INNER JOIN auf pages mit WHERE-Filter.
 -- Wir nehmen `pbi_db_interactions_metrics` (master fact) statt _pageviewed_metric:
 --   gleiche Grain, mehr Messgrössen (views, visits, durationsum), selbe marketingPageId.
 pages_pack AS (
@@ -184,9 +185,9 @@ pages_pack AS (
   FROM sharepoint_bronze.pages p
   INNER JOIN sharepoint_bronze.sites s
           ON s.SPT_Siteld = p.SPT_Siteld                         -- Q25: 100% match
-  WHERE p.__ORG__GICTrackingID IS NOT NULL                           -- ~1,959 / 48,419 pages
-    AND RIGHT(p.__ORG__GICTrackingID, 3) IN ('IAN','ITS','OPN','ANC') -- Q23: 96% der tracked pages
-    AND s.SiteName = 'News and events'                           -- Q25: 99.4% Pareto auf einer Site
+  WHERE p.__ORG__GICTrackingID IS NOT NULL                           -- small minority of pages
+    AND RIGHT(p.__ORG__GICTrackingID, 3) IN ('IAN','ITS','OPN','ANC') -- Q23: fast alle tracked pages
+    AND s.SiteName = 'News and events'                           -- Q25: Pareto, fast alles auf einer Site
     AND p.__ORG__ArticleDate >= '2024-09-01'                         -- Q25: Rollout-Inflection
 ),
 intranet_pack AS (
@@ -246,7 +247,7 @@ SELECT
   e.email_unique_clicks,
   ROUND(e.email_unique_opens  / NULLIF(e.email_recipients,0) * 100, 2) AS open_rate_pct,
   ROUND(e.email_unique_clicks / NULLIF(e.email_recipients,0) * 100, 2) AS click_rate_pct,
-  -- Intranet KPIs (~4% coverage caveat per Q22)
+  -- Intranet KPIs (low-coverage caveat per Q22)
   i.pages,
   i.page_views,
   i.page_visits,
@@ -261,7 +262,7 @@ FULL OUTER JOIN email_pack    e USING (tracking_pack_id)
 FULL OUTER JOIN intranet_pack i USING (tracking_pack_id)
 WHERE COALESCE(d.tracking_pack_id, e.tracking_pack_id, i.tracking_pack_id) IS NOT NULL
 ORDER BY COALESCE(e.email_recipients, i.page_views, 0) DESC;
--- Erwartung: ~54 Rows Email-Side (Q24), davon eine Teilmenge mit Intranet-Match.
+-- Erwartung: einige Dutzend Rows Email-Side (Q24), davon eine Teilmenge mit Intranet-Match.
 
 
 -- =============================================================================
@@ -317,7 +318,7 @@ ORDER BY 1 DESC;
 
 
 -- =============================================================================
--- PART F — 🎯 Funnel-Intersection: wie viele der 54 EMI-Packs haben Intranet-Pendant?
+-- PART F — 🎯 Funnel-Intersection: wie viele der EMI-Packs haben Intranet-Pendant?
 -- =============================================================================
 -- Die KRITISCHE Zahl für Stakeholder-Kommunikation.
 
@@ -351,23 +352,23 @@ SELECT
 -- ERWARTUNGS-BANDBREITE NACH Q21-Q25
 -- =============================================================================
 -- Email-Side (PART C):
---   ≤54 Pack-Rows (Q24 EMI-Universe); nach 2024-09-01-Floor erwartet ~40-50
---   Open-Rate global ~22%, Click-Rate ~1.8% (Q16)
+--   Einige Dutzend Pack-Rows (Q24 EMI-Universe); nach 2024-09-01-Floor etwas weniger
+--   Open-Rate global rund ein Fünftel, Click-Rate im niedrigen einstelligen %-Bereich (Q16)
 --
 -- Intranet-Side (PART C):
---   ≤83 Pack-Rows (Q25: News-and-events hat 83 Packs)
---   Alle auf News-and-events konzentriert (99.4% Coverage-Pareto)
+--   Einige Dutzend Pack-Rows (Q25: Packs auf News-and-events)
+--   Alle auf News-and-events konzentriert (Coverage-Pareto)
 --
 -- Intersection (PART F) — die Narrativ-Zahl:
---   Worst Case: 5-10 Packs gemeinsam (unterschiedliche Kampagnen-Klammern in Sys.)
---   Best Case:  30-40 Packs (wenn EMI-Packs systematisch auch News-Pages bekommen)
---   Median-Erwartung: 15-25 gemeinsame Packs für vollen Funnel
+--   Worst Case: nur eine Handvoll Packs gemeinsam (unterschiedliche Kampagnen-Klammern in Sys.)
+--   Best Case:  die Mehrheit der EMI-Packs (wenn EMI-Packs systematisch auch News-Pages bekommen)
+--   Median-Erwartung: rund ein Drittel der EMI-Packs mit vollem Funnel
 --
 -- Coverage-Pflicht-KPI (PART E):
---   Monatliche Abdeckung 35-70%, Schnitt ~50%, nie 80% — transparent kommunizieren.
+--   Monatliche Abdeckung stark schwankend, im Schnitt rund die Hälfte, nie 80% — transparent kommunizieren.
 --
 -- Funnel-Sanity (pro Pack mit Full-Match):
---   Sent → Open: 15-30% (Q16: 22% global)
+--   Sent → Open: 15-30% (Q16: globaler Wert liegt in diesem Band)
 --   Open → Click: 5-10%
 --   Click → PageView: >100% möglich (multi-view pro User)
 --   Reach (unique_readers / recipients): 1-5%

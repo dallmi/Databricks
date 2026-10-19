@@ -2,7 +2,7 @@
 
 **Status:** Approved design, pre-implementation
 **Date:** 2026-07-15
-**Owner:** Michael (proposal author) — implementation by the SharePoint platform team (tracking snippet), analytics pipeline changes by us
+**Owner:** `<name>` (proposal author) — implementation by the SharePoint platform team (tracking snippet), analytics pipeline changes by us
 **Deliverable:** This document + Kusto Query Language (KQL) validation queries, handed to the platform team. We do not own the tracking snippet.
 
 ---
@@ -13,20 +13,20 @@
 
 > measurability = 1 − 1/(views per group)
 
-Validated on the real store (`session_vs_visit_analysis.xlsx`, 2026-07-15, 924,844 page views):
+Validated on the real store (2026-07-15, close to a million page views):
 
 | Grouping | Views/group | Measurable share |
 |---|---|---|
-| Official `session_id` | 1.17 | 14.0% |
-| Reconstructed `visit_id` (30-min gap per person) | 1.37 | 27.0% |
+| Official `session_id` | barely above 1 | a small minority |
+| Reconstructed `visit_id` (30-min gap per person) | somewhat higher, well below 2 | a minority |
 
-27% is a **ceiling, not a defect** — this is an intranet where most employees arrive via search or a link, read one page, and leave. 73% of views are the last of their visit and produce `NULL`. Reaching the 60% dashboard threshold would require 2.5 views/visit, which no grouping change can deliver. The only fix is a different measurement method: client-side engagement beacons (the same reason Google Analytics 4 moved to engagement time).
+That share is a **ceiling, not a defect** — this is an intranet where most employees arrive via search or a link, read one page, and leave. More than two thirds of views are the last of their visit and produce `NULL`. Reaching the 60% dashboard threshold would require 2.5 views/visit, which no grouping change can deliver. The only fix is a different measurement method: client-side engagement beacons (the same reason Google Analytics 4 moved to engagement time).
 
 ## 2. Why the built-in options do not work
 
 These three "obvious" answers must be ruled out explicitly, otherwise the proposal gets closed with a one-liner:
 
-1. **`autoTrackPageVisitTime: true`** (SDK config flag) — per Microsoft documentation, it tracks the *previous* page's visit time *"on a pageview"*, i.e. it fires when the **next** page view happens. The last page of a visit never gets a `PageVisitTime`. This is exactly the same 27% ceiling, relocated. Additionally, it emits into `customMetrics` (see 3 below).
+1. **`autoTrackPageVisitTime: true`** (SDK config flag) — per Microsoft documentation, it tracks the *previous* page's visit time *"on a pageview"*, i.e. it fires when the **next** page view happens. The last page of a visit never gets a `PageVisitTime`. This is exactly the same ceiling, relocated. Additionally, it emits into `customMetrics` (see 3 below).
 2. **`pageViews.duration`** — this is `PerformanceNavigationTiming.duration`, i.e. page **load** time, not dwell time. Useless for engagement.
 3. **`customMetrics` / `trackMetric`** — Application Insights pre-aggregates metrics; per-event dimensions (GPN, PageId, scroll depth) are lost. A dwell-time figure without page and person dimensions cannot feed per-page rankings or Read Rate.
 
@@ -138,14 +138,14 @@ If ingestion sampling is active, `page_engagement` must be sampled at the same r
 - **Join to the pageview store** on `View_Instance_Id` → new derived column **`engaged_ms`** at page-view grain. `time_on_page_visit_sec` stays untouched next to it (house rule: never overwrite source columns; add clearly named derived columns).
 - **Dashboard:** "Avg. time per page" switches its source to `engaged_ms` with a coverage badge; the old visit-based metric remains visible as QA comparison.
 - **Built-in consistency check:** for views *with* a next view, `engaged_ms ≤ wall-clock delta to next view` must hold (visible time cannot exceed wall-clock time). Violations indicate a snippet bug or a summation bug — this check keeps both measurements honest against each other. Report violation rate in the QA sheet.
-- **New metrics unlocked:** Read Rate = f(`Scroll_Max_Pct`, `Page_Height_Px`, `Viewport_Height_Px`) — a real engagement figure for single-page visits, i.e. the 73% of views that are silent today.
+- **New metrics unlocked:** Read Rate = f(`Scroll_Max_Pct`, `Page_Height_Px`, `Viewport_Height_Px`) — a real engagement figure for single-page visits, i.e. the more than two thirds of views that are silent today.
 
 ## 6. Rollout
 
 | Phase | Content | Exit criterion |
 |---|---|---|
 | 0 | Validation queries V1–V3, platform-team review of this document | Queries answered; scope confirmed |
-| 1 | Pilot on one site behind a feature flag in the snippet. Candidate: "News and events" (99.4% of tracked pages; content owners there are the primary Read-Rate consumers) | Events flowing; schema as specified |
+| 1 | Pilot on one site behind a feature flag in the snippet. Candidate: "News and events" (almost all tracked pages; content owners there are the primary Read-Rate consumers) | Events flowing; schema as specified |
 | 2 | 2–4 weeks validation: flushes/page-view ratio (expected ~1.5–2.5), consistency-check violation rate, actual vs. estimated volume, **click-aggregate regression check** (click counts before/after pilot must be identical) | Success criteria below met |
 | 3 | Global enablement + dashboard metric switch | — |
 
@@ -153,7 +153,7 @@ If ingestion sampling is active, `page_engagement` must be sampled at the same r
 
 | Risk | Assessment | Mitigation |
 |---|---|---|
-| Event volume | ~2 flushes/page view ≈ up to +350M events/year — customEvents (~262M) could nearly double | ≥1s delta guard (§3.3); pilot measures actual ratio before global rollout |
+| Event volume | ~2 flushes/page view ≈ up to hundreds of millions of additional events/year — customEvents (hundreds of millions of rows) could nearly double | ≥1s delta guard (§3.3); pilot measures actual ratio before global rollout |
 | Legacy consumer counts engagement as clicks | Real migration risk | V3 audit + `name` family + phase-2 regression check |
 | Beacon loss on `pagehide` | `sendBeacon` is best-effort | Delta semantics: only the final segment is lost; `Flush_Seq` gaps quantify the loss rate |
 | `operation_Id` assumption wrong | Possible | `View_Instance_Id` is the default key; operation_Id is QA-only (V1) |
@@ -162,7 +162,7 @@ If ingestion sampling is active, `page_engagement` must be sampled at the same r
 
 ## 8. Success criteria
 
-- ≥90% of page views have ≥1 `page_engagement` event (up from 27% measurability).
+- ≥90% of page views have ≥1 `page_engagement` event (up from a minority today).
 - Median engaged time for News articles plausible: 30 s – 3 min.
 - Click aggregates unchanged (regression check).
 - Consistency-check violations < 1%.

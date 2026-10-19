@@ -8,7 +8,7 @@
 
 | Reason for change | Name | Date | Version |
 |---|---|---|---|
-| Initial version | Michael Dall | 2026-04-20 | 0.1 |
+| Initial version | `<name>` | 2026-04-20 | 0.1 |
 
 ---
 
@@ -22,24 +22,24 @@ Each domain has a dedicated container with per-table cards (schema, sample rows,
 |---|---|---|
 | HR | Employee master + cost-center dimension (shared across iMEP and SharePoint) | [tables/hr/](tables/hr/) |
 | iMEP Bronze | Email mailings, send events, open/click events, template inventory, event master | [tables/imep/](tables/imep/) |
-| iMEP Gold | Denormalized email fact (`final`, 520M) plus tier-1/2/3 aggregates | [tables/imep_gold/](tables/imep_gold/) |
+| iMEP Gold | Denormalized email fact (`final`, hundreds of millions of rows) plus tier-1/2/3 aggregates | [tables/imep_gold/](tables/imep_gold/) |
 | SharePoint Bronze | Page inventory (with TrackingID) + raw page-view / custom-event interaction streams | [tables/sharepoint/](tables/sharepoint/) |
-| SharePoint Gold | Master interaction fact (`pbi_db_interactions_metrics`, 84M) + specialized grain tables | [tables/sharepoint_gold/](tables/sharepoint_gold/) |
+| SharePoint Gold | Master interaction fact (`pbi_db_interactions_metrics`, tens of millions of rows) + specialized grain tables | [tables/sharepoint_gold/](tables/sharepoint_gold/) |
 
 ### 2.2 Key terms
 
 | Term | Definition |
 |---|---|
 | **TrackingId** | 32-character dimension key shared between iMEP and SharePoint, format `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL`. Lives on `tbl_email` (iMEP, column `TrackingId`) and `sharepoint_bronze.pages` (SharePoint, column `__ORG__GICTrackingID`). The only cross-channel join key. |
-| **Pack** | SEG1 + SEG2 of the TrackingId (Cluster + Pack-Number, e.g. `QRREP-0000058`). Identifies a campaign and bundles all its activities across channels and dates. **Cross-channel match lives at this level.** |
-| **Cluster** | SEG1 of the TrackingId (5 characters, ALPHA, e.g. `QRREP`). Campaign prefix — groups all Packs of a campaign family. |
+| **Pack** | SEG1 + SEG2 of the TrackingId (Cluster + Pack-Number, e.g. `ABCDE-0000123`). Identifies a campaign and bundles all its activities across channels and dates. **Cross-channel match lives at this level.** |
+| **Cluster** | SEG1 of the TrackingId (5 characters, ALPHA, e.g. `ABCDE`). Campaign prefix — groups all Packs of a campaign family. |
 | **Activity** | A single instance within a Pack (one email, one intranet page, one newsletter). Identified by SEG3 (YYMMDD of creation) + SEG4 (sequence number). **Activity-level join does not work cross-channel** because the email and the matching intranet page carry different activity dates. |
 | **Channel** | SEG5 of the TrackingId. System-specific vocabulary: iMEP uses `EMI` / `NLI` / `TWE`; SharePoint uses `IAN` / `ITS` / `OPN` / `ANC`. The reason a full-string match across domains fails. |
 | **TNumber** | Lowercase `t######` identifier (e.g. `t100200`). iMEP's person key — lives on `tbl_email_receiver_status` and `tbl_analytics_link`. Primary key in `tbl_hr_employee` as `T_NUMBER`. |
 | **GPN** | Global Personnel Number, 8-digit numeric with leading zeros (e.g. `00100200`). SharePoint's person key (`pageviews.user_gpn`). Same value stored on `tbl_hr_employee` as `WORKER_ID`. |
 | **__ORG__Id** | Uppercase `T######` variant of the T-Number, lives on `tbl_hr_user`. Joining to other tables requires `LOWER()` on both sides. |
 | **MailingId** | Unique identifier of a specific email mailing (= `tbl_email.Id`, GUID). Foreign key referenced by `tbl_email_receiver_status.EmailId` and `tbl_analytics_link.EmailId`. Carried forward into `imep_gold.final` and `imep_gold.tbl_pbi_platform_mailings` as **lowercase `mailingid`** in the engagement aggregates. |
-| **__ORG__GICTrackingID** | SharePoint's column name for the TrackingId. Lives on `sharepoint_bronze.pages` at page-inventory grain. Only ~4% of pages carry a value — coverage is the dominant cross-channel constraint. |
+| **__ORG__GICTrackingID** | SharePoint's column name for the TrackingId. Lives on `sharepoint_bronze.pages` at page-inventory grain. Only a small minority of pages (low single-digit percent) carry a value — coverage is the dominant cross-channel constraint. |
 
 ---
 
@@ -72,30 +72,30 @@ Numbers as of 2026-04-20 (Genie sessions Q24 / Q25 / Q27). Re-run those sessions
 
 | Table | Rows | Role (short) |
 |---|---|---|
-| `imep_bronze.tbl_analytics_link` | 533M | opens/clicks hub (bronze) |
-| `imep_gold.final` | 520M | email consumption endpoint |
-| `imep_bronze.tbl_email_receiver_status` | 293M | sends/bounces hub (bronze) |
-| `sharepoint_bronze.customevents` | 262M | raw intranet interactions |
-| `sharepoint_bronze.pageviews` | 173M | raw page views |
-| `sharepoint_gold.pbi_db_interactions_metrics` | 84M | SP consumption endpoint |
+| `imep_bronze.tbl_analytics_link` | hundreds of millions | opens/clicks hub (bronze) |
+| `imep_gold.final` | hundreds of millions | email consumption endpoint |
+| `imep_bronze.tbl_email_receiver_status` | hundreds of millions | sends/bounces hub (bronze) |
+| `sharepoint_bronze.customevents` | hundreds of millions | raw intranet interactions |
+| `sharepoint_bronze.pageviews` | over a hundred million | raw page views |
+| `sharepoint_gold.pbi_db_interactions_metrics` | tens of millions | SP consumption endpoint |
 
 ### 5.2 TrackingId coverage (the dominant constraint)
 
 | Side | Coverage | Raw |
 |---|---|---|
-| iMEP mailings with TrackingId | 1.3% | 986 / 73,930 |
-| SharePoint pages with `__ORG__GICTrackingID` | 4.0% | 1,949 / 48,419 |
-| Pack-level intersection (dashboard scope) | — | ~54 Packs |
+| iMEP mailings with TrackingId | low single-digit percent | hundreds out of tens of thousands |
+| SharePoint pages with `__ORG__GICTrackingID` | low single-digit percent | low thousands out of tens of thousands |
+| Pack-level intersection (dashboard scope) | — | a few dozen Packs |
 
 ### 5.3 TrackingId adoption over time (iMEP)
 
 | Year | Tracked mailings | Share of tracked universe |
 |---|---|---|
-| 2024 | 99 | 10% |
-| 2025 | 637 | 65% |
-| 2026 (YTD) | 250 | 25% |
+| 2024 | dozens | small share |
+| 2025 | several hundred | majority |
+| 2026 (YTD) | a few hundred | minority (year to date) |
 
-SharePoint-side coverage rolled out 2024-09 (33.9%), peaked 70.5% 2026-03 for article pages. 99.4% of tracked SharePoint pages live on a single site ("News and events").
+SharePoint-side coverage rolled out 2024-09 (a minority of article pages), peaked at a clear majority of article pages in 2026-03. Almost all tracked SharePoint pages live on a single site ("News and events").
 
 ---
 
@@ -107,7 +107,7 @@ Medallion structure per domain. Note the asymmetry: SharePoint uses the full Bro
 |---|---|---|---|
 | **Bronze** | `tbl_email`, `tbl_email_receiver_status`, `tbl_analytics_link`, `tbl_email_links`, `tbl_event` | `pages`, `pageviews`, `customevents`, `sites` | `tbl_hr_employee`, `tbl_hr_costcenter`, `tbl_hr_user` |
 | **Silver** | Events only — `invitation`, `eventregistration`, `event` | `webpagevisited`, `pageviewed`, `pagevisited` | — |
-| **Gold** | **`final`** (520M atomic fact), `tbl_pbi_platform_mailings` / `_events`, tier-1/2/3 aggregates | **`pbi_db_interactions_metrics`** (84M atomic fact), tier-1/2/3 grain-specific tables | — |
+| **Gold** | **`final`** (atomic fact, hundreds of millions of rows), `tbl_pbi_platform_mailings` / `_events`, tier-1/2/3 aggregates | **`pbi_db_interactions_metrics`** (atomic fact, tens of millions of rows), tier-1/2/3 grain-specific tables | — |
 
 See [er_cross_channel.md](diagrams/er_cross_channel.md) for the end-to-end visual.
 
@@ -167,9 +167,9 @@ These are the **hard constraints** against which every cross-channel analysis mu
 
 `tbl_email.TrackingId` ↔ `sharepoint_bronze.pages.__ORG__GICTrackingID` — **never** directly via engagement tables (`pageviews`, `tbl_analytics_link`). TrackingId is a dimension, not a fact key.
 
-### 10.2 Only ~4% of SharePoint pages carry __ORG__GICTrackingID
+### 10.2 Only a small minority of SharePoint pages carry __ORG__GICTrackingID
 
-See Section 5.2. Dashboards must make the ~96% untracked intranet activity explicit.
+See Section 5.2. Dashboards must make the untracked intranet activity (the vast majority) explicit.
 
 ### 10.3 TrackingId adoption is still ramping
 
@@ -177,13 +177,13 @@ See Section 5.3. Default dashboard time window: **from 2025 onwards**.
 
 ### 10.4 Cross-channel match lives at Pack level (SEG1-2), not per activity
 
-An email and the matching intranet page of the same Pack typically launch on different dates (different SEG3), with different activity sequences (SEG4) and on different channels (SEG5). Matching on anything finer than SEG1-2 treats semantically related activities as unrelated. Full-string match yields 6/1677 hits (Jaccard 0.004); Pack-level match yields ~54 attributable Packs.
+An email and the matching intranet page of the same Pack typically launch on different dates (different SEG3), with different activity sequences (SEG4) and on different channels (SEG5). Matching on anything finer than SEG1-2 treats semantically related activities as unrelated. Full-string match yields only a handful of hits (the two ID sets are almost disjoint); Pack-level match yields a few dozen attributable Packs.
 
 ### 10.5 Write patterns: MERGE (Bronze) vs. Full Rebuild (Gold)
 
-- **iMEP Bronze**: MERGE upsert. `tbl_analytics_link` is **truly incremental** (3-8K rows per run); `tbl_email` / `tbl_email_receiver_status` are full-table upserts (27-72M per run).
-- **SharePoint Bronze**: `pages` via **MERGE daily snapshot replace**, `pageviews` via **Append WRITE** (7 bursts per run, API pagination).
-- **iMEP Gold**: **Full Rebuild** — tables (including the 520M-row `final`) are completely destroyed and rewritten, not incrementally merged.
+- **iMEP Bronze**: MERGE upsert. `tbl_analytics_link` is **truly incremental** (thousands of rows per run); `tbl_email` / `tbl_email_receiver_status` are full-table upserts (tens of millions of rows per run).
+- **SharePoint Bronze**: `pages` via **MERGE daily snapshot replace**, `pageviews` via **Append WRITE** (a handful of bursts per run, API pagination).
+- **iMEP Gold**: **Full Rebuild** — tables (including the `final` table with hundreds of millions of rows) are completely destroyed and rewritten, not incrementally merged.
 
 Refresh cadence is deliberately not documented on this page — we only see writes via `DESCRIBE HISTORY`, not the full job scheduler. Dashboards should be built resilient against whichever snapshot is current, rather than relying on specific time windows.
 
@@ -195,7 +195,7 @@ Refresh cadence is deliberately not documented on this page — we only see writ
 
 Both gold schemas follow the same strict hierarchy:
 
-- **Tier 0** — Atomic fact (largest tables): iMEP `final` 520M, SP `pbi_db_interactions_metrics` 84M
+- **Tier 0** — Atomic fact (largest tables): iMEP `final` (hundreds of millions of rows), SP `pbi_db_interactions_metrics` (tens of millions)
 - **Tier 1** — Pre-aggregated timespans (rolling windows, date aggregates)
 - **Tier 2** — Per-mailing / per-page summaries (`UniqueOpens`, `UniqueClicks`, engagement)
 - **Tier 3** — Platform and reference dimensions (`tbl_pbi_platform_mailings`, `employeecontact`, Calendar, etc.)

@@ -307,8 +307,8 @@ def _collect_stats(con, present, where, rows, cols) -> dict:
     # span_days computed in SQL, not via datetime.fromisoformat(mx) -
     # datetime.fromisoformat(mn): DuckDB trims trailing zeros from fractional
     # seconds ('.100' -> '.1'), and Python 3.9's fromisoformat only accepts
-    # 3- or 6-digit fractions, so that combination crashes on ~5% of real
-    # timestamps. An all-NULL timestamp column (mn/mx both NULL) yields a
+    # 3- or 6-digit fractions, so that combination crashes on a small share of
+    # real timestamps. An all-NULL timestamp column (mn/mx both NULL) yields a
     # NULL span_days here instead of a TypeError.
     mn, mx, span_days = con.execute(
         f"SELECT MIN(timestamp)::VARCHAR, MAX(timestamp)::VARCHAR, "

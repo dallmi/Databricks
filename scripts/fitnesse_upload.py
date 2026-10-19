@@ -97,9 +97,9 @@ SUBSECTION_HINT = {
     "Diagrams":                "Five domain-scoped entity-relationship diagrams plus the cross-channel bridge. Listed below.",
     "JoinStrategy":            "Canonical join recipes. Start with the Strategy Contract for the five hard rules, then pick the recipe that matches the query. Listed below.",
     "DataGlossary.ImepBronze": "Tables in the imep_bronze schema: email master, send/open/click events, template inventory, event master. Listed below.",
-    "DataGlossary.ImepGold":   "Tables in the imep_gold schema: the 520M-row consumption endpoint plus tier-1/2/3 aggregates. Listed below.",
+    "DataGlossary.ImepGold":   "Tables in the imep_gold schema: the consumption endpoint (hundreds of millions of rows) plus tier-1/2/3 aggregates. Listed below.",
     "DataGlossary.SharePointBronze": "Tables in the sharepoint_bronze schema: page inventory (with TrackingID), page-views, custom events. Listed below.",
-    "DataGlossary.SharePointGold":   "Tables in the sharepoint_gold schema: the 84M-row master interaction fact plus specialized grain tables. Listed below.",
+    "DataGlossary.SharePointGold":   "Tables in the sharepoint_gold schema: the master interaction fact (tens of millions of rows) plus specialized grain tables. Listed below.",
     "DataGlossary.Hr":               "HR dimension tables: employee master (with GPN bridge), cost-center (Region/Division), and the __ORG__Id variant. Listed below.",
 }
 

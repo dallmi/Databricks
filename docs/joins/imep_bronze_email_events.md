@@ -65,7 +65,7 @@ JOIN   imep_bronze.tbl_email_receiver_status  rs ON rs.EmailId = e.Id
 WHERE  e.TrackingId IS NOT NULL
 ```
 
-→ 293M rows total. One row per mailing × recipient. `tbl_analytics_link` is not needed when only send events matter.
+→ Hundreds of millions of rows total. One row per mailing × recipient. `tbl_analytics_link` is not needed when only send events matter.
 
 ### Variant B — Opens/Clicks only (fact-only)
 
@@ -78,7 +78,7 @@ WHERE  al.IsActive = 1
   AND  al.CreationDate >= '2025-01-01'
 ```
 
-→ 533M rows. Most expensive — set a time filter.
+→ Hundreds of millions of rows. Most expensive — set a time filter.
 
 ### Variant C — Pack-level aggregates
 
@@ -139,7 +139,7 @@ Do not look for it on `receiver_status` or `analytics_link` — they don't carry
 ## Performance tuning
 
 - **Time filter up front**: `rs.DateTime >= '...'` as the first WHERE clause → partition pruning where available
-- **TrackingId pre-filter**: `WHERE e.TrackingId IS NOT NULL` cuts the starting set to ~1.3% of mailings
+- **TrackingId pre-filter**: `WHERE e.TrackingId IS NOT NULL` cuts the starting set to a small fraction of mailings (low single-digit percent)
 - **`LEFT JOIN` on `tbl_analytics_link`**, not `INNER JOIN`: otherwise you drop mailings that were never opened
 - **Cache on Pack-level aggregates**: if you pull the same funnel 10× a day, materialize into a local view
 

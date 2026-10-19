@@ -108,7 +108,7 @@ customEvents
 //
 // let StartTime = datetime(2026-03-01);
 // let EndTime   = datetime(2026-04-01);
-// let pepper    = 'f4c6a28e86cfa11e95ee832cabf4c8c1862f78017c044111cae083584f0208cb';
+// let pepper    = '<pepper>';   // keep the real value out of the repo
 // customEvents
 // | where timestamp between (StartTime .. EndTime)
 // | where name == 'click_event'

@@ -1,5 +1,6 @@
 """
-Diagnose why the Pages table shows the same page name several times (e.g. CAWB).
+Diagnose why the Pages table shows the same page name several times (e.g. one
+article listed once per language variant).
 
 The table groups by `page_id` and displays `page_name`. If one page NAME is
 attached to several `page_id`s (or one real page/URL is split across several
@@ -16,7 +17,7 @@ Read-only.
 
 Usage (from the SiteOwnerDashboard project root):
     python scripts/diagnose_page_grain.py
-    python scripts/diagnose_page_grain.py --name CAWB      # drill into one name
+    python scripts/diagnose_page_grain.py --name "<page name>"   # drill into one name
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ def nunique_map(df, key, val):
 def main() -> None:
     ap = argparse.ArgumentParser(description="Diagnose the Pages-table grain")
     ap.add_argument("--store", default=str(PROJECT_DIR / "output" / "site_pageviews.parquet"))
-    ap.add_argument("--name", default=None, help="drill into one page_name (e.g. CAWB)")
+    ap.add_argument("--name", default=None, help="drill into one page_name")
     ap.add_argument("--top", type=int, default=12)
     args = ap.parse_args()
 
@@ -57,7 +58,7 @@ def main() -> None:
     if have_url:
         print(f"distinct page_url : {df['page_url'].nunique():,}")
 
-    # --- name reused across several ids/urls (the CAWB symptom) ---
+    # --- name reused across several ids/urls (the duplicate-name symptom) ---
     name_ids = nunique_map(df, "page_name", "page_id")
     reused_names = name_ids[name_ids > 1]
     views_by_name = df.groupby("page_name").size()

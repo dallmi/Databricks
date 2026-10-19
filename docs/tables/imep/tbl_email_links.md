@@ -10,7 +10,7 @@
 | **Primary key** | `Id` |
 | **FK** | `EmailId` → `tbl_email.Id` |
 | **Write pattern** | MERGE |
-| **Approx row count** | ~(medium order of magnitude — several links per mailing × 145K mailings) |
+| **Approx row count** | ~(medium order of magnitude — several links per mailing × over a hundred thousand mailings) |
 
 ---
 
@@ -32,7 +32,7 @@
 |---|---|---|
 | **What** | Template definition (static) | Event fact (dynamic) |
 | **Grain** | Per link per mailing template | Per click/open event |
-| **Rows** | Low (~mailings × ~5 links) | **533M** |
+| **Rows** | Low (~mailings × a handful of links) | **Hundreds of millions** |
 | **For** | "Which URLs are in mailing X?" | "Who clicked which link when?" |
 
 **The most common confusion in the project.** Mnemonic: `_links` = template, `analytics_` = fact.

@@ -210,7 +210,7 @@ flowchart LR
 TrackingId is the only cross-channel key — 32 characters, 5 segments:
 
 ```
-QRREP-0000058-240709-0000060-EMI
+ABCDE-0000123-240709-0000045-EMI
   │       │       │       │     └── channel:  EMI / INT / EVT / BAN
   │       │       │       └──────── activity sequence
   │       │       └──────────────── YYMMDD
@@ -283,10 +283,10 @@ flowchart TB
 **Funnel at pack level:**
 
 ```
-Sent (100%) ─► Opened (~45%) ─► Clicked (~8%) ─► Page View (~6%) ─► Event Registered (~1.5%)
-                                                      │
-                                              article pages only
-                                        (__ORG__GICTrackingID populated)
+Sent (100%) ─► Opened (under half) ─► Clicked (single-digit %) ─► Page View (single-digit %) ─► Event Registered (low single-digit %)
+                                                                       │
+                                                               article pages only
+                                                         (__ORG__GICTrackingID populated)
 ```
 
 ---
@@ -295,9 +295,9 @@ Sent (100%) ─► Opened (~45%) ─► Clicked (~8%) ─► Page View (~6%) ─
 
 ```mermaid
 flowchart TD
-    CL[Cluster<br/>e.g. QRREP]
-    PA[Pack<br/>tracking_pack_id<br/>QRREP-0000058]
-    AC[Activity<br/>tracking_id <br/>QRREP-0000058-240709-0000060-EMI]
+    CL[Cluster<br/>e.g. ABCDE]
+    PA[Pack<br/>tracking_pack_id<br/>ABCDE-0000123]
+    AC[Activity<br/>tracking_id <br/>ABCDE-0000123-240709-0000045-EMI]
 
     CL --> PA
     PA --> AC

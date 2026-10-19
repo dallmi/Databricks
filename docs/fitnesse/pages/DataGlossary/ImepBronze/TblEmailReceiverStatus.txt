@@ -9,8 +9,8 @@
 | '''Primary key'''    | Id |
 | '''FK'''             | EmailId -> tbl_email.Id; TNumber -> tbl_hr_employee.T_NUMBER |
 | '''Write pattern''' | MERGE full-table upsert (Service Principal) |
-| '''Rows'''           | '''293M''' (Nov 2020 - Apr 2026) |
-| '''Per-MERGE delta''' | 27-72M rows (full-replace upsert) |
+| '''Rows'''           | '''Hundreds of millions''' (Nov 2020 - Apr 2026) |
+| '''Per-MERGE delta''' | Tens of millions of rows (full-replace upsert) |
 
 !2 Neighborhood Diagram
 
@@ -77,8 +77,8 @@ Full column list: !- DESCRIBE imep_bronze.tbl_email_receiver_status -!.
 !2 Sample Row
 
 {{{
-Id             = "3b9c1a8f-..."
-EmailId        = "0a3f6c2e-..."
+Id             = "00000000-0000-4000-8000-000000000012"
+EmailId        = "00000000-0000-4000-8000-000000000011"
 TNumber        = "t100200"
 Status         = 1
 LogStatus      = "Open"
@@ -116,8 +116,8 @@ LEFT JOIN imep_bronze.tbl_hr_employee          hr ON hr.T_NUMBER = rs.TNumber
 
 !2 Quality Caveats
 
- * '''Granularity''': 1 row per recipient × mailing. Large mailings × many recipients quickly reach 100k+ rows per mailing.
- * '''Full-table MERGE''': every 12h the entire table is upserted (27-72M per run) — not incremental. Delta history shows a "wave" per refresh cycle, not streaming.
+ * '''Granularity''': 1 row per recipient × mailing. Large mailings × many recipients quickly reach over a hundred thousand rows per mailing.
+ * '''Full-table MERGE''': every 12h the entire table is upserted (tens of millions of rows per run) — not incremental. Delta history shows a "wave" per refresh cycle, not streaming.
  * '''LogStatus vs Status''': LogStatus is the readable string (Open, Bounce, ...), Status the numeric code. For dashboards always use LogStatus.
  * '''DateTime is send time''' — for "when was it opened", look at tbl_analytics_link.CreationDate.
 
@@ -127,7 +127,7 @@ Email engagement '''skips Silver'''. tbl_email_receiver_status is one of the thr
 
 {{{
 imep_bronze.tbl_email                    -+
-imep_bronze.tbl_email_receiver_status    -|--> imep_gold.final  (~520M rows,
+imep_bronze.tbl_email_receiver_status    -|--> imep_gold.final  (hundreds of millions of rows,
 imep_bronze.tbl_analytics_link           -+                    denormalized, HR-enriched)
 }}}
 

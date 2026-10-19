@@ -1,6 +1,6 @@
 # Content & Interactions — Explorer, Grouped Excel Exports, Click Insights
 
-**Date**: 2026-07-15 · **Status**: approved (scope confirmed by Michael: packages A+B+C; explorer replaces Top Links + Clicks by Division)
+**Date**: 2026-07-15 · **Status**: approved (scope confirmed: packages A+B+C; explorer replaces Top Links + Clicks by Division)
 
 ## Context
 

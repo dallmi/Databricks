@@ -14,7 +14,7 @@ entity "tbl_email" as email {
   TrackingId : string
   Title : string
   ..
-  145K, 1.3% populated
+  over a hundred thousand, rarely populated
 }
 
 entity "tbl_email_receiver_status" as rs {
@@ -25,7 +25,7 @@ entity "tbl_email_receiver_status" as rs {
   LogStatus : string
   DateTime : timestamp
   ..
-  293M
+  hundreds of millions
 }
 
 entity "tbl_analytics_link" as al {
@@ -35,7 +35,7 @@ entity "tbl_analytics_link" as al {
   TNumber : string
   LinkTypeEnum : string
   ..
-  533M
+  hundreds of millions
 }
 
 entity "tbl_hr_employee" as hr {
@@ -44,7 +44,7 @@ entity "tbl_hr_employee" as hr {
   WORKER_ID : string
   ORGANIZATIONAL_UNIT : string
   ..
-  265K
+  hundreds of thousands
 }
 
 entity "pages" as pages {
@@ -53,7 +53,7 @@ entity "pages" as pages {
   __ORG__GICTrackingID : string
   SiteId : FK
   ..
-  '''48K, 4% populated ⚠️'''
+  '''tens of thousands, rarely populated ⚠️'''
 }
 
 entity "pageviews" as pv {
@@ -62,7 +62,7 @@ entity "pageviews" as pv {
   user_gpn : string
   pageId : FK
   ..
-  173M
+  hundreds of millions
 }
 
 entity "pbi_db_interactions_metrics" as metrics {
@@ -71,7 +71,7 @@ entity "pbi_db_interactions_metrics" as metrics {
   views : bigint
   viewingcontactid : string
   ..
-  84M
+  tens of millions
 }
 
 entity "sites" as sites {
@@ -79,7 +79,7 @@ entity "sites" as sites {
   --
   SiteName : string
   ..
-  805
+  hundreds
 }
 
 email ||..|| pages   : "TrackingId ↔ __ORG__GICTrackingID (Pack / SEG1-2)"
@@ -108,9 +108,9 @@ ON  array_join(slice(split(UPPER(email.TrackingId),        '-'), 1, 2), '-')
 }}}
 
 Coverage reality:
- * iMEP side: 986/73,930 mailings (1.3%) have TrackingId
- * SP side: 1,949/48,419 pages (4%) have TrackingID
- * '''Realistic pack intersection''': 54 packs — the dashboard universe
+ * iMEP side: a small minority of mailings (low single-digit percent) have TrackingId
+ * SP side: a small minority of pages (low single-digit percent) have TrackingID
+ * '''Realistic pack intersection''': a few dozen packs — the dashboard universe
 
 !3 Bridge 2: Employee Identity (Person-Level)
 
@@ -173,16 +173,16 @@ E --> F
 !2 Typical Funnel Numbers
 
 {{{
-1,000 mailings sent      (from the 1.3% tracked universe, from 2025)
+N mailings sent          (from the small tracked universe, from 2025)
   |
-  |  ~22% open rate
+  |  open rate: a minority of sends
   v
-  220 opens
+  opens
   |
-  |  ~1.8% click rate
+  |  click rate: low single-digit percent of sends
   v
-   18 clicks
-  |  Cross-channel break (only 4% attributable on SP side)
+  clicks
+  |  Cross-channel break (only a small minority attributable on SP side)
   v
     X page views  (highly variable, depends on site coverage)
 }}}

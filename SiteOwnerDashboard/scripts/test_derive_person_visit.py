@@ -3,10 +3,10 @@ Tests for derive_person_visit() in process_site_pageviews.py — specifically th
 visit-based time-on-page column `time_on_page_visit_sec`.
 
 Background (2026-07-15): on the corp source the official AppInsights session_id
-is minted fresh on most navigations (92% of sessions have exactly 1 view), so
-`time_on_page_sec` (gap to the next view in the SAME session_id) is NULL for
-~87% of views and the rest is biased toward same-instant double-fires — the
-dashboard showed "0s" Avg time on 100k-view pages. `time_on_page_visit_sec`
+is minted fresh on most navigations (the vast majority of sessions have exactly
+1 view), so `time_on_page_sec` (gap to the next view in the SAME session_id) is
+NULL for most views and the rest is biased toward same-instant double-fires —
+the dashboard showed "0s" Avg time on high-traffic pages. `time_on_page_visit_sec`
 computes the SAME gap-to-next-view, but grouped by the reconstructed `visit_id`
 (person + 30-min inactivity rule), which is immune to session_id resets.
 

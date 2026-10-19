@@ -9,7 +9,7 @@
 | '''Primary key'''    | T_NUMBER |
 | '''Bridge columns''' | T_NUMBER (iMEP) + WORKER_ID (SharePoint/GPN) |
 | '''Write pattern''' | MERGE (Service Principal) |
-| '''Rows'''           | ~265K |
+| '''Rows'''           | Hundreds of thousands |
 
 !2 Key Columns
 
@@ -30,7 +30,7 @@ Full schema via !- DESCRIBE imep_bronze.tbl_hr_employee -! (~30-40 columns).
 {{{
 T_NUMBER              = "t100200"
 WORKER_ID             = "00100200"
-ORGANIZATIONAL_UNIT   = "CH-ZH-0041"
+ORGANIZATIONAL_UNIT   = "XX-XX-0001"
 ALTERNATE_WORKER_ID   = "..."
 }}}
 

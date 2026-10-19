@@ -1,6 +1,6 @@
 !1 TblAnalyticsLink ('''imep_bronze.tbl_analytics_link''')
 
-'''Open & Click events''' per recipient × link × interaction. One row per event. '''Largest Bronze table in the project''' (533M rows) and the only iMEP table with a '''truly incremental''' write pattern (3.7-8.5k rows per MERGE cycle). Together with tbl_email_receiver_status, one of the two full-key fact hubs.
+'''Open & Click events''' per recipient × link × interaction. One row per event. '''Largest Bronze table in the project''' (hundreds of millions of rows) and the only iMEP table with a '''truly incremental''' write pattern (thousands of rows per MERGE cycle). Together with tbl_email_receiver_status, one of the two full-key fact hubs.
 
 !2 Meta
 | '''Layer'''          | Bronze |
@@ -9,8 +9,8 @@
 | '''Primary key'''    | Id |
 | '''FK'''             | EmailId -> tbl_email.Id; EmailReceiverStatusId -> tbl_email_receiver_status.Id; TNumber -> tbl_hr_employee.T_NUMBER |
 | '''Write pattern''' | MERGE '''incremental''' (Service Principal) |
-| '''Rows'''           | '''533M''' (Nov 2020 - Apr 2026) |
-| '''Per-MERGE delta''' | '''3.7-8.5K rows''' (truly incremental — only new click events) |
+| '''Rows'''           | '''Hundreds of millions''' (Nov 2020 - Apr 2026) |
+| '''Per-MERGE delta''' | '''Thousands of rows''' (truly incremental — only new click events) |
 
 !2 Neighborhood Diagram
 
@@ -72,9 +72,9 @@ Another 13 columns (see schema check — 22 columns total). Geo info, IP hash, e
 !2 Sample Row
 
 {{{
-Id                      = "7d2f4a91-..."
-EmailId                 = "0a3f6c2e-..."
-EmailReceiverStatusId   = "3b9c1a8f-..."
+Id                      = "00000000-0000-4000-8000-000000000013"
+EmailId                 = "00000000-0000-4000-8000-000000000011"
+EmailReceiverStatusId   = "00000000-0000-4000-8000-000000000012"
 TNumber                 = "t100200"
 Agent                   = "Desktop Outlook"
 LinkTypeEnum            = "CLICK"
@@ -123,9 +123,9 @@ ORDER BY events DESC
 
 !2 Quality Caveats
 
- * '''Largest table in the project — 533M rows.''' Queries '''always''' need to be time-constrained (WHERE CreationDate >= …) or filtered by EmailId/TrackingId. Full scan = timeout risk.
+ * '''Largest table in the project — hundreds of millions of rows.''' Queries '''always''' need to be time-constrained (WHERE CreationDate >= …) or filtered by EmailId/TrackingId. Full scan = timeout risk.
  * '''Always set IsActive = 1''' — otherwise soft-deleted events bleed into numbers.
- * '''Truly incremental''': only 3.7-8.5k new rows per 12h cycle. Backfill anomalies unlikely, but Delta history is huge (110+ write operations for Bronze alone).
+ * '''Truly incremental''': only thousands of new rows per 12h cycle. Backfill anomalies unlikely, but Delta history is huge (over a hundred write operations for Bronze alone).
  * '''LinkTypeEnum values''': only OPEN and CLICK are reliable. Other values (if present) should be validated first.
  * '''TNumber redundant''' with tbl_email_receiver_status.TNumber — when joining both tables, one column can be dropped.
  * '''Agent values are free strings''' — no canonical enum list. For device analytics define mapping logic first (desktop/mobile/tablet).
@@ -136,7 +136,7 @@ Skips Silver. One of the three Bronze inputs for imep_gold.final.
 
 {{{
 imep_bronze.tbl_analytics_link       -+
-imep_bronze.tbl_email_receiver_status -|--> imep_gold.final (~520M rows, Full Rebuild)
+imep_bronze.tbl_email_receiver_status -|--> imep_gold.final (hundreds of millions of rows, Full Rebuild)
 imep_bronze.tbl_email                -+
 }}}
 

@@ -33,7 +33,7 @@ import pandas as pd
 
 RNG = np.random.default_rng(42)
 SITE_NAME = "News and events"
-SITE_ID = "5313b145-5ead-43ba-b317-6955e804881a"
+SITE_ID = "00000000-0000-4000-8000-000000000001"
 REF_TODAY = datetime(2026, 7, 1)
 START = REF_TODAY - timedelta(days=395)  # ~13 months so 12mo trend + prior-period MoM both have data
 
@@ -265,7 +265,7 @@ def build_interactions(df, page_ids):
     ctr = {i: float(np.clip(CTR_BASE[PAGES[i][1]] * RNG.lognormal(0.0, 0.5), 0.01, 0.6))
            for i in range(len(PAGES))}
     # Opaque asset ids, as the real player emits them — never a readable name.
-    video_ids = {i: f"ASSETID-550417190-{2600 + i}" for i in range(len(PAGES))}
+    video_ids = {i: f"ASSETID-123456789-{2600 + i}" for i in range(len(PAGES))}
     video_titles = {i: PAGES[i][0] for i in range(len(PAGES))}
 
     rows = []
@@ -428,8 +428,8 @@ def main():
                 "client_browser": BROWSERS[RNG.integers(0, len(BROWSERS))],
                 "client_country": user_country[u],
                 "page_load_ms": int(RNG.integers(180, 2600)),
-                "tracking_id": f"QRREP-{1000+pidx:07d}-260215-{2000+pidx:07d}-EMI" if has_tid else None,
-                "tracking_pack_id": f"QRREP-{1000+pidx:07d}" if has_tid else None,
+                "tracking_id": f"ABCDE-{1000+pidx:07d}-260215-{2000+pidx:07d}-EMI" if has_tid else None,
+                "tracking_pack_id": f"ABCDE-{1000+pidx:07d}" if has_tid else None,
                 "tracking_channel_abbr": "EMI" if has_tid else None,
                 "_seq": vi,
             })

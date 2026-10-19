@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Cut the distributed `site_dashboard_standalone.html` from 236 MB toward ~28 MB and stop it shipping plaintext GPNs, without changing a single metric the dashboard reports.
+**Goal:** Cut the distributed `site_dashboard_standalone.html` from hundreds of MB toward tens of MB and stop it shipping plaintext GPNs, without changing a single metric the dashboard reports.
 
 **Architecture:** Everything happens at embed time inside `scripts/build_standalone_dashboard.py`. One new seam — `build_payloads()` — owns slicing, pruning and anonymisation, returns ZSTD parquet bytes per view, and is the only thing the tests touch. `build()` keeps doing what it does today (embed bytes, inline libs, write HTML). The parquet on disk, the ingest pipeline and `dashboard/dashboard.html` are **not** modified.
 
@@ -55,7 +55,7 @@ Create `scripts/test_standalone_payloads.py`:
 Tests for build_payloads() in build_standalone_dashboard.py — the embed-time
 slice/prune/anonymise seam.
 
-Background (2026-07-17): the distributed standalone reached 236 MB and shipped
+Background (2026-07-17): the distributed standalone reached hundreds of MB and shipped
 plaintext GPNs — person_id IS the GPN, and in production visit_id is
 "person_id#n", so it carries the GPN as a prefix. (The demo generator fabricates
 session-like visit_ids, so the demo parquet hides this — the fixture below
@@ -78,7 +78,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_standalone_dashboard import build_payloads  # noqa: E402
 
-GPN_A, GPN_B, GPN_C = "06297360", "01892018", "07001234"
+GPN_A, GPN_B, GPN_C = "00100200", "00100201", "00100202"
 
 
 def check(label: str, actual, expected) -> None:

@@ -6,7 +6,7 @@ Scope: `SiteOwnerDashboard/scripts/build_standalone_dashboard.py` only. No chang
 
 ## Problem
 
-The distributed `site_dashboard_standalone.html` has reached **236 MB** in the production
+The distributed `site_dashboard_standalone.html` has reached **hundreds of MB** in the production
 environment (4.15 MB on the demo parquet). Three separate causes, in order of impact:
 
 1. **Ballast columns.** `gpn`, `user_id` and `view_id`/`event_id` are referenced **nowhere** in
@@ -21,7 +21,7 @@ A second, independent problem surfaced while measuring: **the distributed file c
 plaintext.** `person_id` *is* the GPN (31,467/31,467 rows identical). Dropping the `gpn` column
 removes a copy, not the PII.
 
-At 236 MB the file also approaches V8's ~512 MB single-string ceiling — the base64 data island is
+At that size the file also approaches V8's ~512 MB single-string ceiling — the base64 data island is
 one string. Growth direction is wrong, independent of everything above.
 
 ## Decisions
@@ -143,10 +143,10 @@ tab tell the recipient which site they hold. Uses the existing hook; no new JS.
 
 | Stage | Demo | Production (extrapolated) |
 |---|---|---|
-| today | 4.15 MB | 236 MB |
-| + anonymise + prune | ~2.2 MB | **~122 MB** |
-| + 3 of 13 months | ~1.4 MB | ~28 MB |
-| + 1 of n sites | — | ~28/n MB |
+| today | 4.15 MB | hundreds of MB |
+| + anonymise + prune | ~2.2 MB | **roughly half of that** |
+| + 3 of 13 months | ~1.4 MB | tens of MB |
+| + 1 of n sites | — | that ÷ n |
 
 ## Out of scope
 

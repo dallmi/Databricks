@@ -1,6 +1,6 @@
 # `sharepoint_bronze.pages`
 
-> **The cross-channel bridge.** Page inventory with `__ORG__GICTrackingID` — **the only place** where SharePoint-side interactions can be attributed to a Pack. 48K rows, but only **1,949 (~4%) have `__ORG__GICTrackingID` populated**. This is the most critical coverage blocker in the entire cross-channel model.
+> **The cross-channel bridge.** Page inventory with `__ORG__GICTrackingID` — **the only place** where SharePoint-side interactions can be attributed to a Pack. Tens of thousands of rows, but only **a small minority (low single-digit percent) have `__ORG__GICTrackingID` populated**. This is the most critical coverage blocker in the entire cross-channel model.
 
 | | |
 |---|---|
@@ -8,10 +8,10 @@
 | **Source system** | SharePoint -> Change Data Capture (CDC) or Snapshot -> Delta Bronze |
 | **Grain** | 1 row per SharePoint page (snapshot) |
 | **Primary key** | `pageUUID` (GUID) |
-| **Cross-channel key** | `__ORG__GICTrackingID` — **only 4% populated** ⚠️ |
+| **Cross-channel key** | `__ORG__GICTrackingID` — **only a small minority populated** ⚠️ |
 | **Write pattern** | MERGE Daily Snapshot Replace (Service Principal) |
-| **Approx row count** | **~48K** (as of today, timespan 1900 – Apr 2026) |
-| **Coverage** | 1,949 / 48,419 pages (~4%) have TrackingID -> **only article pages (News/Events)** |
+| **Approx row count** | **Tens of thousands** (as of today, timespan 1900 – Apr 2026) |
+| **Coverage** | A small minority of pages (low single-digit percent) have TrackingID -> **only article pages (News/Events)** |
 
 ---
 
@@ -27,7 +27,7 @@ erDiagram
 
     pages {
         string pageUUID PK "GUID"
-        string __ORG__GICTrackingID "CROSS-CHANNEL KEY (only 4% populated)"
+        string __ORG__GICTrackingID "CROSS-CHANNEL KEY (rarely populated)"
         string __ORG__ArticleDate "publication date"
         string PageURL
         string PageTitle
@@ -55,11 +55,11 @@ erDiagram
 | Column | Type | Role | Notes |
 |---|---|---|---|
 | `pageUUID` | string (GUID) | **PK** | Unique per page. Referenced as `marketingPageId` in all `sharepoint_gold.*` metric tables. |
-| `__ORG__GICTrackingID` | string | **Cross-channel key** | Format: `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL` (32-char, 5-seg, UPPER). **Only 4% populated.** |
+| `__ORG__GICTrackingID` | string | **Cross-channel key** | Format: `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL` (32-char, 5-seg, UPPER). **Only a small minority populated.** |
 | `__ORG__ArticleDate` | date | Publication date | When the article was published. Often NULL on non-article pages. |
 | `PageURL` / `PageUrl` / `url` | string | URL | Column name varies — verify via `DESCRIBE`. 1:1 URL<->TID mapping. |
 | `PageTitle` | string | Display | Page title |
-| `SiteId` | string | FK -> `sites.SiteId` | Site assignment (99.4% of tracked pages = "News and events") |
+| `SiteId` | string | FK -> `sites.SiteId` | Site assignment (almost all tracked pages = "News and events") |
 
 Full list (95 columns in total) via `DESCRIBE sharepoint_bronze.pages`.
 
@@ -69,10 +69,10 @@ Full list (95 columns in total) via `DESCRIBE sharepoint_bronze.pages`.
 
 ```
 pageUUID          = "00000000-0000-4000-8000-000000000001"
-__ORG__GICTrackingID  = "QRREP-0000058-240709-0000060-IAN"     -- note: SEG5 = IAN (SharePoint)
+__ORG__GICTrackingID  = "ABCDE-0000123-240715-0000046-ITS"     -- note: SEG5 = ITS (SharePoint)
 __ORG__ArticleDate    = 2024-07-09
-PageURL           = "/sites/news/articles/q2-investor-update.aspx"
-PageTitle         = "Q2 Investor Update 2024"
+PageURL           = "/<site>/<page>.aspx"
+PageTitle         = "<title>"
 SiteId            = "..."
 ```
 
@@ -129,26 +129,26 @@ JOIN   page_packs  p ON p.seg1_4 = e.seg1_4
 
 ## Quality caveats — critical
 
-### ⚠️ 4% coverage blocker
+### ⚠️ Low-coverage blocker
 
-Only **1,949 / 48,419 pages** have `__ORG__GICTrackingID`. Consequence:
+Only **a small minority of pages (low single-digit percent)** have `__ORG__GICTrackingID`. Consequence:
 
-- Only ~4% of the 84M SharePoint interaction rows are pack-attributable
-- The remaining 96% = "untracked intranet activity" (internal tools, settings, collab pages, etc.)
-- **Dashboard must make this explicit** — either (a) show only the 4% subset and label it as "Article Pages only", or (b) two separate sections (attributed vs. unattributed)
+- Only a low single-digit percentage of the tens of millions of SharePoint interaction rows are pack-attributable
+- The vast remainder = "untracked intranet activity" (internal tools, settings, collab pages, etc.)
+- **Dashboard must make this explicit** — either (a) show only the small tracked subset and label it as "Article Pages only", or (b) two separate sections (attributed vs. unattributed)
 
 ### Site concentration
 
-**99.4% of tracked pages** (1,937 out of 1,949) live on **one single site**: "News and events".
+**Almost all tracked pages** live on **one single site**: "News and events".
 
 - Dashboard default **should** be restricted to this site
-- For "coverage reality check": 83 Pack IDs (SEG1-2) are accessible to this dashboard
+- For "coverage reality check": only several dozen Pack IDs (SEG1-2) are accessible to this dashboard
 
 ### Coverage rollout
 
-- **Start of TID population**: September 2024 (33.9% coverage for new pages)
-- **Peak so far**: March 2026 (70.5%)
-- **Never reached 80%** — even "current" pages have 25-30% missing TIDs
+- **Start of TID population**: September 2024 (only a minority of new pages covered)
+- **Peak so far**: March 2026 (a clear majority of new pages)
+- **Never reached full coverage** — even "current" pages have a substantial share of missing TIDs
 
 -> Default time filter: `__ORG__ArticleDate >= '2024-09-01'`.
 
@@ -190,7 +190,6 @@ SharePoint (CMS) --[Daily Snapshot MERGE]--> sharepoint_bronze.pages
 
 - [join_strategy_contract.md](../../joins/join_strategy_contract.md) — coverage rules (rule 5)
 - [architecture_diagram.md](../../architecture_diagram.md) — Section 4 (cross-channel join) and Section 7 (coverage disclaimer)
-- Memory: `sharepoint_gold_schemas_q22.md`, `sharepoint_pages_coverage_q25.md`, `sharepoint_pages_inventory.md`
 
 ---
 

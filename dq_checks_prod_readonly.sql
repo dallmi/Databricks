@@ -15,7 +15,7 @@
 --     definition held in YOUR session. It is invisible to everyone else and it
 --     disappears when the notebook detaches. It is not a table.
 --   · one CACHE TABLE on the 70-day slice, so twenty checks do not each re-scan
---     173M rows. Caching materialises into cluster memory and spilled local
+--     hundreds of millions of rows. Caching materialises into cluster memory and spilled local
 --     disk, never into the lakehouse. The last cell releases it.
 --
 -- HOW TO RUN
@@ -236,11 +236,11 @@ CREATE OR REPLACE TEMPORARY VIEW dq_check_def AS
 SELECT * FROM VALUES
   ('A1','completeness','bronze','views',                 CAST(NULL AS DOUBLE),CAST(NULL AS DOUBLE),CAST(NULL AS DOUBLE),CAST(NULL AS DOUBLE),0.25,0.50,CAST(NULL AS DOUBLE),CAST(NULL AS DOUBLE),'daily page views vs same-weekday median'),
   ('A4','completeness','staging','sampling_factor',      NULL,NULL,1.001,1.001,NULL,NULL,NULL,NULL,'sum(itemCount)/count(*) must be 1.00'),
-  ('B1','identity','bronze','views_per_session',         1.30,1.50,NULL,NULL,NULL,NULL,0.10,0.25,'healthy 1.94-2.35 weekday, broken 1.06'),
+  ('B1','identity','bronze','views_per_session',         1.30,1.50,NULL,NULL,NULL,NULL,0.10,0.25,'healthy well above 1 on weekdays, broken near 1'),
   ('B2','identity','bronze','sessions_per_browser_7d',   1.02,1.10,NULL,NULL,NULL,NULL,0.15,0.30,'visits per browser identity, rolling week'),
-  ('B4','identity','bronze','browser_ids_per_person',    NULL,NULL,1.5,2.5,NULL,NULL,0.15,0.30,'per DAY; healthy 1.06-1.15, broken 3.7-4.15'),
-  ('B5','identity','bronze','single_view_session_share', NULL,NULL,0.80,0.90,NULL,NULL,0.10,0.20,'healthy 0.54-0.76, broken 0.93-0.95'),
-  ('B8','identity','bronze','identified_share',          0.90,0.97,NULL,NULL,NULL,NULL,0.05,0.15,'measured 1.000, every row carries a GPN'),
+  ('B4','identity','bronze','browser_ids_per_person',    NULL,NULL,1.5,2.5,NULL,NULL,0.15,0.30,'per DAY; healthy slightly above 1, broken several'),
+  ('B5','identity','bronze','single_view_session_share', NULL,NULL,0.80,0.90,NULL,NULL,0.10,0.20,'healthy clearly below the warn level, broken near all sessions'),
+  ('B8','identity','bronze','identified_share',          0.90,0.97,NULL,NULL,NULL,NULL,0.05,0.15,'every row carries a GPN'),
   ('C8','schema','bronze','double_fire_share',           NULL,NULL,0.10,0.25,NULL,NULL,0.05,NULL,'same person, same page, under 1 s apart'),
   ('D1a','plausibility','gold','gold_views',             NULL,NULL,NULL,NULL,0.25,0.50,NULL,NULL,'gold views per day'),
   ('D1b','plausibility','gold','gold_visits',            NULL,NULL,NULL,NULL,0.25,0.50,0.25,0.50,'gold visits per day'),

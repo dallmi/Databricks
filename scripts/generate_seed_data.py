@@ -46,7 +46,7 @@ class Pack:
     target_region: str
 
 PACKS: list[Pack] = [
-    Pack("QRREP", "0000058", "Q1 2026 Earnings Call",         "2026-03-05", ("EMI", "INT", "EVT"), 48_000, "Financial Results", "Quarterly Reporting", "Global"),
+    Pack("ABCDE", "0000123", "Q1 2026 Earnings Call",         "2026-03-05", ("EMI", "INT", "EVT"), 48_000, "Financial Results", "Quarterly Reporting", "Global"),
     Pack("GSTRA", "0000102", "CEO Strategy Update",           "2026-03-10", ("EMI", "INT"),        120_000, "Strategy", "Leadership", "Global"),
     Pack("LEARN", "0000041", "Compliance Training 2026",      "2026-03-12", ("EMI", "INT"),         95_000, "Compliance", "Mandatory Training", "Global"),
     Pack("CSATS", "0000019", "Client Satisfaction Survey",    "2026-03-15", ("EMI",),               75_000, "Client Experience", "Surveys", "APAC"),

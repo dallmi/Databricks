@@ -120,7 +120,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
     <tbody>
       <tr class="setup"><td class="b">0 / 0b</td><td>Probes the real column names, then measures the healthy ratios on a window before 8 April so the thresholds stop being guesses. Read-only, run once.</td><td class="c">&ndash;</td></tr>
       <tr class="setup"><td class="b">1</td><td>Creates the result table and the small catalogue that holds every threshold.</td><td class="c">&ndash;</td></tr>
-      <tr class="setup"><td class="b">2</td><td>Cuts one 70-day slice out of the 173 million bronze rows, so no check ever scans the whole table.</td><td class="c">&ndash;</td></tr>
+      <tr class="setup"><td class="b">2</td><td>Cuts one 70-day slice out of the more than a hundred million bronze rows, so no check ever scans the whole table.</td><td class="c">&ndash;</td></tr>
       <tr class="setup"><td class="b">3</td><td>Turns that slice into one number per day per metric, and builds the same-weekday baseline behind every corridor.</td><td class="c">&ndash;</td></tr>
       <tr><td class="b">4</td><td>The corridor engine. One piece of SQL evaluates every check whose rule is simply "stay inside a band".</td><td class="c">A1 A4 B1 B2 B4 B5 B8 C8 D1 D4 D7</td></tr>
       <tr><td class="b">5</td><td>Arrival: freshness, duplicates, the layer tie-out, late-arriving rows.</td><td class="c">A2 A5 A6 A7</td></tr>
@@ -366,7 +366,7 @@ code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
       <div class="panes">
         <div class="pane healthy">
       <div class="pane-hd"><span class="dot"></span>Healthy</div>
-      <table class="mini"><thead><tr><th>Row</th><th>GPN</th><th>Valid</th></tr></thead><tbody><tr><td class="">1</td><td class="hi ok">00100200</td><td class="">yes</td></tr><tr><td class="">2</td><td class="hi ok">00473911</td><td class="">yes</td></tr></tbody></table>
+      <table class="mini"><thead><tr><th>Row</th><th>GPN</th><th>Valid</th></tr></thead><tbody><tr><td class="">1</td><td class="hi ok">00100200</td><td class="">yes</td></tr><tr><td class="">2</td><td class="hi ok">00100201</td><td class="">yes</td></tr></tbody></table>
       <div class="calc">Both match the 8-digit rule. Invalid <b>0 %</b>.</div>
       <div class="verdict">OK</div>
     </div>

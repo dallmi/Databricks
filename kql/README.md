@@ -6,8 +6,8 @@ layer in Azure Application Insights → Logs.
 ## Workspace
 
 - Resource: AppInsights instance hosting the intranet telemetry
-- Tables: `pageViews` (page loads, ~173M Bronze rows), `customEvents`
-  (clicks + searches + video, ~262M Bronze rows)
+- Tables: `pageViews` (page loads, hundreds of millions of Bronze rows),
+  `customEvents` (clicks + searches + video, hundreds of millions of Bronze rows)
 
 ## Conventions
 

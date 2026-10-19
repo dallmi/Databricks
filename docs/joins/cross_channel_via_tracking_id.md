@@ -24,7 +24,7 @@ TrackingId structure: `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL`
 
 **Business reality**: A campaign kicks off, for example, with an email on 2024-07-09, and the corresponding intranet page only goes live on 2024-07-15. Different SEG3 (date), different SEG4 (Activity-Seq), different SEG5 (Channel) — **but the same Pack**. Only SEG1-2 matches the semantically related activities.
 
-Full-string match: 6/1677 hits (Jaccard 0.004). Pack-level match: ~54 attributable Packs.
+Full-string match: only a handful of hits (the two ID sets are almost disjoint). Pack-level match: a few dozen attributable Packs.
 
 ---
 
@@ -114,7 +114,7 @@ FROM   email_side e
 INNER JOIN sp_side s ON s.tracking_pack_id = e.tracking_pack_id
 ```
 
-→ Expected result size: ~54 Packs.
+→ Expected result size: a few dozen Packs.
 
 ### Variant B — Activity-within-Pack analysis (SEG1-3, within a single system only)
 
@@ -164,11 +164,11 @@ array_join(slice(split(UPPER(TRIM(TrackingId)), '-'), 1, 2), '-')
 
 ### 4. FULL OUTER JOIN, not INNER
 
-Most Packs have **only** email data or **only** page data. Only ~54 Packs are "both". `INNER JOIN` loses 90%+ of Packs — then the dashboard has only a tiny subset as its basis.
+Most Packs have **only** email data or **only** page data. Only a few dozen Packs are "both". `INNER JOIN` loses the large majority of Packs — then the dashboard has only a tiny subset as its basis.
 
 ### 5. Pack grain is Cluster + Pack number
 
-The Pack key is `CLUSTER-PACKNUMBER` (e.g. `QRREP-0000058`). Dashboard default: **Pack level (SEG1-2)**. For within-a-single-system drilldown, optionally SEG1-3 (per date) — but not for cross-channel match.
+The Pack key is `CLUSTER-PACKNUMBER` (e.g. `ABCDE-0000123`). Dashboard default: **Pack level (SEG1-2)**. For within-a-single-system drilldown, optionally SEG1-3 (per date) — but not for cross-channel match.
 
 ### 6. TrackingId is not a time attribute
 
@@ -176,16 +176,16 @@ TrackingId contains SEG3 = date (YYMMDD), but that is the **activity creation ti
 
 ### 7. Pre-2025 coverage is thin
 
-Default time filter from `2025-01-01` for iMEP, `20250101` for SP. Before 2025 TrackingId adoption is < 20% — funnel numbers become unreliable.
+Default time filter from `2025-01-01` for iMEP, `20250101` for SP. Before 2025 TrackingId adoption is low — funnel numbers become unreliable.
 
 ---
 
 ## Expected orders of magnitude
 
 Based on the coverage findings:
-- Email Packs with TrackingId (from 2025): ~54
-- SP Packs with TrackingId (from 2024-09): ~83 (of which 83 sit on a single site "News and events")
-- **Overlap**: ~54 Packs — this is the cross-channel dashboard universe.
+- Email Packs with TrackingId (from 2025): a few dozen
+- SP Packs with TrackingId (from 2024-09): somewhat more, still well under a hundred (all of them sit on a single site "News and events")
+- **Overlap**: roughly the full set of email Packs, a few dozen — this is the cross-channel dashboard universe.
 
 ---
 
@@ -194,7 +194,6 @@ Based on the coverage findings:
 - [join_strategy_contract.md](join_strategy_contract.md) — Rule 1, 3, 5
 - [er_cross_channel.md](../diagrams/er_cross_channel.md) — ER diagram with bridge
 - [tbl_email.md](../tables/imep/tbl_email.md) · [pages.md](../tables/sharepoint/pages.md) — The two dimension tables
-- Memory: `tracking_id_format_q23.md`, `tracking_id_volume_q24.md`, `sharepoint_pages_coverage_q25.md`
 
 ---
 

@@ -4,12 +4,12 @@
 -- (e.g. __ORG__GICTrackingID), so this public repo stays free of it.
 -- Replace __ORG__ with the real prefix (ORG_PREFIX in .env) before running.
 -- =============================================================================
--- Kontext: Q22 hat gezeigt, dass nur 1,949 / 48,419 Pages (~4%) eine
--- __ORG__GICTrackingID haben. Dieser Query schlüsselt auf, WO die 4% sitzen:
--- welche Sites, welche Page-Typen, welche Zeiträume.
+-- Kontext: Q22 hat gezeigt, dass nur ein kleiner Bruchteil der Pages (niedriger
+-- einstelliger %-Bereich) eine __ORG__GICTrackingID hat. Dieser Query schlüsselt
+-- auf, WO dieser Bruchteil sitzt: welche Sites, welche Page-Typen, welche Zeiträume.
 --
 -- Ergebnis treibt zwei Entscheidungen:
---   1. Dashboard-Scope: Reicht 4% Coverage für einen glaubwürdigen Funnel?
+--   1. Dashboard-Scope: Reicht so eine niedrige Coverage für einen glaubwürdigen Funnel?
 --   2. Silver-Design: Welche Site/Page-Klassen fallen in `is_article=TRUE`?
 -- =============================================================================
 
@@ -66,7 +66,7 @@ LIMIT 100;
 
 
 -- -----------------------------------------------------------------------------
--- 3) Top-Sites — wo konzentrieren sich die 1,949 Article-Pages?
+-- 3) Top-Sites — wo konzentrieren sich die getrackten Article-Pages?
 -- -----------------------------------------------------------------------------
 SELECT
   p.siteId,
@@ -128,9 +128,10 @@ LIMIT 50;
 -- -----------------------------------------------------------------------------
 -- 6) Traffic-Gewichtung — wie gross ist die Coverage NACH Views?
 -- -----------------------------------------------------------------------------
--- Inventory-Coverage (4%) ist die eine Metrik, Traffic-Coverage (% der 84M
--- Interaction-Rows auf tracked Pages) ist die wirklich relevante:
---   wenn die 4% tracked Pages 40% der Views kriegen, ist der Funnel brauchbar.
+-- Inventory-Coverage (niedriger einstelliger %-Bereich) ist die eine Metrik,
+-- Traffic-Coverage (% der zig Millionen Interaction-Rows auf tracked Pages) ist
+-- die wirklich relevante:
+--   wenn die wenigen tracked Pages 40% der Views kriegen, ist der Funnel brauchbar.
 
 WITH pages_classified AS (
   SELECT
@@ -160,7 +161,7 @@ ORDER BY total_views DESC;
 -- =============================================================================
 -- ERWARTETES ERGEBNIS (Hypothesen, durch Run zu validieren):
 --
---  • Cell 1: ~4% pct_with_tid (Q22 bestätigt). __ORG__ArticleDate wahrscheinlich
+--  • Cell 1: pct_with_tid im niedrigen einstelligen %-Bereich (Q22 bestätigt). __ORG__ArticleDate wahrscheinlich
 --    höher (~10–20%?) — viele Articles haben Datum, aber keine TID.
 --
 --  • Cell 2+3: TrackingIDs konzentriert auf wenige "News"/"GIC-Intranet"-Sites.
@@ -169,7 +170,7 @@ ORDER BY total_views DESC;
 --  • Cell 4: Coverage vor 2023 wahrscheinlich <50% → realistischer Default-
 --    Zeitraum fürs Dashboard ist "letzte 24 Monate" oder "ab Monat X".
 --
---  • Cell 6: KRITISCHE Metrik. Wenn die 4% tracked Pages >20% der Views
+--  • Cell 6: KRITISCHE Metrik. Wenn die wenigen tracked Pages >20% der Views
 --    kriegen, ist der Funnel erzählbar. Wenn <5%, müssen wir das Narrativ
 --    ändern ("Dashboard zeigt pack-attribuierte Article-Views — die Gesamt-
 --    Intranet-Aktivität ist grösser").

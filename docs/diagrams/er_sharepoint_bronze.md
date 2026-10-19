@@ -15,15 +15,15 @@ erDiagram
     master_employee_cdm_data }o..o{ pageviews : "potential user_gpn bridge"
 
     pages {
-        string pageUUID PK "48K rows"
-        string __ORG__GICTrackingID "CROSS-CHANNEL KEY (4% populated!)"
+        string pageUUID PK "tens of thousands of rows"
+        string __ORG__GICTrackingID "CROSS-CHANNEL KEY (rarely populated!)"
         string __ORG__ArticleDate
         string PageURL
         string PageTitle
         string SiteId FK
     }
     pageviews {
-        string Id PK "173M rows"
+        string Id PK "hundreds of millions of rows"
         string GICTrackingID "case-variant"
         string user_gpn "8-digit"
         string pageId FK
@@ -31,7 +31,7 @@ erDiagram
         string customDimensions "nested JSON"
     }
     customevents {
-        string Id PK "262M rows"
+        string Id PK "hundreds of millions of rows"
         string name "click_event / SEARCH_*"
         string pageId FK "to verify"
         timestamp timestamp
@@ -40,16 +40,16 @@ erDiagram
         string customDimensions "JSON · CustomProps double-nested"
     }
     sites {
-        string SiteId PK "805 rows"
+        string SiteId PK "hundreds of rows"
         string SiteName
         string SiteUrl
     }
     videos {
-        string Id PK "3K rows"
+        string Id PK "thousands of rows"
         string pageId FK
     }
     master_employee_cdm_data {
-        string PersonId PK "24M rows, 246 cols"
+        string PersonId PK "tens of millions of rows, 246 cols"
         string T_NUMBER "potential bridge"
         string user_gpn
     }
@@ -61,17 +61,17 @@ erDiagram
 
 | Table | Rows | Pattern |
 |---|---|---|
-| `customevents` | **262M** | (presumably Append) |
-| `pageviews` | **173M** | **Append WRITE**, 7 bursts within 1 minute (API pagination) |
-| `master_employee_cdm_data` | 24M | (TBD) |
-| `pages` | 48K | **MERGE daily snapshot replace** |
-| `videos` | 3K | (TBD) |
-| `sites` | 805 | (TBD) |
+| `customevents` | **Hundreds of millions** | (presumably Append) |
+| `pageviews` | **Hundreds of millions** | **Append WRITE**, a handful of bursts within a minute (API pagination) |
+| `master_employee_cdm_data` | Tens of millions | (TBD) |
+| `pages` | Tens of thousands | **MERGE daily snapshot replace** |
+| `videos` | Thousands | (TBD) |
+| `sites` | Hundreds | (TBD) |
 
 Plus historical snapshots:
-- `pageviews_1_july_till_17_oct` (20.6M)
-- `pageviews_08022024` (19M)
-- `customevents_history` (13.3M)
+- `pageviews_1_july_till_17_oct` (tens of millions)
+- `pageviews_08022024` (tens of millions)
+- `customevents_history` (over ten million)
 
 ---
 
@@ -161,18 +161,17 @@ See [hr_enrichment.md](../joins/hr_enrichment.md).
 
 - **Schema inconsistency**: `pages.__ORG__GICTrackingID` vs. `pageviews.GICTrackingID` — different column names for the same business key (plus case variants). Harmonization should happen in the Silver layer (`sharepoint_silver.webpage` uses `gICTrackingID`).
 - **1:1 URL↔TID mapping**: at the `pages` level every URL has at most one TID. Safe for URL-based aggregation.
-- **Append bursts on pageviews**: 7 quick writes within 1 minute (00:15-00:16 UTC). This is not streaming — API pagination, but very short windows. Best signal candidate for near-real-time dashboards.
-- **`customevents` is nearly 2× the size of `pageviews`** (262M vs. 173M). Both cover related but different interaction scopes.
+- **Append bursts on pageviews**: a handful of quick writes within about a minute. This is not streaming — API pagination, but very short windows. Best signal candidate for near-real-time dashboards.
+- **`customevents` is substantially larger than `pageviews`** (both hundreds of millions of rows). Both cover related but different interaction scopes.
 
 ---
 
 ## References
 
 - [pages.md](../tables/sharepoint/pages.md) — the cross-channel bridge
-- [customevents.md](../tables/sharepoint/customevents.md) — click + search + video stream (262M)
+- [customevents.md](../tables/sharepoint/customevents.md) — click + search + video stream (hundreds of millions of rows)
 - [join_strategy_contract.md](../joins/join_strategy_contract.md) — coverage rules
 - [`kql/customevents_clicks.kql`](../../kql/customevents_clicks.kql) — flatten exporter for click_event
-- Memory: `sharepoint_pages_inventory.md`, `sharepoint_gold_inventory.md`, `appinsights_source.md`
 
 ---
 

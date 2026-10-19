@@ -90,20 +90,20 @@ flowchart LR
     end
     subgraph SP_Gold["SharePoint Gold (Q17 confirmed)"]
         direction TB
-        SPI["pbi_db_interactions_metrics<br/>84M rows"]
-        SPV["pbi_db_pageviewed_metric<br/>84M rows"]
-        SPP["pbi_db_pagevisited_metric<br/>81M rows"]
-        SPD["pbi_db_datewise_overview_fact_tbl<br/>7.5M rows x 31 cols"]
-        SPE["pbi_db_employeecontact<br/>24M rows - potential HR bridge"]
+        SPI["pbi_db_interactions_metrics<br/>tens of millions of rows"]
+        SPV["pbi_db_pageviewed_metric<br/>tens of millions of rows"]
+        SPP["pbi_db_pagevisited_metric<br/>tens of millions of rows"]
+        SPD["pbi_db_datewise_overview_fact_tbl<br/>millions of rows x 31 cols"]
+        SPE["pbi_db_employeecontact<br/>tens of millions of rows - potential HR bridge"]
     end
     subgraph SP_Clicks["SharePoint Clicks Gold"]
-        CTA["pbi_db_ctalabel_intr_fact_gold<br/>3M rows - CTA labels"]
+        CTA["pbi_db_ctalabel_intr_fact_gold<br/>millions of rows - CTA labels"]
     end
     subgraph CPLAN["sharepoint_cplan (Q17 confirmed)"]
         direction TB
-        CL["trackingcluster_bronze<br/>17 clusters"]
-        CP["communicationspacks_bronze<br/>280 packs"]
-        CA["internalcommunicationactivities_bronze<br/>4349 activities"]
+        CL["trackingcluster_bronze<br/>over a dozen clusters"]
+        CP["communicationspacks_bronze<br/>hundreds of packs"]
+        CA["internalcommunicationactivities_bronze<br/>thousands of activities"]
     end
     subgraph Bronze["Bronze (enrichment only)"]
         direction TB
@@ -158,10 +158,10 @@ flowchart LR
 
     <section id="s1b">
       <h2>1b. iMEP Gold — die 5-Tier-Struktur im Detail</h2>
-      <p class="sectionsub">So ist <code>imep_gold</code> organisiert. Tier 3 ist unsere Haupt-Konsumtions-Ebene. Tier 1 <code>Final</code> ist für Ad-hoc zu gross (525M rows).</p>
+      <p class="sectionsub">So ist <code>imep_gold</code> organisiert. Tier 3 ist unsere Haupt-Konsumtions-Ebene. Tier 1 <code>Final</code> ist für Ad-hoc zu gross (Hunderte Millionen rows).</p>
       <div class="mermaid">
 flowchart TB
-    T1["Tier 1 - Atomic Fact<br/><br/>Final<br/>525M rows<br/>event-level, not BI-safe"]
+    T1["Tier 1 - Atomic Fact<br/><br/>Final<br/>hundreds of millions of rows<br/>event-level, not BI-safe"]
     subgraph T2["Tier 2 - Rolling timespan aggregations (EngagementType + Count)"]
         direction LR
         T2A["tbl_pbi_date* x 4<br/>time-window"]
@@ -171,19 +171,19 @@ flowchart TB
     end
     subgraph T3["Tier 3 - Mailing-level engagement - OUR PRIMARY SOURCE"]
         direction LR
-        T3A["tbl_pbi_engagement<br/>1.38M<br/>Mailing x Link<br/>UniqueOpens UniqueClicks"]
-        T3B["tbl_pbi_mailingreciever_region<br/>697K<br/>Mailing x Region"]
-        T3C["tbl_pbi_mailingreciever_division<br/>290K<br/>Mailing x Division"]
-        T3D["tbl_pbi_kpi<br/>244K<br/>Mailing-level KPIs"]
+        T3A["tbl_pbi_engagement<br/>over a million rows<br/>Mailing x Link<br/>UniqueOpens UniqueClicks"]
+        T3B["tbl_pbi_mailingreciever_region<br/>hundreds of thousands<br/>Mailing x Region"]
+        T3C["tbl_pbi_mailingreciever_division<br/>hundreds of thousands<br/>Mailing x Division"]
+        T3D["tbl_pbi_kpi<br/>hundreds of thousands<br/>Mailing-level KPIs"]
     end
     subgraph T4["Tier 4 - Platform metadata"]
         direction LR
-        T4A["tbl_pbi_platform_mailings<br/>73.9K"]
-        T4B["tbl_pbi_platform_events<br/>84K"]
-        T4C["tbl_pbi_platform_components<br/>3.3M"]
+        T4A["tbl_pbi_platform_mailings<br/>tens of thousands"]
+        T4B["tbl_pbi_platform_events<br/>tens of thousands"]
+        T4C["tbl_pbi_platform_components<br/>millions"]
         T4D["tbl_pbi_platform_*_tags<br/>taxonomies"]
     end
-    T5["Tier 5 - Reference<br/>tbl_active_employee_month<br/>842 rows"]
+    T5["Tier 5 - Reference<br/>tbl_active_employee_month<br/>hundreds of rows"]
     T1 --> T2
     T2 --> T3
     T3 -.denormalised to.-> T4
@@ -388,8 +388,8 @@ erDiagram
       <table>
         <thead><tr><th>Knoten im Diagramm</th><th>Tatsächliche Tabellen</th><th>Zweck</th></tr></thead>
         <tbody>
-          <tr><td><code>tbl_pbi_divarea_ALL</code></td><td><code>tbl_pbi_divarea15dplus</code>, <code>_15d</code>, <code>_5d</code>, <code>_7d</code>, <code>_24</code></td><td>Rolling-Window-Business-Hierarchy (5 Tabellen, je ~2.4M)</td></tr>
-          <tr><td><code>tbl_pbi_regcntry_ALL</code></td><td><code>tbl_pbi_regcntry15xplus</code>, <code>_15d</code>, <code>_5d</code>, <code>_7d</code>, <code>_24</code></td><td>Rolling-Window-Regional (5 Tabellen, je ~800K)</td></tr>
+          <tr><td><code>tbl_pbi_divarea_ALL</code></td><td><code>tbl_pbi_divarea15dplus</code>, <code>_15d</code>, <code>_5d</code>, <code>_7d</code>, <code>_24</code></td><td>Rolling-Window-Business-Hierarchy (5 Tabellen, je Millionen Zeilen)</td></tr>
+          <tr><td><code>tbl_pbi_regcntry_ALL</code></td><td><code>tbl_pbi_regcntry15xplus</code>, <code>_15d</code>, <code>_5d</code>, <code>_7d</code>, <code>_24</code></td><td>Rolling-Window-Regional (5 Tabellen, je Hunderttausende Zeilen)</td></tr>
           <tr><td><code>tbl_pbi_date_ALL</code></td><td><code>tbl_pbi_datesX4</code>, <code>_date24pabs</code>, <code>_dateId34</code>, <code>_dateId44</code></td><td>Rolling-Window-Time (4 Tabellen)</td></tr>
         </tbody>
       </table>
@@ -445,7 +445,7 @@ flowchart LR
     <section id="s4">
       <h2>4. Cross-Channel-Join über TrackingId</h2>
       <p class="sectionsub">TrackingId ist der einzige kanalübergreifende Key — 32 Zeichen, 5 Segmente.</p>
-<pre><code>QRREP-0000058-240709-0000060-EMI
+<pre><code>ABCDE-0000123-240709-0000045-EMI
   │       │       │       │     └── channel:  EMI / INT / EVT / BAN
   │       │       │       └──────── activity sequence
   │       │       └──────────────── YYMMDD
@@ -492,12 +492,12 @@ flowchart TB
         EVT["tbl_pbi_platform_events<br/>registration"]
     end
     subgraph SPG["SharePoint Gold - PageView side"]
-        SPI["pbi_db_interactions_metrics<br/>84M rows"]
-        SPV["pbi_db_pageviewed_metric<br/>84M rows"]
-        SPP["pbi_db_pagevisited_metric<br/>81M rows"]
-        SPD["pbi_db_datewise_overview_fact_tbl<br/>7.5M x 31 cols"]
+        SPI["pbi_db_interactions_metrics<br/>tens of millions of rows"]
+        SPV["pbi_db_pageviewed_metric<br/>tens of millions of rows"]
+        SPP["pbi_db_pagevisited_metric<br/>tens of millions of rows"]
+        SPD["pbi_db_datewise_overview_fact_tbl<br/>millions of rows x 31 cols"]
     end
-    CTA["sharepoint_clicks_gold<br/>pbi_db_ctalabel_intr_fact_gold<br/>CTA clicks 3M"]
+    CTA["sharepoint_clicks_gold<br/>pbi_db_ctalabel_intr_fact_gold<br/>CTA clicks, millions of rows"]
     subgraph CPL["sharepoint_cplan"]
         CL["trackingcluster_bronze"]
         CP["communicationspacks_bronze"]
@@ -540,16 +540,16 @@ flowchart TB
     class K1,K2,K3,K4,K5 kpi;
       </div>
       <p style="margin-top:16px;"><strong>Funnel mit validierten Baseline-Rates aus Q16:</strong></p>
-<pre><code>Recipients (100%)  ─►  Unique Opens (22.0%)  ─►  Unique Clicks (1.80%)  ─►  Page Views (???)  ─►  Event Registered (???)
-                                                                                    │
-                                                                            nur Article-Pages
-                                                                    (__ORG__GICTrackingID populated, Q15)
+<pre><code>Recipients (100%)  ─►  Unique Opens (a minority)  ─►  Unique Clicks (low single-digit %)  ─►  Page Views (???)  ─►  Event Registered (???)
+                                                                                                         │
+                                                                                                 nur Article-Pages
+                                                                                         (__ORG__GICTrackingID populated, Q15)
 
 Regional:
-  Switzerland & Liechtenstein:  71.1% Open  /  8.30% Click
-  Europe, Middle East:          66.5% Open  /  8.60% Click
-  Asia/Pacific:                 65.2% Open  /  4.40% Click
-  Americas:                     59.6% Open  /  3.80% Click</code></pre>
+  Switzerland & Liechtenstein:  highest open rate  /  high click rate
+  Europe, Middle East:          high open rate     /  highest click rate
+  Asia/Pacific:                 high open rate     /  lower click rate
+  Americas:                     lowest open rate   /  lowest click rate</code></pre>
     </section>
 
     <section id="s6">
@@ -557,9 +557,9 @@ Regional:
       <p class="sectionsub">Default-View zeigt eine Row pro Pack. Drill-Down zur Activity-Ebene optional, Roll-up zum Cluster für Programm-Reports.</p>
       <div class="mermaid">
 flowchart TD
-    CL["Cluster<br/>e.g. QRREP"]
-    PA["Pack<br/>tracking_pack_id<br/>QRREP-0000058"]
-    AC["Activity<br/>tracking_id<br/>QRREP-0000058-240709-0000060-EMI"]
+    CL["Cluster<br/>e.g. ABCDE"]
+    PA["Pack<br/>tracking_pack_id<br/>ABCDE-0000123"]
+    AC["Activity<br/>tracking_id<br/>ABCDE-0000123-240709-0000045-EMI"]
     CL --> PA
     PA --> AC
     D1["Dashboard Default-Grain<br/>1 row per Pack"]
@@ -605,10 +605,10 @@ flowchart LR
         <strong>Szenario A bestätigt (2026-04-17):</strong> <code>imep_gold</code> enthält eine komplette 5-Tier-Architektur mit pre-aggregierten Engagement-Summaries. Email-Seite des Dashboards ist als reiner Gold-JOIN baubar — ohne Bronze-ETL, ohne Silver-Aggregation.
       </p>
       <div class="legend" style="border-left-color:#6F7A1A;margin-bottom:18px;">
-        <strong>Q16-Befund:</strong> Tier 3 enthält <code>tbl_pbi_engagement</code> (1.38M rows, Mailing×Link), <code>tbl_pbi_mailingreciever_region</code> (697K), <code>tbl_pbi_mailingreciever_division</code> (290K) — je mit <code>UniqueOpens</code>, <code>UniqueClicks</code>, <code>Count</code>. Global 22% Open Rate / 1.8% Click Rate. <strong>Offene Lücke</strong>: SharePoint-Gold (Q17) für PageView-Aggregate.
+        <strong>Q16-Befund:</strong> Tier 3 enthält <code>tbl_pbi_engagement</code> (über eine Million rows, Mailing×Link), <code>tbl_pbi_mailingreciever_region</code> (Hunderttausende), <code>tbl_pbi_mailingreciever_division</code> (Hunderttausende) — je mit <code>UniqueOpens</code>, <code>UniqueClicks</code>, <code>Count</code>. Global rund ein Fünftel Open Rate / Click Rate im niedrigen einstelligen Prozentbereich. <strong>Offene Lücke</strong>: SharePoint-Gold (Q17) für PageView-Aggregate.
       </div>
       <div class="legend" style="border-left-color:#BD000C;margin-bottom:18px;">
-        <strong>⚠️ Data-Quality-Blocker: 66% NULL-Region.</strong> 184M von 278M Recipients ohne Region-Mapping — HR-JOIN zu <code>tbl_hr_costcenter</code> fehlt. Muss im Dashboard transparent gemacht werden. Root-Cause-Analyse via Q16d.
+        <strong>⚠️ Data-Quality-Blocker: Region überwiegend NULL.</strong> Die Mehrheit der Recipients ohne Region-Mapping — HR-JOIN zu <code>tbl_hr_costcenter</code> fehlt. Muss im Dashboard transparent gemacht werden. Root-Cause-Analyse via Q16d.
       </div>
       <div class="mermaid">
 flowchart LR
@@ -667,13 +667,13 @@ flowchart LR
       <table>
         <thead><tr><th>Metric</th><th>Value</th></tr></thead>
         <tbody>
-          <tr><td>Total Recipients</td><td>278,157,712</td></tr>
-          <tr><td>Total Unique Opens</td><td>61,134,757</td></tr>
-          <tr><td>Total Unique Clicks</td><td>5,062,291</td></tr>
-          <tr><td>Overall Open Rate</td><td><strong>22.00%</strong></td></tr>
-          <tr><td>Overall Click Rate</td><td><strong>1.80%</strong></td></tr>
-          <tr><td>Switzerland &amp; Liechtenstein — Open / Click Rate</td><td>71.10% / 8.30%</td></tr>
-          <tr><td>Americas — Open / Click Rate</td><td>59.60% / 3.80%</td></tr>
+          <tr><td>Total Recipients</td><td>hundreds of millions</td></tr>
+          <tr><td>Total Unique Opens</td><td>tens of millions</td></tr>
+          <tr><td>Total Unique Clicks</td><td>millions</td></tr>
+          <tr><td>Overall Open Rate</td><td><strong>a minority of recipients</strong></td></tr>
+          <tr><td>Overall Click Rate</td><td><strong>low single-digit percent</strong></td></tr>
+          <tr><td>Switzerland &amp; Liechtenstein — Open / Click Rate</td><td>highest region, well above global / well above global</td></tr>
+          <tr><td>Americas — Open / Click Rate</td><td>lowest region, still well above global / above global</td></tr>
         </tbody>
       </table>
 

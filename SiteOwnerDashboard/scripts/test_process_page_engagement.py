@@ -34,7 +34,7 @@ def main() -> None:
         # View B: flush_seq 0 and 2 — seq 1 lost (beacon loss)
         flush("vi-B", 0, 1000, 25, "route",    "2026-07-15 09:00:01"),
         flush("vi-B", 2,  500, 60, "pagehide", "2026-07-15 09:01:00"),
-        # View C: single-flush view (the 73% case the beacon exists for)
+        # View C: single-flush view (the common case the beacon exists for)
         flush("vi-C", 0, 42000, 100, "pagehide", "2026-07-15 10:00:42"),
     ]
     agg = aggregate_engagement(pd.DataFrame(rows))
