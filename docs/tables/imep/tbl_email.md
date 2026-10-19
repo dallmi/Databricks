@@ -127,9 +127,9 @@ Same `Id`, but enriched with content metrics. **We consume Gold**, not Bronze (s
 
 - **TrackingId NULL rate**: Not every mailing is tracked. For cross-channel attribution, apply `WHERE TrackingId IS NOT NULL`. Only 986/73,930 mailings (1.3%) have a TrackingId, but strong uptrend (2024: 99 → 2025: 637 → 2026 YTD: 250).
 - **TrackingId format**: Always 32 characters, 5 segments separated by `-`, UPPER. Structure: `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL`. SEG5 = channel (Email/Newsletter/Article/…). For cross-channel match with SharePoint compare only **SEG1-2 (Pack)** — email and intranet page of the same pack carry different dates/activities/channels. See [joins/cross_channel_via_tracking_id.md](../../joins/cross_channel_via_tracking_id.md).
-- **Cross-channel path**: TrackingId is a **dimension**, not a fact key — it **never** co-exists with EmailId in the same table. Cross-channel therefore runs `tbl_email.TrackingId ↔ sharepoint_bronze.pages.UBSGICTrackingID`, **not** via engagement rows (`pageviews` / `tbl_analytics_link`).
+- **Cross-channel path**: TrackingId is a **dimension**, not a fact key — it **never** co-exists with EmailId in the same table. Cross-channel therefore runs `tbl_email.TrackingId ↔ sharepoint_bronze.pages.__ORG__GICTrackingID`, **not** via engagement rows (`pageviews` / `tbl_analytics_link`).
 - **`CreationDate` ≠ send time**: For "when did it go out" join `tbl_email_receiver_status.DateTime`.
-- **`CreatedBy` format**: lowercase `t######`. Joins against `tbl_hr_user.UbsId` require `LOWER(UbsId)`.
+- **`CreatedBy` format**: lowercase `t######`. Joins against `tbl_hr_user.__ORG__Id` require `LOWER(__ORG__Id)`.
 
 ---
 
@@ -162,7 +162,7 @@ imep_bronze.tbl_email  ───►  imep_gold.tbl_pbi_platform_mailings  [Maste
 - Write pattern via `DESCRIBE HISTORY`
 - Whether `imep_gold.final` carries all Bronze columns 1:1 or only a KPI subset
 
-See [memory/imep_silver_q26_findings.md](../../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_silver_q26_findings.md) for full findings.
+See [findings/q26-imep-silver.md](../../findings/q26-imep-silver.md) for full findings.
 
 ---
 

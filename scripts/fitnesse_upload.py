@@ -42,6 +42,7 @@ from _config import (  # noqa: E402
     FITNESSE_PARENT_PATH,
     FITNESSE_ROOT_NAME,
     FITNESSE_PAGES_DIR,
+    ORG_PREFIX,
 )
 
 # Order of upload — containers first (so !see links resolve as we add leaves).
@@ -99,7 +100,7 @@ SUBSECTION_HINT = {
     "DataGlossary.ImepGold":   "Tables in the imep_gold schema: the 520M-row consumption endpoint plus tier-1/2/3 aggregates. Listed below.",
     "DataGlossary.SharePointBronze": "Tables in the sharepoint_bronze schema: page inventory (with TrackingID), page-views, custom events. Listed below.",
     "DataGlossary.SharePointGold":   "Tables in the sharepoint_gold schema: the 84M-row master interaction fact plus specialized grain tables. Listed below.",
-    "DataGlossary.Hr":               "HR dimension tables: employee master (with GPN bridge), cost-center (Region/Division), and the UbsId variant. Listed below.",
+    "DataGlossary.Hr":               "HR dimension tables: employee master (with GPN bridge), cost-center (Region/Division), and the __ORG__Id variant. Listed below.",
 }
 
 
@@ -139,7 +140,9 @@ def read_content(pages_dir: Path, source: str | None, sub_path: str) -> str:
         full = pages_dir / source
         if not full.is_file():
             raise FileNotFoundError(f"Expected page content at {full}")
-        return full.read_text(encoding="utf-8")
+        text = full.read_text(encoding="utf-8")
+        # The repo writes the organisation prefix as __ORG__; the internal wiki shows the real names.
+        return text.replace("__ORG__", ORG_PREFIX) if ORG_PREFIX else text
     # container stub
     name = sub_path.split(".")[-1] if sub_path else "MultiChannelDataModel"
     hint = SUBSECTION_HINT.get(sub_path, "See subpages for details.")

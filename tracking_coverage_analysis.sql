@@ -1,8 +1,11 @@
 -- =============================================================================
 -- Tracking-ID Coverage Analysis — welche Sites/Pages sind pack-attribuiert?
+-- Column names that carry the organisation's name are written as __ORG__
+-- (e.g. __ORG__GICTrackingID), so this public repo stays free of it.
+-- Replace __ORG__ with the real prefix (ORG_PREFIX in .env) before running.
 -- =============================================================================
 -- Kontext: Q22 hat gezeigt, dass nur 1,949 / 48,419 Pages (~4%) eine
--- UBSGICTrackingID haben. Dieser Query schlüsselt auf, WO die 4% sitzen:
+-- __ORG__GICTrackingID haben. Dieser Query schlüsselt auf, WO die 4% sitzen:
 -- welche Sites, welche Page-Typen, welche Zeiträume.
 --
 -- Ergebnis treibt zwei Entscheidungen:
@@ -23,12 +26,12 @@ DESCRIBE TABLE sharepoint_bronze.sites;
 -- -----------------------------------------------------------------------------
 SELECT
   COUNT(*)                                                   AS total_pages,
-  COUNT(UBSGICTrackingID)                                    AS with_trackingid,
-  COUNT(UBSArticleDate)                                      AS with_article_date,
-  SUM(CASE WHEN UBSGICTrackingID IS NOT NULL
-            AND UBSArticleDate    IS NOT NULL THEN 1 ELSE 0 END) AS with_both,
-  ROUND(100.0 * COUNT(UBSGICTrackingID) / COUNT(*), 2)       AS pct_with_tid,
-  ROUND(100.0 * COUNT(UBSArticleDate)   / COUNT(*), 2)       AS pct_with_date
+  COUNT(__ORG__GICTrackingID)                                    AS with_trackingid,
+  COUNT(__ORG__ArticleDate)                                      AS with_article_date,
+  SUM(CASE WHEN __ORG__GICTrackingID IS NOT NULL
+            AND __ORG__ArticleDate    IS NOT NULL THEN 1 ELSE 0 END) AS with_both,
+  ROUND(100.0 * COUNT(__ORG__GICTrackingID) / COUNT(*), 2)       AS pct_with_tid,
+  ROUND(100.0 * COUNT(__ORG__ArticleDate)   / COUNT(*), 2)       AS pct_with_date
 FROM sharepoint_bronze.pages;
 
 
@@ -46,12 +49,12 @@ SELECT
   s.siteName                                     AS site_name,    -- <-- patchen wenn anders
   s.siteUrl                                      AS site_url,     -- <-- patchen wenn anders
   COUNT(*)                                       AS pages,
-  COUNT(p.UBSGICTrackingID)                      AS pages_with_tid,
-  COUNT(p.UBSArticleDate)                        AS pages_article_dated,
-  ROUND(100.0 * COUNT(p.UBSGICTrackingID) / COUNT(*), 2) AS pct_tid,
+  COUNT(p.__ORG__GICTrackingID)                      AS pages_with_tid,
+  COUNT(p.__ORG__ArticleDate)                        AS pages_article_dated,
+  ROUND(100.0 * COUNT(p.__ORG__GICTrackingID) / COUNT(*), 2) AS pct_tid,
   COUNT(DISTINCT CONCAT_WS('-',
-    SPLIT_PART(UPPER(TRIM(p.UBSGICTrackingID)), '-', 1),
-    SPLIT_PART(UPPER(TRIM(p.UBSGICTrackingID)), '-', 2)
+    SPLIT_PART(UPPER(TRIM(p.__ORG__GICTrackingID)), '-', 1),
+    SPLIT_PART(UPPER(TRIM(p.__ORG__GICTrackingID)), '-', 2)
   ))                                             AS distinct_packs
 FROM sharepoint_bronze.pages p
 LEFT JOIN sharepoint_bronze.sites s
@@ -69,18 +72,18 @@ SELECT
   p.siteId,
   s.siteName,
   COUNT(*)                                       AS article_pages,
-  MIN(p.UBSArticleDate)                          AS earliest_article,
-  MAX(p.UBSArticleDate)                          AS latest_article,
+  MIN(p.__ORG__ArticleDate)                          AS earliest_article,
+  MAX(p.__ORG__ArticleDate)                          AS latest_article,
   COUNT(DISTINCT CONCAT_WS('-',
-    SPLIT_PART(UPPER(TRIM(p.UBSGICTrackingID)), '-', 1),
-    SPLIT_PART(UPPER(TRIM(p.UBSGICTrackingID)), '-', 2)
+    SPLIT_PART(UPPER(TRIM(p.__ORG__GICTrackingID)), '-', 1),
+    SPLIT_PART(UPPER(TRIM(p.__ORG__GICTrackingID)), '-', 2)
   ))                                             AS distinct_packs,
-  COUNT(DISTINCT RIGHT(p.UBSGICTrackingID, 3))   AS channel_suffix_variety,
-  COLLECT_SET(RIGHT(p.UBSGICTrackingID, 3))      AS channel_suffixes
+  COUNT(DISTINCT RIGHT(p.__ORG__GICTrackingID, 3))   AS channel_suffix_variety,
+  COLLECT_SET(RIGHT(p.__ORG__GICTrackingID, 3))      AS channel_suffixes
 FROM sharepoint_bronze.pages p
 LEFT JOIN sharepoint_bronze.sites s
        ON s.siteId = p.siteId
-WHERE p.UBSGICTrackingID IS NOT NULL
+WHERE p.__ORG__GICTrackingID IS NOT NULL
 GROUP BY 1, 2
 ORDER BY article_pages DESC
 LIMIT 50;
@@ -89,18 +92,18 @@ LIMIT 50;
 -- -----------------------------------------------------------------------------
 -- 4) Coverage-Trend über Zeit — ab wann ist der Funnel glaubwürdig?
 -- -----------------------------------------------------------------------------
--- Monatlicher Anteil der Articles (= UBSArticleDate NOT NULL), die eine
+-- Monatlicher Anteil der Articles (= __ORG__ArticleDate NOT NULL), die eine
 -- TrackingID haben. "Funnel-ready" definieren wir als ≥80% Coverage.
 SELECT
-  DATE_TRUNC('month', UBSArticleDate)            AS article_month,
+  DATE_TRUNC('month', __ORG__ArticleDate)            AS article_month,
   COUNT(*)                                       AS articles_total,
-  COUNT(UBSGICTrackingID)                        AS articles_with_tid,
-  ROUND(100.0 * COUNT(UBSGICTrackingID) / COUNT(*), 2) AS pct_tid,
-  CASE WHEN 100.0 * COUNT(UBSGICTrackingID) / COUNT(*) >= 80
+  COUNT(__ORG__GICTrackingID)                        AS articles_with_tid,
+  ROUND(100.0 * COUNT(__ORG__GICTrackingID) / COUNT(*), 2) AS pct_tid,
+  CASE WHEN 100.0 * COUNT(__ORG__GICTrackingID) / COUNT(*) >= 80
        THEN '✓ funnel-ready' ELSE '—' END         AS status
 FROM sharepoint_bronze.pages
-WHERE UBSArticleDate IS NOT NULL
-  AND UBSArticleDate >= ADD_MONTHS(CURRENT_DATE(), -36)
+WHERE __ORG__ArticleDate IS NOT NULL
+  AND __ORG__ArticleDate >= ADD_MONTHS(CURRENT_DATE(), -36)
 GROUP BY 1
 ORDER BY 1;
 
@@ -114,8 +117,8 @@ ORDER BY 1;
 SELECT
   COALESCE(pageType, '(null)')                   AS page_type,     -- <-- patchen
   COUNT(*)                                       AS total,
-  COUNT(UBSGICTrackingID)                        AS with_tid,
-  ROUND(100.0 * COUNT(UBSGICTrackingID) / COUNT(*), 2) AS pct_tid
+  COUNT(__ORG__GICTrackingID)                        AS with_tid,
+  ROUND(100.0 * COUNT(__ORG__GICTrackingID) / COUNT(*), 2) AS pct_tid
 FROM sharepoint_bronze.pages
 GROUP BY 1
 ORDER BY total DESC
@@ -133,8 +136,8 @@ WITH pages_classified AS (
   SELECT
     p.pageUUID,
     p.siteId,
-    CASE WHEN p.UBSGICTrackingID IS NOT NULL THEN 'tracked'
-         WHEN p.UBSArticleDate   IS NOT NULL THEN 'article_no_tid'
+    CASE WHEN p.__ORG__GICTrackingID IS NOT NULL THEN 'tracked'
+         WHEN p.__ORG__ArticleDate   IS NOT NULL THEN 'article_no_tid'
          ELSE 'non_article' END                  AS page_class
   FROM sharepoint_bronze.pages p
 )
@@ -157,7 +160,7 @@ ORDER BY total_views DESC;
 -- =============================================================================
 -- ERWARTETES ERGEBNIS (Hypothesen, durch Run zu validieren):
 --
---  • Cell 1: ~4% pct_with_tid (Q22 bestätigt). UBSArticleDate wahrscheinlich
+--  • Cell 1: ~4% pct_with_tid (Q22 bestätigt). __ORG__ArticleDate wahrscheinlich
 --    höher (~10–20%?) — viele Articles haben Datum, aber keine TID.
 --
 --  • Cell 2+3: TrackingIDs konzentriert auf wenige "News"/"GIC-Intranet"-Sites.

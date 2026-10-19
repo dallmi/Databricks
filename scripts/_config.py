@@ -47,6 +47,14 @@ def resolve_path(env_var: str, fallback: Path) -> Path:
 load_env()
 
 # ---------------------------------------------------------------------------
+# Organisation prefix. The repository writes object names that carry the
+# organisation's name as __ORG__ (e.g. __ORG__GICTrackingID), so the public
+# repo stays free of it. Set ORG_PREFIX in .env to restore the real names
+# where content leaves the repo (FitNesse upload).
+# ---------------------------------------------------------------------------
+ORG_PREFIX = os.environ.get("ORG_PREFIX", "")
+
+# ---------------------------------------------------------------------------
 # FitNesse — connection, paths, tuning. All four fitnesse_*.py scripts
 # import these directly. To override per-call: export the matching env var
 # (FITNESSE_URL etc.) before invocation; shell wins over .env.

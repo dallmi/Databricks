@@ -1,13 +1,13 @@
 !1 Pages ('''sharepoint_bronze.pages''')
 
-'''The cross-channel bridge.''' Page inventory with UBSGICTrackingID — '''the only place''' where SharePoint-side interactions can be attributed to a Pack. 48K rows, but only '''1,949 (~4%) have UBSGICTrackingID populated'''. The most critical coverage blocker in the entire cross-channel model.
+'''The cross-channel bridge.''' Page inventory with __ORG__GICTrackingID — '''the only place''' where SharePoint-side interactions can be attributed to a Pack. 48K rows, but only '''1,949 (~4%) have __ORG__GICTrackingID populated'''. The most critical coverage blocker in the entire cross-channel model.
 
 !2 Meta
 | '''Layer'''          | Bronze |
 | '''Source system'''  | SharePoint -> Change Data Capture (CDC) or Snapshot -> Delta Bronze |
 | '''Grain'''          | 1 row per SharePoint page (snapshot) |
 | '''Primary key'''    | pageUUID (GUID) |
-| '''Cross-channel key''' | UBSGICTrackingID — '''only 4% populated''' ⚠️ |
+| '''Cross-channel key''' | __ORG__GICTrackingID — '''only 4% populated''' ⚠️ |
 | '''Write pattern''' | MERGE daily snapshot replace (Service Principal) |
 | '''Rows'''           | '''~48K''' (timespan 1900 - Apr 2026) |
 | '''Coverage'''       | 1,949 / 48,419 pages (~4%) have TrackingID -> '''article pages only (News/Events)''' |
@@ -21,8 +21,8 @@ hide circle
 entity "pages" as pages {
   * pageUUID : string <<PK>>
   --
-  UBSGICTrackingID : string
-  UBSArticleDate : date
+  __ORG__GICTrackingID : string
+  __ORG__ArticleDate : date
   PageURL : string
   PageTitle : string
   SiteId : FK
@@ -46,7 +46,7 @@ entity "tbl_email" as email {
 
 pages ||--o{ im    : "pageUUID = marketingPageId"
 pages }o--|| sites : "SiteId = SiteId"
-pages ||--o| email : "UBSGICTrackingID ↔ TrackingId (Pack / SEG1-2)"
+pages ||--o| email : "__ORG__GICTrackingID ↔ TrackingId (Pack / SEG1-2)"
 
 !enduml
 
@@ -54,8 +54,8 @@ pages ||--o| email : "UBSGICTrackingID ↔ TrackingId (Pack / SEG1-2)"
 
 | '''Column'''            | '''Type''' | '''Role'''              | '''Notes''' |
 | pageUUID                | string (GUID) | '''PK'''              | Unique per page. Referenced as marketingPageId in all sharepoint_gold.* metric tables. |
-| UBSGICTrackingID        | string     | '''Cross-channel key'''  | Format: CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL (32-char, 5-seg, UPPER). '''Only 4% populated.''' |
-| UBSArticleDate          | date       | Publication date         | When the article was published. Often NULL for non-article pages. |
+| __ORG__GICTrackingID        | string     | '''Cross-channel key'''  | Format: CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL (32-char, 5-seg, UPPER). '''Only 4% populated.''' |
+| __ORG__ArticleDate          | date       | Publication date         | When the article was published. Often NULL for non-article pages. |
 | PageURL / PageUrl / url | string     | URL                      | Column name varies — verify via DESCRIBE. 1:1 URL↔TID mapping. |
 | PageTitle               | string     | Display                  | Page title |
 | SiteId                  | string     | FK -> sites.SiteId       | 99.4% of tracked pages = "News and events" |
@@ -65,9 +65,9 @@ Full list (95 columns total) via !- DESCRIBE sharepoint_bronze.pages -!.
 !2 Sample Row
 
 {{{
-pageUUID          = "f94bc186-32a2-4155-aaec-42b22091cd22"
-UBSGICTrackingID  = "QRREP-0000058-240709-0000060-IAN"     -- SEG5 = IAN (SharePoint)
-UBSArticleDate    = 2024-07-09
+pageUUID          = "00000000-0000-4000-8000-000000000001"
+__ORG__GICTrackingID  = "QRREP-0000058-240709-0000060-IAN"     -- SEG5 = IAN (SharePoint)
+__ORG__ArticleDate    = 2024-07-09
 PageURL           = "/sites/news/articles/q2-investor-update.aspx"
 PageTitle         = "Q2 Investor Update 2024"
 SiteId            = "..."
@@ -78,15 +78,15 @@ SiteId            = "..."
 !3 Join to pbi_db_interactions_metrics (1:N) — Standard cross-channel path
 
 {{{
-SELECT p.UBSGICTrackingID, p.PageURL, p.UBSArticleDate,
+SELECT p.__ORG__GICTrackingID, p.PageURL, p.__ORG__ArticleDate,
        SUM(m.views)  AS total_views,
        SUM(m.visits) AS total_visits,
        COUNT(DISTINCT m.viewingcontactid) AS unique_viewers
 FROM   sharepoint_bronze.pages p
 JOIN   sharepoint_gold.pbi_db_interactions_metrics m ON m.marketingPageId = p.pageUUID
-WHERE  p.UBSGICTrackingID IS NOT NULL
+WHERE  p.__ORG__GICTrackingID IS NOT NULL
   AND  m.visitdatekey   >= '20250101'
-GROUP BY p.UBSGICTrackingID, p.PageURL, p.UBSArticleDate
+GROUP BY p.__ORG__GICTrackingID, p.PageURL, p.__ORG__ArticleDate
 }}}
 
 !3 Join to sites (N:1) — Site context
@@ -110,10 +110,10 @@ WITH email_packs AS (
 ),
 page_packs AS (
   SELECT DISTINCT
-         array_join(slice(split(UPPER(UBSGICTrackingID), '-'), 1, 4), '-') AS seg1_4,
-         UBSGICTrackingID AS page_tid
+         array_join(slice(split(UPPER(__ORG__GICTrackingID), '-'), 1, 4), '-') AS seg1_4,
+         __ORG__GICTrackingID AS page_tid
   FROM   sharepoint_bronze.pages
-  WHERE  UBSGICTrackingID IS NOT NULL
+  WHERE  __ORG__GICTrackingID IS NOT NULL
 )
 SELECT e.email_tid, p.page_tid, e.seg1_4 AS common_activity
 FROM   email_packs e
@@ -124,7 +124,7 @@ JOIN   page_packs  p ON p.seg1_4 = e.seg1_4
 
 !3 ⚠️ 4% coverage blocker
 
-Only '''1,949 / 48,419 pages''' have UBSGICTrackingID. Consequence:
+Only '''1,949 / 48,419 pages''' have __ORG__GICTrackingID. Consequence:
  * Only ~4% of the 84M SharePoint interaction rows are Pack-attributable
  * The remaining 96% = "untracked intranet activity" (internal tools, settings, collaboration pages etc.)
  * '''The dashboard must make this explicit''' — either (a) show only the 4% subset labelled "Article Pages only", or (b) two separate sections (attributed vs. unattributed)
@@ -141,11 +141,11 @@ Only '''1,949 / 48,419 pages''' have UBSGICTrackingID. Consequence:
  * Peak so far: March 2026 (70.5%)
  * '''Never reached 80%''' — even "current" pages have 25-30% missing TIDs
 
-Default time filter: WHERE UBSArticleDate >= '2024-09-01'.
+Default time filter: WHERE __ORG__ArticleDate >= '2024-09-01'.
 
 !3 Format inconsistencies
 
- * UBSGICTrackingID should always be UPPER, clean, 32-char — but when comparing against iMEP always guard with UPPER(TRIM(...))
+ * __ORG__GICTrackingID should always be UPPER, clean, 32-char — but when comparing against iMEP always guard with UPPER(TRIM(...))
  * SEG5 (channel) diverges: iMEP carries EMI/NLI/TWE, SharePoint IAN/ITS/OPN/ANC — '''ignore SEG5''' for cross-channel matching (see Rule 3 in StrategyContract)
 
 !3 1:1 URL ↔ TID

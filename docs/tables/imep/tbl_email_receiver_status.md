@@ -22,7 +22,7 @@ erDiagram
     tbl_email                 ||--o{ tbl_email_receiver_status : "Id = EmailId"
     tbl_email_receiver_status ||--o{ tbl_analytics_link        : "Id = EmailReceiverStatusId"
     tbl_email_receiver_status }o--|| tbl_hr_employee           : "TNumber = T_NUMBER"
-    tbl_email_receiver_status }o--|| tbl_hr_user               : "LOWER(TNumber) = LOWER(UbsId)"
+    tbl_email_receiver_status }o--|| tbl_hr_user               : "LOWER(TNumber) = LOWER(__ORG__Id)"
 
     tbl_email_receiver_status {
         string Id PK
@@ -51,7 +51,7 @@ erDiagram
         string WORKER_ID
     }
     tbl_hr_user {
-        string UbsId
+        string __ORG__Id
         string Town
     }
 ```

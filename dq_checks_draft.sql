@@ -1,5 +1,8 @@
 -- ============================================================================
 -- Data Integrity Checks — DRAFT for Databricks SQL / Spark SQL
+-- Column names that carry the organisation's name are written as __ORG__
+-- (e.g. __ORG__GICTrackingID), so this public repo stays free of it.
+-- Replace __ORG__ with the real prefix (ORG_PREFIX in .env) before running.
 -- Companion to docs/data-integrity-checks.md (catalogue A1–D8).
 --
 -- Status 2026-09-09: written from the documented table inventory, NOT yet
@@ -9,7 +12,7 @@
 -- Table map used here (see docs/data-integrity-checks.md §9):
 --   sharepoint_bronze.pageviews               173M  App Insights pageViews landing
 --   sharepoint_bronze.customevents            262M  App Insights customEvents landing
---   sharepoint_bronze.pages                    48K  page inventory (pageUUID, UBSGICTrackingID)
+--   sharepoint_bronze.pages                    48K  page inventory (pageUUID, __ORG__GICTrackingID)
 --   sharepoint_silver.pageviewed / pagevisited       refined view / visit facts
 --   sharepoint_gold.pbi_db_interactions_metrics 84M  page × date × contact fact (views, visits)
 --   sharepoint_gold.pbi_db_employeecontact      24M  contact dimension (contactId = unique visitor)
@@ -1107,12 +1110,12 @@ email_clicks AS (
   GROUP  BY 1
 ),
 page_views AS (
-  SELECT CONCAT_WS('-', SPLIT_PART(UPPER(pg.UBSGICTrackingID), '-', 1), SPLIT_PART(UPPER(pg.UBSGICTrackingID), '-', 2)) AS pack_id,
+  SELECT CONCAT_WS('-', SPLIT_PART(UPPER(pg.__ORG__GICTrackingID), '-', 1), SPLIT_PART(UPPER(pg.__ORG__GICTrackingID), '-', 2)) AS pack_id,
          COUNT(*) AS views
   FROM   dq.pv_window w
   JOIN   sharepoint_bronze.pages pg ON pg.pageUUID = w.page_id
   JOIN   params p ON w.view_date BETWEEN date_sub(p.check_date, 6) AND p.check_date
-  WHERE  pg.UBSGICTrackingID IS NOT NULL
+  WHERE  pg.__ORG__GICTrackingID IS NOT NULL
   GROUP  BY 1
 )
 SELECT p.check_date, 'D6', 'plausibility', 'gold',

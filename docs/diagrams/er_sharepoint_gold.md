@@ -30,11 +30,11 @@ erDiagram
     pbi_db_90_days_interactions_metric }o--|| pages : "marketingPageId = pageUUID"
     pbi_db_page_visitedkey_view        ||..|| pbi_db_interactions_metrics : "visit-key filter"
     pbi_db_employeecontact             }o..o{ pbi_db_interactions_metrics : "contactId = viewingcontactid (bridge)"
-    pages                              }o--|| tbl_email : "UBSGICTrackingID ↔ TrackingId via SEG1-2"
+    pages                              }o--|| tbl_email : "__ORG__GICTrackingID ↔ TrackingId via SEG1-2"
 
     pages {
         string pageUUID PK "48K — THE DIMENSION"
-        string UBSGICTrackingID "only 4% populated ⚠️"
+        string __ORG__GICTrackingID "only 4% populated ⚠️"
         string PageURL
     }
     pbi_db_interactions_metrics {
@@ -109,11 +109,11 @@ Plus `sharepoint_clicks_gold.pbi_db_ctalabel_intr_fact_gold` (3M) for CTA click 
 SELECT SUM(views) FROM sharepoint_gold.pbi_db_interactions_metrics;
 
 -- RIGHT — enables attribution via TrackingID
-SELECT p.UBSGICTrackingID, SUM(m.views) AS views
+SELECT p.__ORG__GICTrackingID, SUM(m.views) AS views
 FROM   sharepoint_gold.pbi_db_interactions_metrics m
 JOIN   sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
-WHERE  p.UBSGICTrackingID IS NOT NULL
-GROUP BY p.UBSGICTrackingID
+WHERE  p.__ORG__GICTrackingID IS NOT NULL
+GROUP BY p.__ORG__GICTrackingID
 ```
 
 ### Rule 2 — ~96% of rows are "untracked"
@@ -150,7 +150,7 @@ Usable for example for "Which CTA button on which page was clicked how often".
 
 ## All paths lead through `pages`
 
-**None of the Gold metric tables carry `GICTrackingID` or `UBSGICTrackingID` directly.** This is deliberate normalization — the TrackingID lives only on the dimension.
+**None of the Gold metric tables carry `GICTrackingID` or `__ORG__GICTrackingID` directly.** This is deliberate normalization — the TrackingID lives only on the dimension.
 
 ```
 Any sharepoint_gold.pbi_db_* metric
@@ -159,7 +159,7 @@ Any sharepoint_gold.pbi_db_* metric
               ▼
 sharepoint_bronze.pages
               │
-              │ UBSGICTrackingID (if populated)
+              │ __ORG__GICTrackingID (if populated)
               ▼
 Cross-channel match to imep_bronze.tbl_email.TrackingId (SEG1-2)
 ```

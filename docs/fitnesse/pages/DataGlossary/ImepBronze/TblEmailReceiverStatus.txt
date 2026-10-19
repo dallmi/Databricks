@@ -49,7 +49,7 @@ entity "tbl_hr_employee" as hr {
   WORKER_ID : string
 }
 entity "tbl_hr_user" as user {
-  * UbsId : string <<PK>>
+  * __ORG__Id : string <<PK>>
   --
   Town : string
 }
@@ -57,7 +57,7 @@ entity "tbl_hr_user" as user {
 email ||--o{ rs : "Id = EmailId"
 rs    ||--o{ al : "Id = EmailReceiverStatusId"
 rs    }o--|| hr : "TNumber = T_NUMBER"
-rs    }o--|| user : "LOWER(TNumber) = LOWER(UbsId)"
+rs    }o--|| user : "LOWER(TNumber) = LOWER(__ORG__Id)"
 
 !enduml
 

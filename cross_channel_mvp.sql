@@ -1,11 +1,14 @@
 -- =============================================================================
 -- Cross-Channel MVP — tracking_pack_id grain
+-- Column names that carry the organisation's name are written as __ORG__
+-- (e.g. __ORG__GICTrackingID), so this public repo stays free of it.
+-- Replace __ORG__ with the real prefix (ORG_PREFIX in .env) before running.
 -- =============================================================================
 -- Status: Q16 + Q17 + Q21 + Q22 + Q23 + Q24 + Q25 — ALL READINESS QUESTIONS ANSWERED.
 -- =============================================================================
 --
 -- Q25 CONFIRMED (2026-04-20, IMG_7390..7393):
---   • Overall Page-Coverage: 1,959 / 48,419 (4.05%). 99.9% der tracked pages haben auch UBSArticleDate.
+--   • Overall Page-Coverage: 1,959 / 48,419 (4.05%). 99.9% der tracked pages haben auch __ORG__ArticleDate.
 --   • 🎯 99.4% der tracked pages sitzen auf EINER Site: "News and events" (1,947 pages, 83 Packs).
 --     Die restlichen 12 Pages sind Test-/Edge-Artefakte (Training playground, ORM APAC, etc.).
 --   • Site-FK bestätigt: pages.SPT_Siteld = sites.SPT_Siteld (100% match, 48,419/48,419).
@@ -28,7 +31,7 @@
 --     ⇒ Pack-Level-Aggregat liefert ≤54 Rows. Ø 13 Varianten pro Pack kollabiert durch SEG1-2-Cut.
 --
 -- Q23 CONFIRMED (2026-04-20, IMG_7384..7386):
---   • Format identisch zwischen TrackingId und UBSGICTrackingID: 32 chars, 5 segments (5-7-6-7-3),
+--   • Format identisch zwischen TrackingId und __ORG__GICTrackingID: 32 chars, 5 segments (5-7-6-7-3),
 --     alles UPPERCASE, keine Whitespace-Issues → UPPER/TRIM defensiv ok, funktional unnötig.
 --   • ⚠️ Werte fast DISJOINT: Jaccard=0.004, nur 6 Exact-Matches aus 1,677 distinct IDs.
 --     → TrackingId ist KEIN direkter FK. Es ist ein shared FORMAT, kein shared ID-SPACE.
@@ -50,10 +53,10 @@
 --   SharePoint Gold Metriken (interactions_metrics, pageviewed_metric, pagevisited_metric, datewise_overview_fact_tbl)
 --   teilen ALLE den FK `marketingPageId` (string GUID)
 --   → sharepoint_bronze.pages.pageUUID
---       → pages.UBSGICTrackingID
+--       → pages.__ORG__GICTrackingID
 --           → imep_gold.tbl_pbi_platform_mailings.TrackingId
 --   KEIN direktes TrackingID auf Gold-Metriken.
---   ⚠️ COVERAGE-BLOCKER: nur 1,949 / 48,419 Pages (~4%) haben UBSGICTrackingID.
+--   ⚠️ COVERAGE-BLOCKER: nur 1,949 / 48,419 Pages (~4%) haben __ORG__GICTrackingID.
 --   Dominante Gold-Metric-Cols: marketingPageId, visitdatekey, viewingcontactid, views, visits, durationsum.
 --
 -- Offen: Q23 (Format-Konsistenz), Q24 (Volumen/EMI-Share).
@@ -79,8 +82,8 @@ WITH imep AS (
   WHERE TrackingId IS NOT NULL
 ),
 sp AS (
-  SELECT UBSGICTrackingID AS tid FROM sharepoint_bronze.pages
-  WHERE UBSGICTrackingID IS NOT NULL
+  SELECT __ORG__GICTrackingID AS tid FROM sharepoint_bronze.pages
+  WHERE __ORG__GICTrackingID IS NOT NULL
 )
 SELECT 'imep' AS src,
        COUNT(*) AS n,
@@ -110,10 +113,10 @@ FROM (
 ) e
 INNER JOIN (
   SELECT DISTINCT CONCAT_WS('-',
-           SPLIT_PART(UPPER(TRIM(UBSGICTrackingID)),'-',1),
-           SPLIT_PART(UPPER(TRIM(UBSGICTrackingID)),'-',2)) AS pack_id
+           SPLIT_PART(UPPER(TRIM(__ORG__GICTrackingID)),'-',1),
+           SPLIT_PART(UPPER(TRIM(__ORG__GICTrackingID)),'-',2)) AS pack_id
   FROM sharepoint_bronze.pages
-  WHERE UBSGICTrackingID IS NOT NULL
+  WHERE __ORG__GICTrackingID IS NOT NULL
 ) s USING (pack_id);
 
 -- Q24 — Volumen & Channel-Suffix-Breakdown
@@ -134,12 +137,12 @@ FROM imep_gold.tbl_pbi_platform_mailings;
 -- Status:
 --  A1 ✅ MailingId = platform_mailings.Id (Q21, 97.7% match on region)
 --  A2 ✅ Kein direktes TrackingID auf Gold-Metric — JOIN via
---        metrics.marketingPageId = pages.pageUUID, dann pages.UBSGICTrackingID (Q22)
+--        metrics.marketingPageId = pages.pageUUID, dann pages.__ORG__GICTrackingID (Q22)
 --  A3 ✅ NULLs in UniqueOpens/UniqueClicks sind semantisch → COALESCE(..., 0) vor SUM (Q21)
 --  A4 ✅ tracking_pack_id = SEG1-SEG2 — Format sauber, UPPER/TRIM defensiv (Q23)
 --  A5 ✅ iMEP-Filter `RIGHT(TrackingId, 3) = 'EMI'` deckt 81% der iMEP-TIDs ab (Q23)
---  A6 ✅ SharePoint-Filter `RIGHT(UBSGICTrackingID, 3) IN ('IAN','ITS','OPN','ANC')` (Q23)
---  A7 ⚠️ Nur ~4% der Pages (1,949/48,419) haben UBSGICTrackingID → sparse Coverage (Q22)
+--  A6 ✅ SharePoint-Filter `RIGHT(__ORG__GICTrackingID, 3) IN ('IAN','ITS','OPN','ANC')` (Q23)
+--  A7 ⚠️ Nur ~4% der Pages (1,949/48,419) haben __ORG__GICTrackingID → sparse Coverage (Q22)
 --  A8 ⚠️ Exact-TID-Intersection = 6 (Jaccard 0.004)! Pack-Level-JOIN ist die EINZIGE
 --        sinnvolle Brücke — direkter TrackingId-Match wäre leer (Q23)
 -- =============================================================================
@@ -166,25 +169,25 @@ email_pack AS (
 ),
 
 -- ---------- SharePoint side: page-view aggregates per tracking_pack_id ----------
--- Q22: JOIN-Pfad ist metrics.marketingPageId → pages.pageUUID → pages.UBSGICTrackingID
--- Only 4% of pages have UBSGICTrackingID → INNER JOIN auf pages mit WHERE-Filter.
+-- Q22: JOIN-Pfad ist metrics.marketingPageId → pages.pageUUID → pages.__ORG__GICTrackingID
+-- Only 4% of pages have __ORG__GICTrackingID → INNER JOIN auf pages mit WHERE-Filter.
 -- Wir nehmen `pbi_db_interactions_metrics` (master fact) statt _pageviewed_metric:
 --   gleiche Grain, mehr Messgrössen (views, visits, durationsum), selbe marketingPageId.
 pages_pack AS (
   SELECT
     p.pageUUID,
-    RIGHT(p.UBSGICTrackingID, 3) AS channel_suffix,
+    RIGHT(p.__ORG__GICTrackingID, 3) AS channel_suffix,
     CONCAT_WS('-',
-      SPLIT_PART(p.UBSGICTrackingID, '-', 1),
-      SPLIT_PART(p.UBSGICTrackingID, '-', 2)
+      SPLIT_PART(p.__ORG__GICTrackingID, '-', 1),
+      SPLIT_PART(p.__ORG__GICTrackingID, '-', 2)
     ) AS tracking_pack_id
   FROM sharepoint_bronze.pages p
   INNER JOIN sharepoint_bronze.sites s
           ON s.SPT_Siteld = p.SPT_Siteld                         -- Q25: 100% match
-  WHERE p.UBSGICTrackingID IS NOT NULL                           -- ~1,959 / 48,419 pages
-    AND RIGHT(p.UBSGICTrackingID, 3) IN ('IAN','ITS','OPN','ANC') -- Q23: 96% der tracked pages
+  WHERE p.__ORG__GICTrackingID IS NOT NULL                           -- ~1,959 / 48,419 pages
+    AND RIGHT(p.__ORG__GICTrackingID, 3) IN ('IAN','ITS','OPN','ANC') -- Q23: 96% der tracked pages
     AND s.SiteName = 'News and events'                           -- Q25: 99.4% Pareto auf einer Site
-    AND p.UBSArticleDate >= '2024-09-01'                         -- Q25: Rollout-Inflection
+    AND p.__ORG__ArticleDate >= '2024-09-01'                         -- Q25: Rollout-Inflection
 ),
 intranet_pack AS (
   SELECT
@@ -299,15 +302,15 @@ ORDER BY tracking_pack_id, recipients DESC;
 -- verlässlich ist. Ausgabe taucht als "Coverage by Month"-Panel im Dashboard auf.
 
 SELECT
-  DATE_TRUNC('month', p.UBSArticleDate)                                 AS article_month,
+  DATE_TRUNC('month', p.__ORG__ArticleDate)                                 AS article_month,
   COUNT(*)                                                              AS total_articles,
-  SUM(CASE WHEN p.UBSGICTrackingID IS NOT NULL THEN 1 ELSE 0 END)       AS tracked_articles,
-  ROUND(100.0 * SUM(CASE WHEN p.UBSGICTrackingID IS NOT NULL THEN 1 ELSE 0 END)
+  SUM(CASE WHEN p.__ORG__GICTrackingID IS NOT NULL THEN 1 ELSE 0 END)       AS tracked_articles,
+  ROUND(100.0 * SUM(CASE WHEN p.__ORG__GICTrackingID IS NOT NULL THEN 1 ELSE 0 END)
        / COUNT(*), 2)                                                   AS coverage_pct
 FROM sharepoint_bronze.pages p
 INNER JOIN sharepoint_bronze.sites s ON s.SPT_Siteld = p.SPT_Siteld
-WHERE p.UBSArticleDate IS NOT NULL
-  AND p.UBSArticleDate >= '2024-09-01'
+WHERE p.__ORG__ArticleDate IS NOT NULL
+  AND p.__ORG__ArticleDate >= '2024-09-01'
   AND s.SiteName = 'News and events'
 GROUP BY 1
 ORDER BY 1 DESC;
@@ -328,12 +331,12 @@ WITH imep_packs AS (
 ),
 sp_packs AS (
   SELECT DISTINCT
-    CONCAT_WS('-', SPLIT_PART(p.UBSGICTrackingID,'-',1), SPLIT_PART(p.UBSGICTrackingID,'-',2)) AS pack_id
+    CONCAT_WS('-', SPLIT_PART(p.__ORG__GICTrackingID,'-',1), SPLIT_PART(p.__ORG__GICTrackingID,'-',2)) AS pack_id
   FROM sharepoint_bronze.pages p
   INNER JOIN sharepoint_bronze.sites s ON s.SPT_Siteld = p.SPT_Siteld
-  WHERE p.UBSGICTrackingID IS NOT NULL
+  WHERE p.__ORG__GICTrackingID IS NOT NULL
     AND s.SiteName = 'News and events'
-    AND p.UBSArticleDate >= '2024-09-01'
+    AND p.__ORG__ArticleDate >= '2024-09-01'
 )
 SELECT
   (SELECT COUNT(*) FROM imep_packs)                                  AS imep_packs_total,

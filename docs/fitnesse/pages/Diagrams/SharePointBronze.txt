@@ -11,14 +11,14 @@ hide circle
 entity "pages" as pages {
   * pageUUID : string <<PK>>
   --
-  UBSGICTrackingID : string
-  UBSArticleDate : date
+  __ORG__GICTrackingID : string
+  __ORG__ArticleDate : date
   PageURL : string
   PageTitle : string
   SiteId : FK
   ..
   48K rows
-  '''only 4% have UBSGICTrackingID'''
+  '''only 4% have __ORG__GICTrackingID'''
 }
 
 entity "pageviews" as pv {
@@ -90,17 +90,17 @@ cdm   }o..o{ pv    : "potential user_gpn bridge"
 !2 Critical Distinction: Inventory vs. Interactions
 
 !3 pages = Inventory (Dimension)
-Contains all SharePoint pages + their metadata incl. UBSGICTrackingID (where set). Find "which articles exist, which pages belong to TrackingID Y, which site hosts it". Does '''not''' contain view counts or interactions.
+Contains all SharePoint pages + their metadata incl. __ORG__GICTrackingID (where set). Find "which articles exist, which pages belong to TrackingID Y, which site hosts it". Does '''not''' contain view counts or interactions.
 
 !3 pageviews / customevents = Interactions (Fact)
 Every single user-page interaction. Find "who read which page when, which device, which custom event triggered". Does '''not''' contain TrackingID directly — always join via pages.
 
 {{{
 -- The canonical SP Bronze chain
-SELECT pv.user_gpn, pv.ViewTime, p.UBSGICTrackingID, p.PageTitle
+SELECT pv.user_gpn, pv.ViewTime, p.__ORG__GICTrackingID, p.PageTitle
 FROM   sharepoint_bronze.pageviews pv
 JOIN   sharepoint_bronze.pages     p ON p.pageUUID = pv.pageId
-WHERE  p.UBSGICTrackingID IS NOT NULL
+WHERE  p.__ORG__GICTrackingID IS NOT NULL
 }}}
 
 !2 Person Identity in SharePoint Bronze
@@ -113,7 +113,7 @@ Confirmed bridge runs via iMEP HR: join pageviews.user_gpn = tbl_hr_employee.WOR
 
 !2 Key Observations
 
- * '''Schema inconsistency''': pages.UBSGICTrackingID vs. pageviews.GICTrackingID — different column names for the same business key. Harmonization happens in Silver (sharepoint_silver.webpage uses gICTrackingID).
+ * '''Schema inconsistency''': pages.__ORG__GICTrackingID vs. pageviews.GICTrackingID — different column names for the same business key. Harmonization happens in Silver (sharepoint_silver.webpage uses gICTrackingID).
  * '''1:1 URL↔TID mapping''': at the pages level, each URL has at most one TID. Safe for URL-based aggregation.
  * '''Append bursts on pageviews''': 7 fast writes within 1 minute (00:15-00:16 UTC) — not streaming but API pagination, very short windows.
  * '''customevents is ~2x larger than pageviews''' (262M vs 173M). Covers related but distinct interaction scopes.

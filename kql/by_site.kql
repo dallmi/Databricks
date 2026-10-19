@@ -2,7 +2,7 @@
 // Aggregates: total views, unique users, unique sessions, tracking-id coverage.
 
 let TargetSiteName = "Home";   // or leave empty and use SiteID
-let TargetSiteID   = "";       // e.g. "b96c5556-dc25-4f9a-a547-fec7418a7850"
+let TargetSiteID   = "";       // e.g. "00000000-0000-4000-8000-000000000000"
 let StartTime = ago(30d);
 let EndTime   = now();
 

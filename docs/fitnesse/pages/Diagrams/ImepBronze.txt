@@ -103,7 +103,7 @@ entity "tbl_hr_costcenter" as cc {
 }
 
 entity "tbl_hr_user" as user {
-  * UbsId : string <<PK>>
+  * __ORG__Id : string <<PK>>
   --
   Town : string
 }
@@ -117,7 +117,7 @@ rs    ||--o{ al    : "Id = EmailReceiverStatusId"
 rs    }o--|| hr    : "TNumber = T_NUMBER"
 al    }o--|| hr    : "TNumber = T_NUMBER"
 hr    }o--|| cc    : "ORGANIZATIONAL_UNIT"
-hr    }o--|| user  : "LOWER(T_NUMBER) = LOWER(UbsId)"
+hr    }o--|| user  : "LOWER(T_NUMBER) = LOWER(__ORG__Id)"
 
 !enduml
 

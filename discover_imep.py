@@ -164,5 +164,5 @@ json_str = json.dumps(output, indent=2, default=str)
 dbutils.fs.put("dbfs:/tmp/imep_discovery.json", json_str, overwrite=True)
 dbutils.fs.cp("dbfs:/tmp/imep_discovery.json", "dbfs:/FileStore/imep_discovery.json", True)
 
-workspace_url = "https://adb-205203499382645.5.azuredatabricks.net"
+workspace_url = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 print(f"\nDownload: {workspace_url}/files/imep_discovery.json")

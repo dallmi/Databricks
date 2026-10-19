@@ -11,8 +11,8 @@
 ```sql
 SELECT
     -- TrackingID attribution from pages
-    p.UBSGICTrackingID  AS tracking_id,
-    p.UBSArticleDate    AS article_date,
+    p.__ORG__GICTrackingID  AS tracking_id,
+    p.__ORG__ArticleDate    AS article_date,
     p.PageURL,
     p.PageTitle,
 
@@ -33,10 +33,10 @@ FROM    sharepoint_gold.pbi_db_interactions_metrics m
 JOIN    sharepoint_bronze.pages                     p ON p.pageUUID = m.marketingPageId
 LEFT JOIN sharepoint_bronze.sites                   s ON s.SiteId   = p.SiteId
 
-WHERE   p.UBSGICTrackingID IS NOT NULL          -- required filter for attribution
+WHERE   p.__ORG__GICTrackingID IS NOT NULL          -- required filter for attribution
   AND   m.visitdatekey >= '20250101'            -- default time window
 
-GROUP BY p.UBSGICTrackingID, p.UBSArticleDate, p.PageURL, p.PageTitle,
+GROUP BY p.__ORG__GICTrackingID, p.__ORG__ArticleDate, p.PageURL, p.PageTitle,
          s.SiteName, s.SiteUrl, m.visitdatekey
 ```
 
@@ -50,14 +50,14 @@ For "How many views did Pack X get overall?":
 
 ```sql
 SELECT
-    array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id,
+    array_join(slice(split(UPPER(p.__ORG__GICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id,
     SUM(m.views)                       AS total_views,
     SUM(m.visits)                      AS total_visits,
     COUNT(DISTINCT m.viewingcontactid) AS unique_viewers,
     SUM(m.durationsum)                 AS total_duration_sec
 FROM   sharepoint_gold.pbi_db_interactions_metrics m
 JOIN   sharepoint_bronze.pages                     p ON p.pageUUID = m.marketingPageId
-WHERE  p.UBSGICTrackingID IS NOT NULL
+WHERE  p.__ORG__GICTrackingID IS NOT NULL
   AND  m.visitdatekey >= '20250101'
 GROUP BY 1
 ```
@@ -68,7 +68,7 @@ Use `pbi_db_datewise_overview_fact_tbl` — much smaller (7.5M instead of 84M), 
 
 ```sql
 SELECT
-    p.UBSGICTrackingID,
+    p.__ORG__GICTrackingID,
     d.employeebusinessdivision,
     d.visitdatekey,
     d.page_div_date_views                 AS views_1d,
@@ -78,7 +78,7 @@ SELECT
     d.page_div_date_uniquevisitors_7d     AS unique_viewers_7d
 FROM   sharepoint_gold.pbi_db_datewise_overview_fact_tbl d
 JOIN   sharepoint_bronze.pages                          p ON p.pageUUID = d.marketingPageId
-WHERE  p.UBSGICTrackingID IS NOT NULL
+WHERE  p.__ORG__GICTrackingID IS NOT NULL
   AND  d.visitdatekey >= '20250101'
 ```
 
@@ -88,13 +88,13 @@ WHERE  p.UBSGICTrackingID IS NOT NULL
 
 ```sql
 SELECT
-    p.UBSGICTrackingID,
+    p.__ORG__GICTrackingID,
     v.visitdatekey,
     SUM(v.views)                       AS views,
     COUNT(DISTINCT v.viewingcontactid) AS unique_viewers
 FROM   sharepoint_gold.pbi_db_pageviewed_metric v
 JOIN   sharepoint_bronze.pages                  p ON p.pageUUID = v.marketingPageId
-WHERE  p.UBSGICTrackingID IS NOT NULL
+WHERE  p.__ORG__GICTrackingID IS NOT NULL
 GROUP BY 1, 2
 ```
 
@@ -104,12 +104,12 @@ For call-to-action attribution instead of page views:
 
 ```sql
 SELECT
-    p.UBSGICTrackingID,
+    p.__ORG__GICTrackingID,
     c.ctalabel,
     SUM(c.clicks) AS total_clicks
 FROM   sharepoint_clicks_gold.pbi_db_ctalabel_intr_fact_gold c
 JOIN   sharepoint_bronze.pages                              p ON p.pageUUID = c.marketingPageId
-WHERE  p.UBSGICTrackingID IS NOT NULL
+WHERE  p.__ORG__GICTrackingID IS NOT NULL
 GROUP BY 1, 2
 ```
 
@@ -123,7 +123,7 @@ If you also want to count "untracked" pages (the 96%), use LEFT JOIN and `NVL`:
 
 ```sql
 SELECT
-    COALESCE(p.UBSGICTrackingID, '(untracked)') AS tid_or_untracked,
+    COALESCE(p.__ORG__GICTrackingID, '(untracked)') AS tid_or_untracked,
     SUM(m.views)
 FROM   sharepoint_gold.pbi_db_interactions_metrics m
 LEFT JOIN sharepoint_bronze.pages                  p ON p.pageUUID = m.marketingPageId
@@ -174,14 +174,14 @@ If you find `GICTrackingID` filters on Gold in old dashboards / SQL files: it is
 
 ## Performance tuning
 
-- **Pre-filter on `pages`**: If you only need tracked pages, materialize the 1,949 pages with `UBSGICTrackingID` first, then run the large join:
+- **Pre-filter on `pages`**: If you only need tracked pages, materialize the 1,949 pages with `__ORG__GICTrackingID` first, then run the large join:
 
   ```sql
   WITH tracked_pages AS (
-    SELECT pageUUID, UBSGICTrackingID FROM sharepoint_bronze.pages
-    WHERE  UBSGICTrackingID IS NOT NULL
+    SELECT pageUUID, __ORG__GICTrackingID FROM sharepoint_bronze.pages
+    WHERE  __ORG__GICTrackingID IS NOT NULL
   )
-  SELECT tp.UBSGICTrackingID, SUM(m.views)
+  SELECT tp.__ORG__GICTrackingID, SUM(m.views)
   FROM   sharepoint_gold.pbi_db_interactions_metrics m
   JOIN   tracked_pages                              tp ON tp.pageUUID = m.marketingPageId
   GROUP BY 1;

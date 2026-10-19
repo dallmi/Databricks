@@ -25,16 +25,16 @@ Each domain has a dedicated container page with per-table cards (schema, sample 
 !3 2.2 Key terms
 
 | '''Term''' | '''Definition''' |
-| TrackingId | 32-character dimension key shared between iMEP and SharePoint, format '''CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL'''. Lives on tbl_email (iMEP, column '''TrackingId''') and sharepoint_bronze.pages (SharePoint, column '''UBSGICTrackingID'''). The only cross-channel join key. |
+| TrackingId | 32-character dimension key shared between iMEP and SharePoint, format '''CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL'''. Lives on tbl_email (iMEP, column '''TrackingId''') and sharepoint_bronze.pages (SharePoint, column '''__ORG__GICTrackingID'''). The only cross-channel join key. |
 | Pack | SEG1 + SEG2 of the TrackingId (Cluster + Pack-Number, e.g. '''QRREP-0000058'''). Identifies a campaign and bundles all its activities across channels and dates. '''Cross-channel match lives at this level.''' |
 | Cluster | SEG1 of the TrackingId (5 characters, ALPHA, e.g. '''QRREP'''). Campaign prefix — groups all Packs of a campaign family. |
 | Activity | A single instance within a Pack (one email, one intranet page, one newsletter). Identified by SEG3 (YYMMDD of creation) + SEG4 (sequence number). '''Activity-level join does not work cross-channel''' because the email and the matching intranet page carry different activity dates. |
 | Channel | SEG5 of the TrackingId. System-specific vocabulary: iMEP uses '''EMI''' / '''NLI''' / '''TWE'''; SharePoint uses '''IAN''' / '''ITS''' / '''OPN''' / '''ANC'''. The reason a full-string match across domains fails. |
 | TNumber | Lowercase '''t######''' identifier (e.g. t100200). iMEP's person key — lives on tbl_email_receiver_status and tbl_analytics_link. Primary key in tbl_hr_employee as '''T_NUMBER'''. |
 | GPN | Global Personnel Number, 8-digit numeric with leading zeros (e.g. 00100200). SharePoint's person key (pageviews.user_gpn). Same value stored on tbl_hr_employee as '''WORKER_ID'''. |
-| UbsId | Uppercase '''T######''' variant of the T-Number, lives on tbl_hr_user. Joining to other tables requires LOWER() on both sides. |
+| __ORG__Id | Uppercase '''T######''' variant of the T-Number, lives on tbl_hr_user. Joining to other tables requires LOWER() on both sides. |
 | MailingId | Unique identifier of a specific email mailing (= tbl_email.Id, GUID). Foreign key referenced by tbl_email_receiver_status.EmailId and tbl_analytics_link.EmailId. Carried forward into imep_gold.final and imep_gold.tbl_pbi_platform_mailings as '''lowercase mailingid''' in the engagement aggregates. |
-| UBSGICTrackingID | SharePoint's column name for the TrackingId. Lives on sharepoint_bronze.pages at page-inventory grain. Only ~4% of pages carry a value — coverage is the dominant cross-channel constraint. |
+| __ORG__GICTrackingID | SharePoint's column name for the TrackingId. Lives on sharepoint_bronze.pages at page-inventory grain. Only ~4% of pages carry a value — coverage is the dominant cross-channel constraint. |
 
 !2 3. References
 
@@ -70,7 +70,7 @@ Numbers as of 2026-04-20 (Genie sessions Q24 / Q25 / Q27). Re-run those sessions
 
 | '''Side''' | '''Coverage''' | '''Raw''' |
 | iMEP mailings with TrackingId | 1.3% | 986 / 73,930 |
-| SharePoint pages with UBSGICTrackingID | 4.0% | 1,949 / 48,419 |
+| SharePoint pages with __ORG__GICTrackingID | 4.0% | 1,949 / 48,419 |
 | Pack-level intersection (dashboard scope) | — | ~54 Packs |
 
 !3 5.3 TrackingId adoption over time (iMEP)
@@ -107,7 +107,7 @@ After these five cards you can answer most cross-channel questions independently
 Plus the cross-channel bridge:
 
 | '''Table''' | '''Role''' |
-| Pages ('''sharepoint_bronze.pages''') | Page inventory with UBSGICTrackingID — the only place cross-channel attribution happens |
+| Pages ('''sharepoint_bronze.pages''') | Page inventory with __ORG__GICTrackingID — the only place cross-channel attribution happens |
 
 !2 8. ER Diagrams per Domain
 
@@ -130,9 +130,9 @@ Plus the cross-channel bridge:
 These are the '''hard constraints''' against which every cross-channel analysis must be built.
 
 !3 10.1 The cross-channel link is dimensional, not factual
-tbl_email.TrackingId <-> sharepoint_bronze.pages.UBSGICTrackingID — '''never''' via engagement tables (pageviews, tbl_analytics_link) directly. TrackingId is a dimension, not a fact key.
+tbl_email.TrackingId <-> sharepoint_bronze.pages.__ORG__GICTrackingID — '''never''' via engagement tables (pageviews, tbl_analytics_link) directly. TrackingId is a dimension, not a fact key.
 
-!3 10.2 Only ~4% of SharePoint pages carry UBSGICTrackingID
+!3 10.2 Only ~4% of SharePoint pages carry __ORG__GICTrackingID
 See Section 5.2. Dashboards must make the ~96% untracked intranet activity explicit.
 
 !3 10.3 TrackingId adoption is still ramping

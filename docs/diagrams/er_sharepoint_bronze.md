@@ -16,8 +16,8 @@ erDiagram
 
     pages {
         string pageUUID PK "48K rows"
-        string UBSGICTrackingID "CROSS-CHANNEL KEY (4% populated!)"
-        string UBSArticleDate
+        string __ORG__GICTrackingID "CROSS-CHANNEL KEY (4% populated!)"
+        string __ORG__ArticleDate
         string PageURL
         string PageTitle
         string SiteId FK
@@ -79,7 +79,7 @@ Plus historical snapshots:
 
 ### `pages` = Inventory (dimension)
 
-**Contains**: every SharePoint page along with its metadata, including `UBSGICTrackingID` (where set).
+**Contains**: every SharePoint page along with its metadata, including `__ORG__GICTrackingID` (where set).
 
 **What you find here**:
 - "Which articles exist?"
@@ -121,18 +121,18 @@ Click events are flat (Level 2), search events nest up to Level 4.
 | Targeting (newer) | `Theme`, `Topic`, `TargetOrganisation`, `TargetRegion`, `refUri` |
 | Video sub-domain | `Video_Action`, `Video_Id`, `Video_Type`, `Video_Duration` |
 
-> ⚠️ **No `CammsTrackingID`/`UBSGICTrackingID` on `customevents`** — only
+> ⚠️ **No `CammsTrackingID`/`__ORG__GICTrackingID` on `customevents`** — only
 > `pageViews` carries it. Cross-channel attribution for clicks therefore runs
-> via `pageId → pages.pageUUID → pages.UBSGICTrackingID`.
+> via `pageId → pages.pageUUID → pages.__ORG__GICTrackingID`.
 
 Full table card: [customevents.md](../tables/sharepoint/customevents.md).
 
 ```sql
 -- The canonical SP Bronze chain
-SELECT pv.user_gpn, pv.ViewTime, p.UBSGICTrackingID, p.PageTitle
+SELECT pv.user_gpn, pv.ViewTime, p.__ORG__GICTrackingID, p.PageTitle
 FROM   sharepoint_bronze.pageviews pv
 JOIN   sharepoint_bronze.pages     p ON p.pageUUID = pv.pageId
-WHERE  p.UBSGICTrackingID IS NOT NULL
+WHERE  p.__ORG__GICTrackingID IS NOT NULL
 ```
 
 ---
@@ -159,7 +159,7 @@ See [hr_enrichment.md](../joins/hr_enrichment.md).
 
 ## Key observations
 
-- **Schema inconsistency**: `pages.UBSGICTrackingID` vs. `pageviews.GICTrackingID` — different column names for the same business key (plus case variants). Harmonization should happen in the Silver layer (`sharepoint_silver.webpage` uses `gICTrackingID`).
+- **Schema inconsistency**: `pages.__ORG__GICTrackingID` vs. `pageviews.GICTrackingID` — different column names for the same business key (plus case variants). Harmonization should happen in the Silver layer (`sharepoint_silver.webpage` uses `gICTrackingID`).
 - **1:1 URL↔TID mapping**: at the `pages` level every URL has at most one TID. Safe for URL-based aggregation.
 - **Append bursts on pageviews**: 7 quick writes within 1 minute (00:15-00:16 UTC). This is not streaming — API pagination, but very short windows. Best signal candidate for near-real-time dashboards.
 - **`customevents` is nearly 2× the size of `pageviews`** (262M vs. 173M). Both cover related but different interaction scopes.

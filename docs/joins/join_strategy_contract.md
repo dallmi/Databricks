@@ -10,7 +10,7 @@
 
 **DO**:
 ```sql
-tbl_email.TrackingId  ↔  sharepoint_bronze.pages.UBSGICTrackingID
+tbl_email.TrackingId  ↔  sharepoint_bronze.pages.__ORG__GICTrackingID
 ```
 
 **DON'T**:
@@ -36,7 +36,7 @@ ON analytics_link.TNumber = tbl_hr_employee.T_NUMBER   -- both lowercase t######
 ```
 
 **Special cases**:
-- `tbl_hr_user.UbsId` is **UPPERCASE** → join `LOWER(UbsId) = LOWER(T_NUMBER)`
+- `tbl_hr_user.__ORG__Id` is **UPPERCASE** → join `LOWER(__ORG__Id) = LOWER(T_NUMBER)`
 - GPN comes from `pageviews.user_gpn` (8-digit) → `tbl_hr_employee.WORKER_ID` is the bridge (**no** external source required)
 
 **Why**: TNumber appears in only two tables. For SharePoint person analytics you must resolve separately via `sharepoint_gold.pbi_db_employeecontact` (24M rows) or CDM — that is **not** TNumber-compatible without a bridge.
@@ -58,13 +58,13 @@ Segments:
 ```sql
 -- Cross-channel match lives at the Pack level: SEG1-2 only
 ON  array_join(slice(split(email.TrackingId, '-'), 1, 2), '-')
-  = array_join(slice(split(pages.UBSGICTrackingID, '-'), 1, 2), '-')
+  = array_join(slice(split(pages.__ORG__GICTrackingID, '-'), 1, 2), '-')
 ```
 
 **DON'T**:
 ```sql
 -- WRONG: full-string match (6/1677 hits, Jaccard 0.004)
-ON email.TrackingId = pages.UBSGICTrackingID
+ON email.TrackingId = pages.__ORG__GICTrackingID
 
 -- ALSO WRONG: SEG1-4 match (Cluster-Pack-Date-Activity)
 -- Would require the same date and same activity sequence on both sides.
@@ -95,7 +95,7 @@ ON email.TrackingId = pages.UBSGICTrackingID
 
 **Mandatory caveats** in every dashboard:
 
-1. **SharePoint side**: Only 1,949 / 48,419 pages (~4%) have `UBSGICTrackingID`. Only these ~4% of the 84M interaction rows are Pack-attributable. The remaining 96% = "untracked intranet activity" — separate section or labelled transparently.
+1. **SharePoint side**: Only 1,949 / 48,419 pages (~4%) have `__ORG__GICTrackingID`. Only these ~4% of the 84M interaction rows are Pack-attributable. The remaining 96% = "untracked intranet activity" — separate section or labelled transparently.
 
 2. **iMEP side**: Only 986 / 73,930 mailings (1.3%) have TrackingId. However: strong uptrend (2024: 99 → 2025: 637 → 2026 YTD: 250). **Dashboard default period: from 2025.**
 
@@ -154,12 +154,12 @@ email_side AS (
   GROUP BY 1
 ),
 sp_side AS (
-  SELECT array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id,
+  SELECT array_join(slice(split(UPPER(p.__ORG__GICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id,
          SUM(m.views)  AS page_views,
          SUM(m.visits) AS page_visits
   FROM   sharepoint_bronze.pages p
   JOIN   sharepoint_gold.pbi_db_interactions_metrics m ON m.marketingPageId = p.pageUUID
-  WHERE  p.UBSGICTrackingID IS NOT NULL
+  WHERE  p.__ORG__GICTrackingID IS NOT NULL
   GROUP BY 1
 )
 SELECT COALESCE(e.tracking_pack_id, s.tracking_pack_id) AS tracking_pack_id,
@@ -179,12 +179,12 @@ FULL OUTER JOIN sp_side s ON s.tracking_pack_id = e.tracking_pack_id;
 |---|---|---|
 | Looking for `TrackingId` on engagement tables | `column not found` | TrackingId only lives on `tbl_email`, `tbl_event`, `tbl_pbi_platform_mailings`, `tbl_pbi_platform_events` |
 | Full-string match of TrackingIds | 0 or near-zero hits | Compare SEG1-2 (Pack level) — see Rule 3 |
-| `UbsId = T_NUMBER` without case norm | 0 hits | `LOWER(UbsId) = LOWER(T_NUMBER)` |
+| `__ORG__Id = T_NUMBER` without case norm | 0 hits | `LOWER(__ORG__Id) = LOWER(T_NUMBER)` |
 | Gold query parallel to full rebuild | Partial / momentarily inconsistent state | Build dashboards resilient against Gold (Rule 4) — clarify concrete refresh slots with upstream, we don't see them in the repo |
-| `SUM(views)` without TID filter | Inflated numbers | `WHERE UBSGICTrackingID IS NOT NULL` for the attributed funnel |
+| `SUM(views)` without TID filter | Inflated numbers | `WHERE __ORG__GICTrackingID IS NOT NULL` for the attributed funnel |
 | `COUNT(*) FROM imep_gold.final` without filter | ~520M, timeout | Always restrict by time or filter on PartitionKey |
 | Mailing send time from `tbl_email.CreationDate` | Wrong timestamps | Send time lives in `tbl_email_receiver_status.DateTime` |
-| Mixing up `GICTrackingID` vs `UBSGICTrackingID` | Schema-inconsistent | `pages` has `UBSGICTrackingID`, `pageviews` has `GICTrackingID` — both mean the same, but case variants occur |
+| Mixing up `GICTrackingID` vs `__ORG__GICTrackingID` | Schema-inconsistent | `pages` has `__ORG__GICTrackingID`, `pageviews` has `GICTrackingID` — both mean the same, but case variants occur |
 
 ---
 

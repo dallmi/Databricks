@@ -71,9 +71,9 @@ LEFT JOIN imep_bronze.tbl_hr_costcenter cc ON cc.ORGANIZATIONAL_UNIT = hr.ORGANI
 ### -> `tbl_hr_user` (for Town / further office metadata)
 
 ```sql
-SELECT hr.T_NUMBER, u.UbsId, u.Town
+SELECT hr.T_NUMBER, u.__ORG__Id, u.Town
 FROM   imep_bronze.tbl_hr_employee hr
-LEFT JOIN imep_bronze.tbl_hr_user   u ON LOWER(u.UbsId) = LOWER(hr.T_NUMBER)
+LEFT JOIN imep_bronze.tbl_hr_user   u ON LOWER(u.__ORG__Id) = LOWER(hr.T_NUMBER)
 ```
 
 ---
@@ -101,7 +101,7 @@ HR system (SQL Server) --[CDC + MERGE]--> imep_bronze.tbl_hr_employee
 
 - [hr_enrichment.md](../../joins/hr_enrichment.md) — Canonical join patterns
 - [tbl_hr_costcenter.md](tbl_hr_costcenter.md) — Region/Division/Area lookup
-- [tbl_hr_user.md](tbl_hr_user.md) — Town/UbsId lookup
+- [tbl_hr_user.md](tbl_hr_user.md) — Town/__ORG__Id lookup
 - Memory: `employee_identifiers.md`, `hr_gpn_tnumber_bridge_resolved.md`
 
 ---

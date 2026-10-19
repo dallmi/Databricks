@@ -589,3 +589,12 @@ row. The real fix is the distinct count over `fact` from issue 3.
 | Storage mode per table (Import/DirectQuery) | General | `EVALUATE INFO.VIEW.TABLES()` |
 | Row-level security roles | General | Model owner |
 | Which report pages use which tables | Issues 1, 2 | Report file |
+
+## Additional notes (from working notes, 2026-10-19)
+
+- **Column data types are not reliable one by one.** The types were read from photos of
+  the metadata export. Because of the camera angle, the type column is shifted by one row
+  in places. Treat individual types as unverified until checked with
+  `EVALUATE INFO.VIEW.COLUMNS()` in the model. This matters for type-based findings such
+  as the text key `fact[Key]` in issue 7; structure, relationships and DAX are not
+  affected.

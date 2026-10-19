@@ -1,13 +1,13 @@
 # `imep_bronze.tbl_hr_user`
 
-> Additional employee metadata — primarily **Town**. Carries `UbsId` as the **UPPERCASE** variant of the T-Number. Only join when you need Town or similar — for Region/Division `tbl_hr_employee` + `tbl_hr_costcenter` is sufficient.
+> Additional employee metadata — primarily **Town**. Carries `__ORG__Id` as the **UPPERCASE** variant of the T-Number. Only join when you need Town or similar — for Region/Division `tbl_hr_employee` + `tbl_hr_costcenter` is sufficient.
 
 | | |
 |---|---|
 | **Layer** | Bronze (HR domain) |
 | **Source system** | HR system -> Change Data Capture (CDC) -> Delta Bronze |
 | **Grain** | 1 row per Employee |
-| **Primary key** | `UbsId` |
+| **Primary key** | `__ORG__Id` |
 | **Write pattern** | MERGE |
 
 ---
@@ -16,7 +16,7 @@
 
 | Column | Type | Role | Notes |
 |---|---|---|---|
-| `UbsId` | string | PK | **UPPERCASE** `T######` (e.g. `T100200`) — case difference vs. `T_NUMBER`! |
+| `__ORG__Id` | string | PK | **UPPERCASE** `T######` (e.g. `T100200`) — case difference vs. `T_NUMBER`! |
 | `Town` | string | | Office location (e.g. `Zurich`, `Wollerau`) |
 
 Further columns exist (Emergency Contact, etc.) — irrelevant for analytics.
@@ -26,7 +26,7 @@ Further columns exist (Emergency Contact, etc.) — irrelevant for analytics.
 ## Sample row
 
 ```
-UbsId = "T100200"
+__ORG__Id = "T100200"
 Town  = "Zurich"
 ```
 
@@ -37,18 +37,18 @@ Town  = "Zurich"
 ### -> `tbl_hr_employee` (case normalization!)
 
 ```sql
-SELECT hr.T_NUMBER, u.UbsId, u.Town
+SELECT hr.T_NUMBER, u.__ORG__Id, u.Town
 FROM   imep_bronze.tbl_hr_employee hr
-JOIN   imep_bronze.tbl_hr_user      u ON LOWER(u.UbsId) = LOWER(hr.T_NUMBER)
+JOIN   imep_bronze.tbl_hr_user      u ON LOWER(u.__ORG__Id) = LOWER(hr.T_NUMBER)
 ```
 
-**Important**: `LOWER()` on both sides. `T_NUMBER` is lowercase (`t100200`), `UbsId` is UPPERCASE (`T100200`) — a direct comparison returns 0 matches.
+**Important**: `LOWER()` on both sides. `T_NUMBER` is lowercase (`t100200`), `__ORG__Id` is UPPERCASE (`T100200`) — a direct comparison returns 0 matches.
 
 ---
 
 ## Quality caveats
 
-- **Case inconsistency between `UbsId` and `T_NUMBER`** — the most common HR pitfall. Always apply `LOWER()`.
+- **Case inconsistency between `__ORG__Id` and `T_NUMBER`** — the most common HR pitfall. Always apply `LOWER()`.
 - **Subset of `tbl_hr_employee`** — `tbl_hr_user` typically contains fewer or equal rows compared to `tbl_hr_employee`. Anyone in `tbl_hr_employee` is not necessarily in `tbl_hr_user`.
 - **Town is a free-form string** — maintain dedup/mapping table for location aggregation.
 

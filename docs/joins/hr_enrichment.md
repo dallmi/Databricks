@@ -1,6 +1,6 @@
 # Join Recipe — HR Enrichment (TNumber ↔ GPN ↔ Region/Division)
 
-> The HR bridge. For **three scenarios**: (1) enrich TNumber from iMEP engagement, (2) translate GPN from SharePoint to TNumber, (3) case normalization between `T_NUMBER` (lowercase) and `UbsId` (UPPERCASE). All three are based on `imep_bronze.tbl_hr_employee` — no external sources required.
+> The HR bridge. For **three scenarios**: (1) enrich TNumber from iMEP engagement, (2) translate GPN from SharePoint to TNumber, (3) case normalization between `T_NUMBER` (lowercase) and `__ORG__Id` (UPPERCASE). All three are based on `imep_bronze.tbl_hr_employee` — no external sources required.
 
 ---
 
@@ -12,7 +12,7 @@
 | `T_NUMBER` | HR | lowercase `t######` | `t100200` |
 | `WORKER_ID` | HR | 8-digit numeric (= GPN) | `00100200` |
 | `user_gpn` | SharePoint `pageviews` | 8-digit numeric | `00100200` |
-| `UbsId` | `tbl_hr_user` | UPPERCASE `T######` | `T100200` |
+| `__ORG__Id` | `tbl_hr_user` | UPPERCASE `T######` | `T100200` |
 | `viewingcontactid` | `sharepoint_gold.*` | GUID | `1254e21a-...` |
 
 **Core fact**: `tbl_hr_employee` is the only table that carries **both** `T_NUMBER` and `WORKER_ID` simultaneously → a simple JOIN instead of an external bridge source.
@@ -65,18 +65,18 @@ Confirmed: the string-based transformation `00100200 → t100200` works **by exa
 
 ---
 
-## Scenario 3: match `UbsId` (UPPERCASE) with `T_NUMBER` (lowercase)
+## Scenario 3: match `__ORG__Id` (UPPERCASE) with `T_NUMBER` (lowercase)
 
 ```sql
 SELECT
     hr.T_NUMBER,
-    u.UbsId,
+    u.__ORG__Id,
     u.Town
 FROM   imep_bronze.tbl_hr_employee hr
-JOIN   imep_bronze.tbl_hr_user      u ON LOWER(u.UbsId) = LOWER(hr.T_NUMBER)
+JOIN   imep_bronze.tbl_hr_user      u ON LOWER(u.__ORG__Id) = LOWER(hr.T_NUMBER)
 ```
 
-**Case normalization is mandatory** — without `LOWER()` you get 0 hits, because `T_NUMBER` = `t100200` and `UbsId` = `T100200`.
+**Case normalization is mandatory** — without `LOWER()` you get 0 hits, because `T_NUMBER` = `t100200` and `__ORG__Id` = `T100200`.
 
 `tbl_hr_user` additionally offers: `Town`, further office metadata. Only join when those fields are needed — otherwise `tbl_hr_employee` + `tbl_hr_costcenter` is enough.
 
@@ -118,13 +118,13 @@ WHERE  COALESCE(sp.view_count, 0) + COALESCE(io.open_count, 0) > 0
 
 ## Pitfalls
 
-### 1. `T_NUMBER` vs. `TNumber` vs. `UbsId` — three variants of the same key
+### 1. `T_NUMBER` vs. `TNumber` vs. `__ORG__Id` — three variants of the same key
 
 | Where | Column name | Case |
 |---|---|---|
 | `tbl_hr_employee` | `T_NUMBER` | lowercase |
 | `tbl_email_receiver_status`, `tbl_analytics_link` | `TNumber` | lowercase |
-| `tbl_hr_user` | `UbsId` | UPPERCASE |
+| `tbl_hr_user` | `__ORG__Id` | UPPERCASE |
 
 Join iMEP engagement ↔ HR = direct. Join HR ↔ `tbl_hr_user` = needs `LOWER()`.
 

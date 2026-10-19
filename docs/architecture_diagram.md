@@ -17,9 +17,9 @@ flowchart LR
         IM3[imep_bronze.tbl_email_receiver_status<br/>Sends/Bounces]
         IM4[imep_bronze.tbl_email_links<br/>Template links]
         IM5[imep_bronze.tbl_hr_employee<br/>T_NUMBER + WORKER_ID]
-        IM6[imep_bronze.tbl_hr_user<br/>UbsId = T-Number]
+        IM6[imep_bronze.tbl_hr_user<br/>__ORG__Id = T-Number]
         IM7[imep_bronze.tbl_hr_costcenter<br/>Division/Region]
-        SP1[sharepoint_bronze.pages<br/>Inventory + UBSGICTrackingID]
+        SP1[sharepoint_bronze.pages<br/>Inventory + __ORG__GICTrackingID]
         SP2[sharepoint_bronze.pageviews<br/>Interactions + GICTrackingID]
         CP1[sharepoint_cplan.*<br/>tracking_id planning]
     end
@@ -104,7 +104,7 @@ erDiagram
     tbl_email_receiver_status }o--|| tbl_hr_employee : "TNumber = T_NUMBER"
     tbl_analytics_link }o--|| tbl_hr_employee : "TNumber = T_NUMBER"
     tbl_hr_employee }o--|| tbl_hr_costcenter : "ORGANIZATIONAL_UNIT"
-    tbl_hr_employee }o--|| tbl_hr_user : "T_NUMBER = UbsId (case-norm)"
+    tbl_hr_employee }o--|| tbl_hr_user : "T_NUMBER = __ORG__Id (case-norm)"
     tbl_email ||--o{ tbl_email_links : "EmailId (template)"
 
     tbl_email {
@@ -147,7 +147,7 @@ erDiagram
         string COUNTRY
     }
     tbl_hr_user {
-        string UbsId "T-number UPPERCASE"
+        string __ORG__Id "T-number UPPERCASE"
         string Town
     }
     tbl_email_links {
@@ -166,7 +166,7 @@ LEFT JOIN  tbl_email_receiver_status c  ON a.EmailReceiverStatusId = c.Id
 LEFT JOIN  tbl_email b                  ON a.EmailId               = b.Id
 LEFT JOIN  tbl_hr_employee hr           ON a.TNumber               = hr.T_NUMBER
 LEFT JOIN  tbl_hr_costcenter cc         ON hr.ORGANIZATIONAL_UNIT  = cc.ORGANIZATIONAL_UNIT
-LEFT JOIN  tbl_hr_user u                ON LOWER(hr.T_NUMBER)      = LOWER(u.UbsId)
+LEFT JOIN  tbl_hr_user u                ON LOWER(hr.T_NUMBER)      = LOWER(u.__ORG__Id)
 WHERE      a.IsActive = 1
 ```
 
@@ -199,7 +199,7 @@ flowchart LR
 | `WORKER_ID` (= GPN) | `imep_bronze.tbl_hr_employee` | `00100200` |
 | `T_NUMBER` | `imep_bronze.tbl_hr_employee` | `t100200` (lowercase) |
 | `TNumber` in iMEP | `tbl_email_receiver_status`, `tbl_analytics_link` | `t100200` |
-| `UbsId` | `imep_bronze.tbl_hr_user` | `T100200` (UPPERCASE) |
+| `__ORG__Id` | `imep_bronze.tbl_hr_user` | `T100200` (UPPERCASE) |
 
 → After silver build: uniformly `t_number` (lowercase), everywhere. GPN dropped.
 
@@ -227,7 +227,7 @@ flowchart LR
     A[imep_bronze.tbl_email<br/>TrackingId]
     B[imep_gold.tbl_pbi_platform_mailings<br/>TrackingId]
     C[imep_gold.tbl_pbi_platform_events<br/>TrackingId]
-    D[sharepoint_bronze.pages<br/>UBSGICTrackingID]
+    D[sharepoint_bronze.pages<br/>__ORG__GICTrackingID]
     E[sharepoint_bronze.pageviews<br/>GICTrackingID]
     F[sharepoint_cplan.*<br/>tracking_id]
     
@@ -286,7 +286,7 @@ flowchart TB
 Sent (100%) ─► Opened (~45%) ─► Clicked (~8%) ─► Page View (~6%) ─► Event Registered (~1.5%)
                                                       │
                                               article pages only
-                                        (UBSGICTrackingID populated)
+                                        (__ORG__GICTrackingID populated)
 ```
 
 ---

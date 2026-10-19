@@ -17,7 +17,7 @@ erDiagram
     tbl_email_receiver_status }o--|| tbl_hr_employee           : "TNumber = T_NUMBER"
     tbl_analytics_link        }o--|| tbl_hr_employee           : "TNumber = T_NUMBER"
     tbl_hr_employee           }o--|| tbl_hr_costcenter         : "ORGANIZATIONAL_UNIT"
-    tbl_hr_employee           }o--|| tbl_hr_user               : "LOWER(T_NUMBER) = LOWER(UbsId)"
+    tbl_hr_employee           }o--|| tbl_hr_user               : "LOWER(T_NUMBER) = LOWER(__ORG__Id)"
     tbl_event                 ||--o{ tbl_email_receiver_status : "? (to verify)"
 
     tbl_email {
@@ -86,7 +86,7 @@ erDiagram
         string COUNTRY
     }
     tbl_hr_user {
-        string UbsId "T-number UPPERCASE"
+        string __ORG__Id "T-number UPPERCASE"
         string Town
     }
 ```

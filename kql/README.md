@@ -18,7 +18,7 @@ layer in Azure Application Insights → Logs.
 - `CammsTrackingID` (the cross-channel join key, format
   `CLUSTER-PACK-YYMMDD-ACTIVITY-CHANNEL`) lives **only on `pageViews`**.
   For `customEvents` (clicks), recover the TrackingID via
-  `pageId → sharepoint_bronze.pages.UBSGICTrackingID`.
+  `pageId → sharepoint_bronze.pages.__ORG__GICTrackingID`.
 
 ## Query Files
 
@@ -47,7 +47,7 @@ layer in Azure Application Insights → Logs.
 
 For the full profiling suite (13 queries — daily trend, ContentType cross-tab,
 domain analysis etc.) see
-[`/Users/micha/Documents/Arbeit/Clicks/clicks_explorer.kql`](../../Clicks/clicks_explorer.kql).
+[`clicks_explorer.kql` in the sibling Clicks project](../../Clicks/clicks_explorer.kql).
 
 ## Export to the local pipeline
 

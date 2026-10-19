@@ -1,6 +1,6 @@
 !1 ER Diagram — Cross-Channel Bridge
 
-The '''only bridge''' between iMEP (Email) and SharePoint (Intranet). Runs via '''TrackingId ↔ UBSGICTrackingID''' at the dimension level (tbl_email ↔ pages), '''never''' directly via engagement facts. Plus the employee bridge via tbl_hr_employee.WORKER_ID.
+The '''only bridge''' between iMEP (Email) and SharePoint (Intranet). Runs via '''TrackingId ↔ __ORG__GICTrackingID''' at the dimension level (tbl_email ↔ pages), '''never''' directly via engagement facts. Plus the employee bridge via tbl_hr_employee.WORKER_ID.
 
 !2 The Entire Cross-Channel Architecture in One Picture
 
@@ -50,7 +50,7 @@ entity "tbl_hr_employee" as hr {
 entity "pages" as pages {
   * pageUUID : string <<PK>>
   --
-  UBSGICTrackingID : string
+  __ORG__GICTrackingID : string
   SiteId : FK
   ..
   '''48K, 4% populated ⚠️'''
@@ -82,7 +82,7 @@ entity "sites" as sites {
   805
 }
 
-email ||..|| pages   : "TrackingId ↔ UBSGICTrackingID (Pack / SEG1-2)"
+email ||..|| pages   : "TrackingId ↔ __ORG__GICTrackingID (Pack / SEG1-2)"
 email ||--o{ rs      : "Id = EmailId"
 rs    ||--o{ al      : "Id = EmailReceiverStatusId"
 rs    }o--|| hr      : "TNumber = T_NUMBER"
@@ -96,7 +96,7 @@ pages }o--|| sites   : "SiteId = SiteId"
 
 !3 Bridge 1: TrackingID (Campaign-Level)
 
-'''Where?''': tbl_email.TrackingId ↔ sharepoint_bronze.pages.UBSGICTrackingID
+'''Where?''': tbl_email.TrackingId ↔ sharepoint_bronze.pages.__ORG__GICTrackingID
 '''Grain''': Pack (Cluster + Pack-Number), optionally Activity (SEG1-3).
 
 Match logic:
@@ -104,7 +104,7 @@ Match logic:
 -- Match at Pack level (SEG1-2). SEG3=date, SEG4=activity-seq and SEG5=channel all differ
 -- between email and the matching intranet page of the same pack.
 ON  array_join(slice(split(UPPER(email.TrackingId),        '-'), 1, 2), '-')
-  = array_join(slice(split(UPPER(pages.UBSGICTrackingID), '-'), 1, 2), '-')
+  = array_join(slice(split(UPPER(pages.__ORG__GICTrackingID), '-'), 1, 2), '-')
 }}}
 
 Coverage reality:
@@ -140,7 +140,7 @@ tbl_hr_employee.WORKER_ID  (= GPN)
 pageviews.pageId
         |  JOIN sharepoint_bronze.pages.pageUUID
         v
-pages.UBSGICTrackingID  (if present)
+pages.__ORG__GICTrackingID  (if present)
         |  SEG1-2 compare (Pack-Level)
         v
 tbl_email.TrackingId

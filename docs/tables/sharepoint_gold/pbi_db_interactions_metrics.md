@@ -1,6 +1,6 @@
 # `sharepoint_gold.pbi_db_interactions_metrics`
 
-> **Master interaction fact for SharePoint.** 84M rows, 11 columns. Central table for pageview, visit, duration and comment metrics on page × date × contact grain. **Carries no direct TrackingID** — cross-channel attribution always runs via `marketingPageId -> pageUUID -> UBSGICTrackingID` through `sharepoint_bronze.pages`.
+> **Master interaction fact for SharePoint.** 84M rows, 11 columns. Central table for pageview, visit, duration and comment metrics on page × date × contact grain. **Carries no direct TrackingID** — cross-channel attribution always runs via `marketingPageId -> pageUUID -> __ORG__GICTrackingID` through `sharepoint_bronze.pages`.
 
 | | |
 |---|---|
@@ -8,7 +8,7 @@
 | **Source system** | SharePoint Analytics (aggregated from `sharepoint_silver`) |
 | **Grain** | 1 row per `marketingPageId × visitdatekey × viewingcontactid × referenceapplicationid` |
 | **Primary key** | Composite (marketingPageId + visitdatekey + viewingcontactid + referenceapplicationid) |
-| **Cross-channel key** | **none directly** — only via FK chain `marketingPageId -> pageUUID -> UBSGICTrackingID` |
+| **Cross-channel key** | **none directly** — only via FK chain `marketingPageId -> pageUUID -> __ORG__GICTrackingID` |
 | **Tier** | **Tier 0 — atomic interaction fact** |
 | **Write pattern** | Notebook-based Full Rebuild (Spark 3.2.1), no managed pipeline |
 | **Approx row count** | **~84M**, 35,544 distinct pages |
@@ -21,7 +21,7 @@
 ```mermaid
 erDiagram
     pbi_db_interactions_metrics }o--|| pages                  : "marketingPageId = pageUUID"
-    pages                       ||--o| tbl_email              : "UBSGICTrackingID <-> TrackingId (via SEG1-2)"
+    pages                       ||--o| tbl_email              : "__ORG__GICTrackingID <-> TrackingId (via SEG1-2)"
     pbi_db_interactions_metrics }o..|| pbi_db_employeecontact : "viewingcontactid = contactId (potential)"
 
     pbi_db_interactions_metrics {
@@ -39,7 +39,7 @@ erDiagram
     }
     pages {
         string pageUUID PK "GUID"
-        string UBSGICTrackingID "only 4% populated!"
+        string __ORG__GICTrackingID "only 4% populated!"
         string PageURL
     }
     tbl_email {
@@ -60,9 +60,9 @@ erDiagram
 |---|---|---|---|
 | `visitdatekey` | string | `20230421` | **Day key** in `YYYYMMDD` format. Grain-defining. |
 | `referenceapplicationid` | string | `2` | Application reference (which system) |
-| `marketingPageId` | string (GUID) | `f94bc186-32a2-4155-aaec-42b22091cd22` | **FK** -> `pages.pageUUID`. The only cross-channel path. |
+| `marketingPageId` | string (GUID) | `00000000-0000-4000-8000-000000000001` | **FK** -> `pages.pageUUID`. The only cross-channel path. |
 | `views` | bigint | `1` | Pageview count |
-| `viewingcontactid` | string (GUID) | `1254e21a-0b2b…` | **Person key** — not TNumber, but a bridge via `pbi_db_employeecontact` is possible |
+| `viewingcontactid` | string (GUID) | `00000000-0000…` | **Person key** — not TNumber, but a bridge via `pbi_db_employeecontact` is possible |
 | `flag` | string | `1` | Meaning unclear — follow-up |
 | `visits` | bigint | `1` | Distinct visit count (with dedup) |
 | `durationsum` | double | `7.72` | Time on page (seconds, summed) |
@@ -79,7 +79,7 @@ CDM validation confirmed the mapping: `sourceName: mailync_marketingpageid`, `da
 ### -> `sharepoint_bronze.pages` (N:1) — the standard lookup
 
 ```sql
-SELECT m.*, p.UBSGICTrackingID, p.PageURL, p.SiteName
+SELECT m.*, p.__ORG__GICTrackingID, p.PageURL, p.SiteName
 FROM   sharepoint_gold.pbi_db_interactions_metrics m
 LEFT JOIN sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
 ```
@@ -89,13 +89,13 @@ LEFT JOIN sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
 ### -> Pack-level cross-channel funnel
 
 ```sql
-SELECT array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id,
+SELECT array_join(slice(split(UPPER(p.__ORG__GICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id,
        SUM(m.views)                  AS total_views,
        COUNT(DISTINCT m.viewingcontactid) AS unique_viewers,
        SUM(m.durationsum)            AS total_duration_sec
 FROM   sharepoint_gold.pbi_db_interactions_metrics m
 JOIN   sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
-WHERE  p.UBSGICTrackingID IS NOT NULL          -- mandatory filter
+WHERE  p.__ORG__GICTrackingID IS NOT NULL          -- mandatory filter
   AND  m.visitdatekey >= '20250101'            -- default time window from 2025
 GROUP BY 1
 ```
@@ -115,8 +115,8 @@ LEFT JOIN sharepoint_gold.pbi_db_employeecontact ec ON ec.contactId = m.viewingc
 
 ## Quality caveats
 
-- **⚠️ No direct TrackingID** — if someone looks directly for `WHERE ...TrackingId = ...`, they won't find it. Always go via `pages.UBSGICTrackingID`.
-- **4% coverage blocker** (critical!): only 1,949/48,419 pages have `UBSGICTrackingID`. Meaning: of 84M interaction rows, **only ~3.3M are pack-attributable** (4%). The remaining 96% are "untracked intranet activity". The dashboard **must** label this section explicitly.
+- **⚠️ No direct TrackingID** — if someone looks directly for `WHERE ...TrackingId = ...`, they won't find it. Always go via `pages.__ORG__GICTrackingID`.
+- **4% coverage blocker** (critical!): only 1,949/48,419 pages have `__ORG__GICTrackingID`. Meaning: of 84M interaction rows, **only ~3.3M are pack-attributable** (4%). The remaining 96% are "untracked intranet activity". The dashboard **must** label this section explicitly.
 - **`viewingcontactid` != TNumber** — SharePoint-native person ID (GUID). If person-level attribution is needed, it runs via `pbi_db_employeecontact` (still to validate).
 - **Column typo**: `commentss` (with double s). Don't fix it — you'd break every query.
 - **`marketingPageIdGuid`** is always NULL — ignore.

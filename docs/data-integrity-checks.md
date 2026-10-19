@@ -303,7 +303,7 @@ not an independent measurement.
 | From | To | Key | Used by |
 |---|---|---|---|
 | `sharepoint_bronze.pageviews.pageId` | `sharepoint_bronze.pages.pageUUID` | page GUID | C6, D4, D6 |
-| `sharepoint_bronze.pages.UBSGICTrackingID` | `imep_bronze.tbl_email.TrackingId` | pack = SEG1-SEG2 | D6 |
+| `sharepoint_bronze.pages.__ORG__GICTrackingID` | `imep_bronze.tbl_email.TrackingId` | pack = SEG1-SEG2 | D6 |
 | `sharepoint_bronze.pageviews.user_gpn` | `imep_bronze.tbl_hr_employee.WORKER_ID` (→ `T_NUMBER`, `ORGANIZATIONAL_UNIT`) | 8-digit GPN | C6, HR dims |
 | `sharepoint_bronze.pageviews.user_gpn` / e-mail | `sharepoint_gold.pbi_db_employeecontact.contactId` **[VERIFY column]** | GPN / e-mail → contact | C6; **the unique-visitor unit** |
 | `sharepoint_gold.pbi_db_interactions_metrics.marketingPageId` | `sharepoint_bronze.pages.pageUUID` | page GUID | D5 |
@@ -331,7 +331,7 @@ not an independent measurement.
 | D1 | `sharepoint_gold.pbi_db_interactions_metrics` | `visitdatekey`, `views`, `visits`, `viewingcontactid` | verified |
 | D3, D4 | bronze | `pageId`, `GICTrackingID` | verified |
 | D5 | bronze vs gold | `pageId` = `marketingPageId`; `session_Id` vs `visits`; `user_gpn` vs `viewingcontactid` | `session_Id` [VERIFY] |
-| D6 | `imep_bronze.tbl_analytics_link`, `tbl_email`, `pages` | `LinkTypeEnum`, `EmailId`/`Id`, `TrackingId`, `UBSGICTrackingID` | enum value [VERIFY] |
+| D6 | `imep_bronze.tbl_analytics_link`, `tbl_email`, `pages` | `LinkTypeEnum`, `EmailId`/`Id`, `TrackingId`, `__ORG__GICTrackingID` | enum value [VERIFY] |
 | D7 | `sharepoint_bronze.customevents` | `name`, `timestamp` | timestamp column [VERIFY] |
 | D8 | semantic model | control measure (DAX) | — |
 

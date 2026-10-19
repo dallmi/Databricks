@@ -63,9 +63,9 @@ LEFT JOIN imep_bronze.tbl_hr_costcenter cc ON cc.ORGANIZATIONAL_UNIT = hr.ORGANI
 !3 tbl_hr_user (for Town / additional office metadata)
 
 {{{
-SELECT hr.T_NUMBER, u.UbsId, u.Town
+SELECT hr.T_NUMBER, u.__ORG__Id, u.Town
 FROM   imep_bronze.tbl_hr_employee hr
-LEFT JOIN imep_bronze.tbl_hr_user   u ON LOWER(u.UbsId) = LOWER(hr.T_NUMBER)
+LEFT JOIN imep_bronze.tbl_hr_user   u ON LOWER(u.__ORG__Id) = LOWER(hr.T_NUMBER)
 }}}
 
 !2 Quality Caveats

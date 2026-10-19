@@ -8,7 +8,7 @@
 // `customDimensions` is a JSON string with exactly one key, `CustomProps`,
 // which is itself a JSON string — therefore double-parsed.
 //
-// Source: ported from /Users/micha/Documents/Arbeit/Clicks/clicks_query.kql.
+// Source: ported from clicks_query.kql in the sibling Clicks project.
 // For the full profiling suite (event-name discovery, key inventory, link-type
 // distribution etc.) see `clicks_explorer.kql` in the same project.
 // ============================================================================

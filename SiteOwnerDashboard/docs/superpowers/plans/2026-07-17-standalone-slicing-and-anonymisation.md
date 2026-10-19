@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- All paths relative to `/Users/micha/Documents/Arbeit/Databricks/SiteOwnerDashboard`. Run everything from that directory.
+- All paths relative to `SiteOwnerDashboard/` in this repository. Run everything from that directory.
 - **Default behaviour must not change**: no `--site`, no `--months`, no `--since` → all sites, all time. Anonymisation and prune are always on; `--keep-ids` opts out of both.
 - **Do not modify** `dashboard/dashboard.html`, the ingest scripts, or the parquets in `output/`.
 - Drop columns: pv → `gpn`, `user_id`, `view_id`. ix → `gpn`, `user_id`, `event_id`. **Keep everything else**, including `client_os`, `client_country`, `page_load_ms`, `tracking_id`, `is_last_in_session`.

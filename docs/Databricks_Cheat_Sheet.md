@@ -129,7 +129,7 @@ def download_from_dbfs(dbfs_path, workspace_url):
 
 ```python
 # Define the workspace URL once
-WORKSPACE = "https://adb-205203499382645.5.azuredatabricks.net"
+WORKSPACE = "https://" + spark.conf.get("spark.databricks.workspaceUrl")  # inside a notebook; elsewhere "https://<workspace-url>"
 
 # Download file
 download_from_dbfs("dbfs:/tmp/website.csv", WORKSPACE)

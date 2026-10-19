@@ -299,3 +299,15 @@ SELECT d.year, d.week, COUNT(*) as views, COUNT(DISTINCT f.user_id) as uv
 FROM fact_page_view f JOIN dim_date d ON CAST(f.timestamp AS DATE) = d.date
 GROUP BY d.year, d.week ORDER BY d.year, d.week;
 ```
+
+## Public repository
+
+This repository is public. Before the first commit in a new clone, activate the
+check that keeps the organisation's name, person ids and infrastructure ids out:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The rules and where the analysis findings live are in [CLAUDE.md](CLAUDE.md);
+the findings themselves start at [docs/findings/README.md](docs/findings/README.md).

@@ -1,6 +1,6 @@
 # Join Recipe — Cross-Channel via TrackingId (Pack-Level / SEG1-2 Match)
 
-> The full cross-channel chain between iMEP (Email) and SharePoint (Intranet). **Dimensional**, not factual — runs exclusively through `tbl_email.TrackingId` ↔ `sharepoint_bronze.pages.UBSGICTrackingID`. Match level is the **Pack** (SEG1-2) — neither full-string nor SEG1-4 works.
+> The full cross-channel chain between iMEP (Email) and SharePoint (Intranet). **Dimensional**, not factual — runs exclusively through `tbl_email.TrackingId` ↔ `sharepoint_bronze.pages.__ORG__GICTrackingID`. Match level is the **Pack** (SEG1-2) — neither full-string nor SEG1-4 works.
 
 **When to use**: Any dashboard view that attributes mailings to page views. Any "email → landing page" funnel analysis.
 
@@ -11,7 +11,7 @@
 ```sql
 array_join(slice(split(UPPER(email.TrackingId),        '-'), 1, 2), '-')
 =
-array_join(slice(split(UPPER(pages.UBSGICTrackingID), '-'), 1, 2), '-')
+array_join(slice(split(UPPER(pages.__ORG__GICTrackingID), '-'), 1, 2), '-')
 ```
 
 **Why SEG1-2 (Pack) and not the full TrackingId?**
@@ -62,10 +62,10 @@ email_side AS (
 sp_packs AS (
   SELECT
       p.pageUUID,
-      p.UBSGICTrackingID,
-      array_join(slice(split(UPPER(p.UBSGICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id
+      p.__ORG__GICTrackingID,
+      array_join(slice(split(UPPER(p.__ORG__GICTrackingID), '-'), 1, 2), '-') AS tracking_pack_id
   FROM   sharepoint_bronze.pages p
-  WHERE  p.UBSGICTrackingID IS NOT NULL
+  WHERE  p.__ORG__GICTrackingID IS NOT NULL
 ),
 
 -- 4. SharePoint-side aggregates (per Pack)
@@ -133,7 +133,7 @@ array_join(slice(split(UPPER(TrackingId), '-'), 1, 3), '-')
 SELECT '(untracked)' AS tracking_pack_id, SUM(views), SUM(visits), ...
 FROM   sharepoint_gold.pbi_db_interactions_metrics m
 LEFT JOIN sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
-WHERE  p.UBSGICTrackingID IS NULL
+WHERE  p.__ORG__GICTrackingID IS NULL
 
 UNION ALL
 

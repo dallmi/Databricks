@@ -11,7 +11,7 @@ Convention:
 
 ## A — Schema & Tracking-ID Location (highest priority)
 
-> **Status 2026-04-16**: Q1, Q2, Q3 answered — see [memory/imep_genie_findings_q1_q2_q3.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_genie_findings_q1_q2_q3.md). Follow-ups Q1b and Q3a have been newly added.
+> **Status 2026-04-16**: Q1, Q2, Q3 answered — see [findings/q01-q03-imep-schemas-and-tracking-id.md](findings/q01-q03-imep-schemas-and-tracking-id.md). Follow-ups Q1b and Q3a have been newly added.
 
 ### ~~Q1~~ ✅ Where does `CammsTrackingID` live in iMEP? **(OP-04 — resolved)**
 
@@ -23,7 +23,7 @@ Convention:
 
 > *Show full schema and a 5-row sample of `imep_gold.tbl_pbi_platform_mailings` and `imep_gold.tbl_pbi_platform_events`. For each table, list which iMEP bronze tables / events / aggregations they appear to combine. Are these tables refreshed regularly (check max CreationDate / load timestamp)?*
 
-→ **Answer**: Gold is a **mailing/event master with content and registration metrics**, **not** a send/open/click aggregate. Consequence: `silver.fact_email` still built from Bronze, but `silver.dim_pack` directly from Gold (`tbl_pbi_platform_mailings` + `tbl_pbi_platform_events` UNION). Event phase can be pulled forward (registration count available). Both tables refreshed daily. Sentinel value `2124` for open-ended events. See [memory/imep_gold_layer_analysis.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_gold_layer_analysis.md).
+→ **Answer**: Gold is a **mailing/event master with content and registration metrics**, **not** a send/open/click aggregate. Consequence: `silver.fact_email` still built from Bronze, but `silver.dim_pack` directly from Gold (`tbl_pbi_platform_mailings` + `tbl_pbi_platform_events` UNION). Event phase can be pulled forward (registration count available). Both tables refreshed daily. Sentinel value `2124` for open-ended events. See [findings/q01b-imep-gold-layer.md](findings/q01b-imep-gold-layer.md).
 
 ### ~~Q2~~ ✅ Full schema of core tables **(OP-01 — resolved)**
 
@@ -35,14 +35,14 @@ Convention:
 
 > *Inspect `TBL_HR_EMPLOYEE` and `TBL_HR_USER`: list all columns that look like employee identifiers (names containing `t_number`, `tnumber`, `gpn`, `personnel`, `staff`, `emp_id`, `worker`, `abacus`, `websso`, `id`). For each, show data type, sample value, and whether nulls exist. Also check whether any single table contains BOTH a T-number column and a GPN column.*
 
-→ **Answer**: **GPN column does not exist in HR.** `tbl_hr_employees.T_NUMBER` (lowercase `t001108`) and `tbl_hr_user.UbsId` (uppercase `T594687`) are both T-Numbers. Other identifiers in HR: `WORKER_ID`, `ABACUS_ID`, `ALTERNATE_WORKER_ID`, `WEBSSO`, `UUNAME`, `PersonalNumber`. No bridge to GPN. → New question Q3a.
+→ **Answer**: **GPN column does not exist in HR.** `tbl_hr_employees.T_NUMBER` (lowercase `t100200`) and `tbl_hr_user.__ORG__Id` (uppercase `T100200`) are both T-Numbers. Other identifiers in HR: `WORKER_ID`, `ABACUS_ID`, `ALTERNATE_WORKER_ID`, `WEBSSO`, `UUNAME`, `PersonalNumber`. No bridge to GPN. → New question Q3a.
 
 ### ~~Q3a~~ ✅ What IS the GPN in AppInsights? **(OP-07e — resolved via Q3b finding)**
 
-Hypothesis A: GPN is a string transformation of the T-Number (`t001108` → `00001108`). Hypothesis B: GPN comes from a different system (Active Directory, WebSSO).
+Hypothesis A: GPN is a string transformation of the T-Number (`t100200` → `00100200`). Hypothesis B: GPN comes from a different system (Active Directory, WebSSO).
 
 > *Take 10 distinct non-null `customDimensions.GPN` values from our AppInsights `pageViews` (or `fact_page_view` if exposed). For each: try to find a matching employee in `tbl_hr_employees` by:
-> a) replacing leading zeros with 't' (e.g. `00001108` → `t001108`)
+> a) replacing leading zeros with 't' (e.g. `00100200` → `t100200`)
 > b) matching against `WORKER_ID`
 > c) matching against `ABACUS_ID`
 > d) matching against `ALTERNATE_WORKER_ID`
@@ -171,25 +171,25 @@ Hypothesis A: GPN is a string transformation of the T-Number (`t001108` → `000
 
 ### Q15 — TrackingID coverage in SharePoint Pages Inventory **(OP-15, refined)**
 
-> **Domain context**: `sharepoint_bronze.pages` is the page inventory table. `UBSGICTrackingID` is populated **only for news and event pages (articles)**. `UBSArticleDate` is the temporal anchor.
+> **Domain context**: `sharepoint_bronze.pages` is the page inventory table. `__ORG__GICTrackingID` is populated **only for news and event pages (articles)**. `__ORG__ArticleDate` is the temporal anchor.
 
 > *Two-step coverage analysis on `sharepoint_bronze.pages`:*
 >
-> *1. **Overall coverage**: Show total row count, count where `UBSGICTrackingID IS NOT NULL`, count where `UBSArticleDate IS NOT NULL`, and count where both are populated. Express each as percentage of total.*
+> *1. **Overall coverage**: Show total row count, count where `__ORG__GICTrackingID IS NOT NULL`, count where `__ORG__ArticleDate IS NOT NULL`, and count where both are populated. Express each as percentage of total.*
 >
-> *2. **Coverage trend over time**: Group rows by `DATE_TRUNC('month', UBSArticleDate)` for the last 36 months. For each month show: total articles (rows with non-null `UBSArticleDate`), articles with `UBSGICTrackingID`, and the coverage percentage. Also flag the first month where coverage exceeds 80% — that's the realistic start date for cross-channel funnel reporting.*
+> *2. **Coverage trend over time**: Group rows by `DATE_TRUNC('month', __ORG__ArticleDate)` for the last 36 months. For each month show: total articles (rows with non-null `__ORG__ArticleDate`), articles with `__ORG__GICTrackingID`, and the coverage percentage. Also flag the first month where coverage exceeds 80% — that's the realistic start date for cross-channel funnel reporting.*
 
 → Defines the **realistic value claim** of the cross-channel model. If coverage is only reliable from, say, 2024 onwards, the dashboard should reflect that transparently (default time range, coverage note).
 
 ### Q15b — TrackingID coverage in `sharepoint_bronze.pageviews` **(follow-up)**
 
-> **Architecture note**: `sharepoint_bronze.pageviews` is the live interactions table (views/visits) and itself has a column `GICTrackingID` (without the three-letter prefix — inconsistent with the inventory's `UBSGICTrackingID`). `sharepoint_bronze.pages` is the inventory.
+> **Architecture note**: `sharepoint_bronze.pageviews` is the live interactions table (views/visits) and itself has a column `GICTrackingID` (without the three-letter prefix — inconsistent with the inventory's `__ORG__GICTrackingID`). `sharepoint_bronze.pages` is the inventory.
 
 > *In `sharepoint_bronze.pageviews`: join to `sharepoint_bronze.pages` via `page_id` (or similar FK). For the last 12 months, per month, show:*
 > - *Total page views*
-> - *Page views on article pages (joined page has `UBSArticleDate IS NOT NULL`)*
+> - *Page views on article pages (joined page has `__ORG__ArticleDate IS NOT NULL`)*
 > - *Page views with populated `pageviews.GICTrackingID`*
-> - *Page views where `pages.UBSGICTrackingID = pageviews.GICTrackingID` (consistency check between the two tables)*
+> - *Page views where `pages.__ORG__GICTrackingID = pageviews.GICTrackingID` (consistency check between the two tables)*
 > - *Coverage % (TrackingID-tracked views / article views)*
 
 → Three findings at once: (1) traffic-weighted coverage (more decisive than inventory coverage, because the dashboard aggregates views); (2) consistency check whether the TrackingID in `pageviews` matches the one in `pages`; (3) validation that the historical `pageviews_*` variants are irrelevant.
@@ -246,7 +246,7 @@ Background: per the user, Gold **necessarily** contains engagement aggregates (s
 
 > *List ALL tables AND views in the `imep_gold` schema …*
 
-→ **Answer**: 5-tier architecture found. Tier 1 = atomic `Final` (525M). Tier 2 = rolling-timespan aggs (`tbl_pbi_date*`, `_divarea*`, `_regcntry*`, `_deviceTypeall`) — pattern `EngagementType + Count`, no separate Open/Click KPIs. **Tier 3 = engagement summaries WITH UniqueOpens/UniqueClicks**: `tbl_pbi_engagement` (Mailing×Link, 1.38M), `tbl_pbi_mailingreciever_region` (697K), `tbl_pbi_mailingreciever_division` (290K). Tier 4 = platform metadata. Tier 5 = reference. Daily refresh; aggregations without historisation. 66% NULL-region as data-quality blocker. **Full table list**: see [memory/imep_gold_full_inventory.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_gold_full_inventory.md).
+→ **Answer**: 5-tier architecture found. Tier 1 = atomic `Final` (525M). Tier 2 = rolling-timespan aggs (`tbl_pbi_date*`, `_divarea*`, `_regcntry*`, `_deviceTypeall`) — pattern `EngagementType + Count`, no separate Open/Click KPIs. **Tier 3 = engagement summaries WITH UniqueOpens/UniqueClicks**: `tbl_pbi_engagement` (Mailing×Link, 1.38M), `tbl_pbi_mailingreciever_region` (697K), `tbl_pbi_mailingreciever_division` (290K). Tier 4 = platform metadata. Tier 5 = reference. Daily refresh; aggregations without historisation. 66% NULL-region as data-quality blocker. **Full table list**: see [findings/q16-imep-gold-inventory.md](findings/q16-imep-gold-inventory.md).
 
 ### Q16b — `Final` table: grain and partitioning **(follow-up)**
 
@@ -268,13 +268,13 @@ Background: per the user, Gold **necessarily** contains engagement aggregates (s
 
 ### ~~Q17~~ ✅ Do further Gold schemas exist **(resolved 2026-04-17)**
 
-→ **Answer**: **SharePoint Gold exists** (`sharepoint_gold`, 20 tables, ~270M+ rows). Key: `pbi_db_interactions_metrics` (84M, 11 cols), `pbi_db_pageviewed_metric` (84M, 5 cols), `pbi_db_pagevisited_metric` (81M, 9 cols), `pbi_db_employeecontact` (24M, 17 cols), `pbi_db_datewise_overview_fact_tbl` (7.5M, 31 cols). Separately: **`sharepoint_clicks_gold`** with `pbi_db_ctalabel_intr_fact_gold` (3M, CTA labels). **CPLAN data already in Databricks** (`sharepoint_cplan`): Clusters (17), Packs (280), Activities (4,349). **`pbi_gold` (60 tables, inaccessible)** — request access, presumably the semantic model. Full list: see [memory/sharepoint_gold_inventory.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/sharepoint_gold_inventory.md).
+→ **Answer**: **SharePoint Gold exists** (`sharepoint_gold`, 20 tables, ~270M+ rows). Key: `pbi_db_interactions_metrics` (84M, 11 cols), `pbi_db_pageviewed_metric` (84M, 5 cols), `pbi_db_pagevisited_metric` (81M, 9 cols), `pbi_db_employeecontact` (24M, 17 cols), `pbi_db_datewise_overview_fact_tbl` (7.5M, 31 cols). Separately: **`sharepoint_clicks_gold`** with `pbi_db_ctalabel_intr_fact_gold` (3M, CTA labels). **CPLAN data already in Databricks** (`sharepoint_cplan`): Clusters (17), Packs (280), Activities (4,349). **`pbi_gold` (60 tables, inaccessible)** — request access, presumably the semantic model. Full list: see [findings/q17-sharepoint-gold-inventory.md](findings/q17-sharepoint-gold-inventory.md).
 
 ### Q17b — TrackingID columns in `sharepoint_gold` **(follow-up)**
 
-> *For each table in `sharepoint_gold` (`pbi_db_interactions_metrics`, `pbi_db_pageviewed_metric`, `pbi_db_pagevisited_metric`, `pbi_db_page_visitedkey_view`, `pbi_db_employeecontact`, `pbi_db_90_days_interactions_metric`, `pbi_db_datewise_overview_fact_tbl`): list all column names with data types. For each table, identify: (a) which column joins back to `sharepoint_bronze.pages` (page_id or URL) to retrieve `UBSGICTrackingID`; (b) whether the metric table itself already carries a TrackingId column.*
+> *For each table in `sharepoint_gold` (`pbi_db_interactions_metrics`, `pbi_db_pageviewed_metric`, `pbi_db_pagevisited_metric`, `pbi_db_page_visitedkey_view`, `pbi_db_employeecontact`, `pbi_db_90_days_interactions_metric`, `pbi_db_datewise_overview_fact_tbl`): list all column names with data types. For each table, identify: (a) which column joins back to `sharepoint_bronze.pages` (page_id or URL) to retrieve `__ORG__GICTrackingID`; (b) whether the metric table itself already carries a TrackingId column.*
 
-→ Decides whether we join the gold metric directly by TrackingID or via page_id → pages.UBSGICTrackingID.
+→ Decides whether we join the gold metric directly by TrackingID or via page_id → pages.__ORG__GICTrackingID.
 
 ### Q17c — `pbi_db_datewise_overview_fact_tbl` as pre-joined fact **(follow-up)**
 
@@ -349,13 +349,13 @@ Goal: the final schema details and volume checks we need to start the concrete S
 > *- `sharepoint_gold.pbi_db_pagevisited_metric` (81M × 9 cols)*
 > *- `sharepoint_gold.pbi_db_datewise_overview_fact_tbl` (7.5M × 31 cols)*
 >
-> *For each: (a) identify the page-identifying FK column (`page_id`, `pageId`, `url_hash`, etc.) that joins back to `sharepoint_bronze.pages`; (b) check whether any of these tables carries a direct `GICTrackingID` / `UBSGICTrackingID` column (so we can skip the pages-JOIN).*
+> *For each: (a) identify the page-identifying FK column (`page_id`, `pageId`, `url_hash`, etc.) that joins back to `sharepoint_bronze.pages`; (b) check whether any of these tables carries a direct `GICTrackingID` / `__ORG__GICTrackingID` column (so we can skip the pages-JOIN).*
 
-→ Decides whether the intranet aggregate can be joined directly by TrackingID or has to be resolved via `page_id → pages.UBSGICTrackingID`.
+→ Decides whether the intranet aggregate can be joined directly by TrackingID or has to be resolved via `page_id → pages.__ORG__GICTrackingID`.
 
 ### Q23 — TrackingId format consistency between iMEP and SharePoint
 
-> *Take 100 sample values of `TrackingId` from `imep_gold.tbl_pbi_platform_mailings` and 100 samples of `UBSGICTrackingID` from `sharepoint_bronze.pages`. Do NOT return the sample values — return only a structural comparison:*
+> *Take 100 sample values of `TrackingId` from `imep_gold.tbl_pbi_platform_mailings` and 100 samples of `__ORG__GICTrackingID` from `sharepoint_bronze.pages`. Do NOT return the sample values — return only a structural comparison:*
 > *(a) Do both have the same length (32 chars)?*
 > *(b) Do both use the same segment structure (5 segments, dash-separated)?*
 > *(c) Is case consistent across both (all uppercase? mixed?)?*
@@ -374,33 +374,33 @@ Goal: the final schema details and volume checks we need to start the concrete S
 
 → Shows how much of the 278M-recipients universe survives the filter for our email page, and how many distinct packs we should expect in the dashboard.
 
-### Q25 — UBSGICTrackingID distribution in `pages` (time + site breakdown)
+### Q25 — __ORG__GICTrackingID distribution in `pages` (time + site breakdown)
 
-> **Domain context**: `sharepoint_bronze.pages` is the SharePoint page inventory (~48k rows). `UBSGICTrackingID` is populated only for News- and Event-Articles (~4% per Q22). `UBSArticleDate` is the temporal anchor. Each page belongs to a Site — FK likely `siteId` / `webId` / `siteUrl`, use whichever column joins to `sharepoint_bronze.sites`.
+> **Domain context**: `sharepoint_bronze.pages` is the SharePoint page inventory (~48k rows). `__ORG__GICTrackingID` is populated only for News- and Event-Articles (~4% per Q22). `__ORG__ArticleDate` is the temporal anchor. Each page belongs to a Site — FK likely `siteId` / `webId` / `siteUrl`, use whichever column joins to `sharepoint_bronze.sites`.
 
-> *Analyze `UBSGICTrackingID` coverage in `sharepoint_bronze.pages` in four steps. Return only aggregates — do NOT return sample TrackingID values.*
+> *Analyze `__ORG__GICTrackingID` coverage in `sharepoint_bronze.pages` in four steps. Return only aggregates — do NOT return sample TrackingID values.*
 >
 > *1. **Overall counts**:*
 >    - *Total rows*
->    - *Count where `UBSGICTrackingID IS NOT NULL`*
->    - *Count where `UBSArticleDate IS NOT NULL`*
+>    - *Count where `__ORG__GICTrackingID IS NOT NULL`*
+>    - *Count where `__ORG__ArticleDate IS NOT NULL`*
 >    - *Count where both are populated*
 >    - *Each as raw count + percentage of total*
 >
-> *2. **TrackingID distribution over `UBSArticleDate`**:*
->    - *Group by `DATE_TRUNC('month', UBSArticleDate)` for the last 60 months.*
->    - *Per month show: total articles (`UBSArticleDate IS NOT NULL`), articles with `UBSGICTrackingID`, coverage % (with-TID / articles that month).*
+> *2. **TrackingID distribution over `__ORG__ArticleDate`**:*
+>    - *Group by `DATE_TRUNC('month', __ORG__ArticleDate)` for the last 60 months.*
+>    - *Per month show: total articles (`__ORG__ArticleDate IS NOT NULL`), articles with `__ORG__GICTrackingID`, coverage % (with-TID / articles that month).*
 >    - *Flag the first month where coverage ≥ 80% — that's the realistic start date for cross-channel funnel reporting.*
 >
 > *3. **Distinct PageURLs with TrackingID**:*
->    - *How many distinct page URLs (column `pageUrl` / `webUrl` / `url`) have `UBSGICTrackingID IS NOT NULL`?*
+>    - *How many distinct page URLs (column `pageUrl` / `webUrl` / `url`) have `__ORG__GICTrackingID IS NOT NULL`?*
 >    - *How many distinct page URLs exist in total?*
 >    - *Ratio as percentage.*
->    - *Also: are any page URLs associated with multiple `UBSGICTrackingID`s (historical re-use)? Report the count of URLs with >1 distinct TID.*
+>    - *Also: are any page URLs associated with multiple `__ORG__GICTrackingID`s (historical re-use)? Report the count of URLs with >1 distinct TID.*
 >
 > *4. **Coverage per Site**:*
 >    - *Join `pages` to `sharepoint_bronze.sites` via the site FK.*
->    - *Per Site (top 30 by total pages) return: site name / URL, total pages, pages with `UBSGICTrackingID`, coverage % within that site, distinct `tracking_pack_id` count (first 2 dash-segments of `UPPER(TRIM(UBSGICTrackingID))`).*
+>    - *Per Site (top 30 by total pages) return: site name / URL, total pages, pages with `__ORG__GICTrackingID`, coverage % within that site, distinct `tracking_pack_id` count (first 2 dash-segments of `UPPER(TRIM(__ORG__GICTrackingID))`).*
 >    - *Order by `pages_with_tid` DESC.*
 >    - *Highlight the top 5 sites that together cover ≥ 80% of all tracked pages (Pareto).*
 >
@@ -432,11 +432,11 @@ Goal: the final schema details and volume checks we need to start the concrete S
 >
 > Other relevant silvers: `adobe_silver` (15), `dynamics_silver` (7), `email_campaign_forms_silver` (5), `adform_silver` (3), `profile_silver` (~6), `linkedin_silver`, `google_silver`, `facebook_silver`, `oii_silver`, `bid_silver`, `persona_data_silver`.
 >
-> **Consequence**: do NOT build `silver.fact_email` — iMEP deliberately chose against it. Consume `imep_gold.final` directly. Full details: [memory/imep_silver_q26_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_silver_q26_findings.md).
+> **Consequence**: do NOT build `silver.fact_email` — iMEP deliberately chose against it. Consume `imep_gold.final` directly. Full details: [findings/q26-imep-silver.md](findings/q26-imep-silver.md).
 
 ### ~~Q27~~ ✅ Lineage via column fingerprint **(OP-lineage-b — resolved 2026-04-20)**
 
-> *Across ALL schemas in the workspace, find every table that contains at least one of these columns (case-insensitive match on column name): `Id`, `EmailId`, `mailingid`, `MailingId`, `TrackingId`, `UBSGICTrackingID`, `GICTrackingID`, `TNumber`, `T_NUMBER`, `WORKER_ID`.*
+> *Across ALL schemas in the workspace, find every table that contains at least one of these columns (case-insensitive match on column name): `Id`, `EmailId`, `mailingid`, `MailingId`, `TrackingId`, `__ORG__GICTrackingID`, `GICTrackingID`, `TNumber`, `T_NUMBER`, `WORKER_ID`.*
 >
 > *For each hit return: schema, table, matching_columns, row_count, MIN/MAX of the earliest timestamp column (`CreationDate`, `DateTime`, `ModifiedDate`, `_ingestion_ts`, or similar).*
 >
@@ -460,7 +460,7 @@ Goal: the final schema details and volume checks we need to start the concrete S
 >
 > **New schema sighted**: `page_metadata_bronze` (pagelikesview 40K, comments 3.4K, reportedcomments, moderatedcomments, metadata-pageviews 293) — separate from the main pageview fact.
 >
-> Full details: [memory/imep_join_graph_q27_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_join_graph_q27_findings.md).
+> Full details: [findings/q27-imep-join-graph.md](findings/q27-imep-join-graph.md).
 
 ### ~~Q28~~ ✅ Pipeline hints from Delta history **(OP-lineage-c — resolved 2026-04-20)**
 
@@ -494,13 +494,13 @@ Goal: the final schema details and volume checks we need to start the concrete S
 > - **520M-row table** (labelled `tbl_pbi_platform_mailings` in the image — ⚠️ contradicts Q27's 73K, most likely `imep_gold.final`; to be clarified via Q30) rewritten twice daily → **largest compute cost item**
 > - Further gold full rebuilds: `tbl_pbi_mailings_region` (73,530), `tbl_pbi_mailings_division` (697,787), `tbl_pbi_analytics` (290,723), `tbl_pbi_kpi` (245,040), +1 (1,384,800)
 >
-> **Writer**: `userName` empty everywhere → **service principal** (SPN prefix `a71734ea-...`). Fully automated pipeline, no human writer.
+> **Writer**: `userName` empty everywhere → **service principal**. Fully automated pipeline, no human writer.
 >
 > **Dashboard implication**: refresh-window risk around 00:23/12:25 UTC (gold rebuild phase) — queries in this window may hit a partial/inconsistent state. Cache or schedule around it.
 >
 > **Optimisation hint** (not our remit): gold full rebuild → incremental MERGE would significantly reduce compute.
 >
-> Full details: [memory/imep_pipeline_ops_q28_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_pipeline_ops_q28_findings.md).
+> Full details: [findings/q28-pipeline-operations.md](findings/q28-pipeline-operations.md).
 
 ### ~~Q29~~ ✅ Derive tier structure from table shape **(OP-lineage-d — resolved 2026-04-20)**
 
@@ -519,11 +519,11 @@ Goal: the final schema details and volume checks we need to start the concrete S
 > - Tier 3 — dimensions (7): `employeecontact` (24.3M, person-bridge candidate), `website_page_inventory`, calendar, referer-app
 > - **Video sub-domain (3 tables)**: `fact_video_engagement_gold` etc. — the only managed Declarative Pipeline tables in the whole system
 >
-> **Cross-system join mechanism**: iMEP Gold + SP Gold share **no FK** — the only bridge is `tbl_pbi_platform_mailings.TrackingId → pages.UBSGICTrackingID → pages.pageUUID → marketingPageId`, and it only works after a SEG1–4 match.
+> **Cross-system join mechanism**: iMEP Gold + SP Gold share **no FK** — the only bridge is `tbl_pbi_platform_mailings.TrackingId → pages.__ORG__GICTrackingID → pages.pageUUID → marketingPageId`, and it only works after a SEG1–4 match.
 >
 > **Mental model**: iMEP Gold = message-centric per-recipient; SP Gold = page-centric analytics; TrackingId = the only conceptual bridge at the dimension level.
 >
-> Full details: [memory/imep_sp_gold_tiers_q29_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_sp_gold_tiers_q29_findings.md).
+> Full details: [findings/q29-gold-tier-structure.md](findings/q29-gold-tier-structure.md).
 
 ### ~~Q30~~ ✅ Table properties & storage location **(OP-lineage-e — resolved 2026-04-20)**
 
@@ -544,7 +544,7 @@ Goal: the final schema details and volume checks we need to start the concrete S
 >
 > **One-page summary**: the physical layout reveals the architectural truth — everything is notebook-driven (except video), gold is rebuilt wholesale (not incrementally), no partitioning is the biggest performance gap, gold co-location is the correct design for cross-channel.
 >
-> Full details: [memory/storage_architecture_q30_findings.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/storage_architecture_q30_findings.md).
+> Full details: [findings/q30-storage-architecture.md](findings/q30-storage-architecture.md).
 
 **What Genie CANNOT answer** (to be clarified via workspace UI or REST API):
 - Job definitions & scheduler → Jobs UI or `/api/2.1/jobs/list`

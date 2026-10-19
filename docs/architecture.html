@@ -107,7 +107,7 @@ flowchart LR
     end
     subgraph Bronze["Bronze (enrichment only)"]
         direction TB
-        SP1["sharepoint_bronze.pages<br/>UBSGICTrackingID + UBSArticleDate"]
+        SP1["sharepoint_bronze.pages<br/>__ORG__GICTrackingID + __ORG__ArticleDate"]
         HR["imep_bronze.tbl_hr_employee<br/>fallback if SP_employeecontact insufficient"]
     end
     subgraph Ours["Unsere minimale Eigenbau-Schicht"]
@@ -214,7 +214,7 @@ erDiagram
     tbl_email_receiver_status }o--|| tbl_hr_employee : "TNumber = T_NUMBER"
     tbl_analytics_link }o--|| tbl_hr_employee : "TNumber = T_NUMBER"
     tbl_hr_employee }o--|| tbl_hr_costcenter : "ORGANIZATIONAL_UNIT"
-    tbl_hr_employee }o--|| tbl_hr_user : "T_NUMBER = UbsId case-norm"
+    tbl_hr_employee }o--|| tbl_hr_user : "T_NUMBER = __ORG__Id case-norm"
     tbl_email ||--o{ tbl_email_links : "EmailId template"
 
     tbl_email {
@@ -257,7 +257,7 @@ erDiagram
         string COUNTRY
     }
     tbl_hr_user {
-        string UbsId
+        string __ORG__Id
         string Town
     }
     tbl_email_links {
@@ -273,7 +273,7 @@ LEFT JOIN  tbl_email_receiver_status c  ON a.EmailReceiverStatusId = c.Id
 LEFT JOIN  tbl_email b                  ON a.EmailId               = b.Id
 LEFT JOIN  tbl_hr_employee hr           ON a.TNumber               = hr.T_NUMBER
 LEFT JOIN  tbl_hr_costcenter cc         ON hr.ORGANIZATIONAL_UNIT  = cc.ORGANIZATIONAL_UNIT
-LEFT JOIN  tbl_hr_user u                ON LOWER(hr.T_NUMBER)      = LOWER(u.UbsId)
+LEFT JOIN  tbl_hr_user u                ON LOWER(hr.T_NUMBER)      = LOWER(u.__ORG__Id)
 WHERE      a.IsActive = 1</code></pre>
     </section>
 
@@ -436,7 +436,7 @@ flowchart LR
           <tr><td><code>WORKER_ID</code> (= GPN)</td><td><code>imep_bronze.tbl_hr_employee</code></td><td><code>00100200</code></td></tr>
           <tr><td><code>T_NUMBER</code></td><td><code>imep_bronze.tbl_hr_employee</code></td><td><code>t100200</code> (lowercase)</td></tr>
           <tr><td><code>TNumber</code> in iMEP</td><td><code>tbl_email_receiver_status</code>, <code>tbl_analytics_link</code></td><td><code>t100200</code></td></tr>
-          <tr><td><code>UbsId</code></td><td><code>imep_bronze.tbl_hr_user</code></td><td><code>T100200</code> (UPPERCASE)</td></tr>
+          <tr><td><code>__ORG__Id</code></td><td><code>imep_bronze.tbl_hr_user</code></td><td><code>T100200</code> (UPPERCASE)</td></tr>
         </tbody>
       </table>
       <div class="legend">Nach Silver-Build: einheitlich <code>t_number</code> (lowercase), überall. GPN gelöscht.</div>
@@ -458,7 +458,7 @@ flowchart LR
 flowchart LR
     B["imep_gold.tbl_pbi_platform_mailings<br/>TrackingId"]
     C["imep_gold.tbl_pbi_platform_events<br/>TrackingId"]
-    D["sharepoint_bronze.pages<br/>UBSGICTrackingID"]
+    D["sharepoint_bronze.pages<br/>__ORG__GICTrackingID"]
     SPG["sharepoint_gold.pbi_db_* - Q17b<br/>TrackingId column TBD"]
     F["sharepoint_cplan.*<br/>tracking_id"]
     TARGET["gold.fact_cross_channel<br/>tracking_id<br/>+ tracking_pack_id<br/>+ tracking_channel_abbr"]
@@ -543,7 +543,7 @@ flowchart TB
 <pre><code>Recipients (100%)  ─►  Unique Opens (22.0%)  ─►  Unique Clicks (1.80%)  ─►  Page Views (???)  ─►  Event Registered (???)
                                                                                     │
                                                                             nur Article-Pages
-                                                                    (UBSGICTrackingID populated, Q15)
+                                                                    (__ORG__GICTrackingID populated, Q15)
 
 Regional:
   Switzerland & Liechtenstein:  71.1% Open  /  8.30% Click

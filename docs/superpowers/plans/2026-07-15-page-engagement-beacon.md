@@ -131,7 +131,7 @@ git commit -m "kql: Phase-0 validation queries for page_engagement beacon (V1-V3
 - [ ] **Step 1: Run the audit greps**
 
 ```bash
-cd /Users/micha/Documents/Arbeit
+cd <parent-folder-of-the-sibling-projects>
 grep -rn -iE "customevents" \
   --include="*.kql" --include="*.py" --include="*.sql" \
   --include="*.js" --include="*.html" --include="*.md" \
@@ -943,7 +943,7 @@ pandoc 3.8.2 is installed at `/opt/homebrew/bin/pandoc`. GitHub-flavored
 Markdown input keeps the tables; `--toc` gives Word a navigable outline.
 
 ```bash
-cd /Users/micha/Documents/Arbeit/Databricks
+cd <repo-root>
 pandoc docs/superpowers/specs/2026-07-15-page-engagement-heartbeat-design.md \
   -f gfm -t docx --toc --toc-depth=2 \
   --metadata title="Page Engagement Beacon for SharePoint Application Insights — Design" \

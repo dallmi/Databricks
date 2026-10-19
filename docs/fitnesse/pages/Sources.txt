@@ -2,7 +2,7 @@
 
 Central traceability index. Every claim in !see .EmployeeEngagement.CPlanGICTrackingCLARITYDashboard.MultiChannelDataModel.Overview, the data glossary cards, diagrams and join recipes can be traced back to one of the Databricks Genie sessions listed here. Body text deliberately no longer carries inline (Q##) markers — use the '''Sources''' block at the end of each page to find the relevant Q's.
 
-Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/<repo>/blob/main/docs/genie_questions_imep.md]] in the Git repo. Deep-findings with interpretation: memory artifacts under `~/.claude/projects/.../memory/`.
+Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/<repo>/blob/main/docs/genie_questions_imep.md]] in the Git repo. Deep-findings with interpretation: docs/findings/ in the Git repo.
 
 !2 How to read the entries
 
@@ -10,7 +10,7 @@ Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/
 | '''Date''' | Day the Genie session was executed — facts may have changed since. |
 | '''Scope''' | Tables targeted / question asked. |
 | '''Main finding''' | One-liner — the result as it flows into the documentation. |
-| '''Deep-dive''' | Memory artefact with full analysis & SQL. |
+| '''Deep-dive''' | Sanitized finding in docs/findings/. |
 
 ----
 
@@ -34,7 +34,7 @@ Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/
 !3 Q3 — HR bridge TNumber ↔ GPN (first round)
  * '''Date''': 2026-04-16
  * '''Scope''': tbl_hr_employee, tbl_hr_user — identifier column inventory.
- * '''Finding''': '''Hypothesis falsified''' — no visible GPN column. T_NUMBER (lowercase) and UbsId (uppercase) are both T-numbers. Search was too narrow → opens Q3a/Q3b.
+ * '''Finding''': '''Hypothesis falsified''' — no visible GPN column. T_NUMBER (lowercase) and __ORG__Id (uppercase) are both T-numbers. Search was too narrow → opens Q3a/Q3b.
 
 !3 Q3a — What IS the GPN in AppInsights?
  * '''Date''': 2026-04-17
@@ -68,7 +68,7 @@ Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/
 !3 Q22 — SharePoint Gold metric schemas
  * '''Date''': 2026-04-19
  * '''Scope''': Which Gold table carries TrackingID? FK chain between pbi_db_interactions_metrics and sharepoint_bronze.pages.
- * '''Finding''': '''No direct TrackingID''' on Gold metric tables. FK chain: metrics.marketingPageId → pages.pageUUID → pages.UBSGICTrackingID. ⚠️ Only 1,949/48,419 pages (~4%) have UBSGICTrackingID → cross-channel coverage is sparse.
+ * '''Finding''': '''No direct TrackingID''' on Gold metric tables. FK chain: metrics.marketingPageId → pages.pageUUID → pages.__ORG__GICTrackingID. ⚠️ Only 1,949/48,419 pages (~4%) have __ORG__GICTrackingID → cross-channel coverage is sparse.
 
 ----
 
@@ -76,7 +76,7 @@ Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/
 
 !3 Q23 — TrackingId format consistency iMEP ↔ SharePoint
  * '''Date''': 2026-04-20
- * '''Scope''': Structural comparison tbl_email.TrackingId ↔ sharepoint_bronze.pages.UBSGICTrackingID — length, case, segments, value overlap.
+ * '''Scope''': Structural comparison tbl_email.TrackingId ↔ sharepoint_bronze.pages.__ORG__GICTrackingID — length, case, segments, value overlap.
  * '''Finding''': Format identical (32-char 5-seg UPPER clean) '''but''' values nearly disjoint (Jaccard 0.004, 6/1677 overlap). SEG5 = channel (iMEP: EMI/NLI/TWE; SharePoint: IAN/ITS/OPN/ANC). '''Business-refined 2026-04-20: Cross-channel match is Pack-Level (SEG1-2) ONLY''' — SEG1-4 also fails because email and page of the same pack have different dates (SEG3) and activity sequences (SEG4).
 
 !3 Q24 — TrackingId volume & adoption
@@ -84,7 +84,7 @@ Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/
  * '''Scope''': How many mailings actually have a TrackingId? Adoption over time + channel distribution.
  * '''Finding''': Only 986/73,930 mailings (1.3%) have TrackingId. Adoption ramps: 2024 = 99, 2025 = 637, 2026 YTD = 250. 80% are EMI. '''791 EMI rows → 696 distinct TIDs → 54 distinct Pack IDs (SEG1-2)'''. Dashboard universe = 54 packs, default time window from 2025.
 
-!3 Q25 — UBSGICTrackingID distribution in pages
+!3 Q25 — __ORG__GICTrackingID distribution in pages
  * '''Date''': 2026-04-20
  * '''Scope''': Which SharePoint sites have tracking coverage, over which time spans, with which URL mapping?
  * '''Finding''': 99.4% of tracked pages on '''one single site''' ("News and events", 83 packs). Coverage rollout Sep 2024 (33.9%), peak 70.5% March 2026, never 80%. 1:1 URL↔TID mapping. Dashboard → restrict to News-and-events + floor 2024-09-01.
@@ -106,7 +106,7 @@ Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/
 !3 Q28 — Pipeline hints from Delta History
  * '''Date''': 2026-04-20
  * '''Scope''': DESCRIBE HISTORY on the largest tables — write operations, Service Principal, operation types (MERGE/CTAS/Append).
- * '''Finding''': Unified MERGE → OPTIMIZE → VACUUM rhythm, 7-day retention. iMEP Bronze MERGE Upsert (tbl_analytics_link truly incremental 3-8K/run; tbl_email / tbl_email_receiver_status full-replace 27-72M/run). SharePoint Bronze: pages MERGE snapshot, pageviews Append WRITE (7 bursts = API pagination). iMEP Gold Full Rebuild — the 520M-row final is completely rewritten = biggest compute cost. All writes via Service Principal (SPN a71734ea-...). '''Scope limit''': concrete UTC refresh slots only visible in History, no complete scheduler view.
+ * '''Finding''': Unified MERGE → OPTIMIZE → VACUUM rhythm, 7-day retention. iMEP Bronze MERGE Upsert (tbl_analytics_link truly incremental 3-8K/run; tbl_email / tbl_email_receiver_status full-replace 27-72M/run). SharePoint Bronze: pages MERGE snapshot, pageviews Append WRITE (7 bursts = API pagination). iMEP Gold Full Rebuild — the 520M-row final is completely rewritten = biggest compute cost. All writes via Service Principal (identity not recorded here). '''Scope limit''': concrete UTC refresh slots only visible in History, no complete scheduler view.
 
 !3 Q29 — Gold tier structure from table shape
  * '''Date''': 2026-04-20
@@ -123,5 +123,5 @@ Full raw prompts + answers: [[genie_questions_imep.md][https://github.com/<org>/
 !2 Usage
 
  * '''In documentation pages''': each page ends with a '''Sources''' block listing the relevant Q IDs pointing back here (e.g. "Sources: Q22, Q27, Q28").
- * '''New sessions''': add an entry here + write a memory artefact + update MEMORY.md.
+ * '''New sessions''': add an entry here + write a finding in docs/findings/ + add it to docs/findings/README.md.
  * '''Conflicts''': if a later session overturns an earlier assumption, '''don't''' delete the old Q entry — overwrite the finding with the date and keep the change visible (e.g. Q23 has a business refinement from 2026-04-20 after the original Q23 answer on the same day).

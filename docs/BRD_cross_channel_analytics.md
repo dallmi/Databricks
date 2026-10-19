@@ -37,7 +37,7 @@ Three data sources, joined via `CammsTrackingID`:
 
 2. **SharePoint PageViews (intranet interactions)** — `sharepoint_bronze.pageviews` (views, visits, engagement; column `GICTrackingID`). Complementary: the historical pipeline from AppInsights `pageViews` telemetry via [`scripts/flatten_appinsights.py`](../scripts/flatten_appinsights.py) → `fact_page_view` / `agg_session`. To be clarified which of the two becomes the canonical source. Channel abbreviation: `INT`.
 
-3. **SharePoint Pages / Page Inventory** — `sharepoint_bronze.pages` (page master + article metadata + `UBSGICTrackingID` + `UBSArticleDate`). Plus CPLAN for overarching pack/cluster/activity planning.
+3. **SharePoint Pages / Page Inventory** — `sharepoint_bronze.pages` (page master + article metadata + `__ORG__GICTrackingID` + `__ORG__ArticleDate`). Plus CPLAN for overarching pack/cluster/activity planning.
 
 Supporting:
 - **HR Snapshot Join** (GPN → division / region / management level) — already integrated in the PageView pipeline.
@@ -199,7 +199,7 @@ Single-file HTML (DuckDB-WASM + Chart.js), see Corporate Branding Guidelines in 
 | NFR-02 | Dashboard load time < 3s over 12 months of data. |
 | NFR-03 | No brand- or company-specific abbreviations in code (prefix `--corp-*` etc., no corporate-specific abbreviations). |
 | NFR-04 | Corporate color palette mandatory (see [CLAUDE.md](../../CLAUDE.md)). |
-| NFR-05 | PII (GPN, email) is not exposed in gold — only `user_id` and HR dimensions (see [pii_cleanup_pending](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/pii_cleanup_pending.md)). |
+| NFR-05 | PII (GPN, email) is not exposed in gold — only `user_id` and HR dimensions (see [findings/open-questions.md](findings/open-questions.md)). |
 | NFR-06 | All timestamps in CET; UTC conversion in the ETL. |
 
 ## 6. Data Flow (High-Level)
@@ -245,7 +245,7 @@ The following points are to be clarified **before** implementation starts, with 
 
 ### 9.1 iMEP (Email Channel)
 
-> **Update 2026-04-16 (v2)**: Genie Q1/Q2/Q3 answered — see [memory/imep_genie_findings_q1_q2_q3.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_genie_findings_q1_q2_q3.md). **Column is called `TrackingId` (not `CammsTrackingID`)** and lives on `tbl_email` (mailing level). **GPN does NOT exist in the HR tables** — new critical OP-07e.
+> **Update 2026-04-16 (v2)**: Genie Q1/Q2/Q3 answered — see [findings/q01-q03-imep-schemas-and-tracking-id.md](findings/q01-q03-imep-schemas-and-tracking-id.md). **Column is called `TrackingId` (not `CammsTrackingID`)** and lives on `tbl_email` (mailing level). **GPN does NOT exist in the HR tables** — new critical OP-07e.
 
 - ~~**OP-01**~~ ✅ Schema known — `TBL_EMAIL_RECEIVER_STATUS` (recipient status), `TBL_ANALYTICS_LINK` (open/click), `TBL_EMAIL` (mailing master, **incl. `TrackingId`**), `TBL_EMAIL_LINKS` (template). See Appendix A and Genie findings.
 - **OP-02** Complete list of values in `TBL_EMAIL_RECEIVER_STATUS` (send/bounce/unsubscribe) and `TBL_ANALYTICS_LINK.linkTypeenum` (`OPEN`, `CLICK`, …) — confirmation with BA.
@@ -253,12 +253,12 @@ The following points are to be clarified **before** implementation starts, with 
 - ~~**OP-04**~~ ✅ Tracking ID lives on `imep_bronze.tbl_email.TrackingId` (mailing level). Cross-channel join via `tbl_analytics_link.EmailId → tbl_email.Id → tbl_email.TrackingId`. Naming mapping: `TrackingId` (iMEP) ↔ `GICTrackingID` (SharePoint, with case variants) ↔ `tracking_id` (CPLAN).
 - **OP-05** Audience size per pack: does this come from iMEP (distribution list size) or CPLAN (`pack.target_audience_size`)?
 - ~~**OP-06**~~ ✅ Historisation: `tbl_pbi_platform_mailings` from 2020-11-18 (5+ years, 73.8k rows), `tbl_pbi_platform_events` from 2013-10-10 (12+ years, 84k rows). Both refreshed daily. Bronze tables to be checked separately, but gold coverage shows: sufficiently long history.
-- ~~**OP-07**~~ ✅ Recipient runs via `TNumber` (format `t100200`) — HR join in iMEP via `TBL_HR_EMPLOYEES.T_NUMBER` (**case warning**: `tbl_hr_user.UbsId` is uppercase `T594687`, `T_NUMBER` is lowercase — normalisation mandatory).
+- ~~**OP-07**~~ ✅ Recipient runs via `TNumber` (format `t100200`) — HR join in iMEP via `TBL_HR_EMPLOYEES.T_NUMBER` (**case warning**: `tbl_hr_user.__ORG__Id` is uppercase `T100200`, `T_NUMBER` is lowercase — normalisation mandatory).
 - **OP-07b** `TBL_HR_COSTCENTER.ORGANIZATIONAL_UNIT` join: uniqueness (1:1) and historisation (org changes)?
 - **OP-07c** `TBL_EMAIL.CreatedBy` — is this required in the dashboard as a filter / dimension (creator reporting)?
 - ~~**OP-07d**~~ ✅ **Bridge found**: `imep_bronze.tbl_hr_employee` contains **both** `T_NUMBER` (lowercase, `t######`) **and** `WORKER_ID` (= GPN, 8-digit). Pure LEFT JOIN, no string transformation required.
 - ~~**OP-07e**~~ ✅ Resolved by the OP-07d finding. **Consequence**: in the silver ETL for `fact_page_view`, immediately resolve the GPN via `WORKER_ID` to `T_NUMBER`. After that, `t_number` is the only recipient key across the entire silver/gold layer.
-- ~~**OP-07f**~~ ✅ **iMEP Gold fully evaluated** (Q16 finding, see [memory/imep_gold_full_inventory.md](../../../.claude/projects/-Users-micha-Documents-Arbeit-Databricks/memory/imep_gold_full_inventory.md)):
+- ~~**OP-07f**~~ ✅ **iMEP Gold fully evaluated** (Q16 finding, see [findings/q16-imep-gold-inventory.md](findings/q16-imep-gold-inventory.md)):
   - **Gold does contain engagement aggregates after all.** The Q1b search was too narrow — only `tbl_pbi_platform_mailings` was inspected, not the full schema.
   - **5-tier architecture**: atomic fact (`Final`, 525M), rolling-timespan aggs (Tier 2), **mailing-level engagement summaries** (Tier 3 — `tbl_pbi_engagement`, `tbl_pbi_mailingreciever_region`, `_division`), platform metadata (Tier 4), reference (Tier 5).
   - **`tbl_pbi_engagement`** (1.38M rows) — Mailing × Link/Component with `UniqueOpens`, `UniqueClicks`, `Count`.
@@ -283,8 +283,8 @@ The following points are to be clarified **before** implementation starts, with 
 
 ### 9.4 AppInsights / PageViews
 
-- **OP-15** **Partially clarified**: `UBSGICTrackingID` in `sharepoint_bronze.pages` only for news/event articles. Per Q17 confirmed: `sharepoint_gold` provides PageView aggregates (20 tables, 270M rows) — whether dimensioned per TrackingId or only per page is clarified by Q17b. Coverage analysis Q15/Q15b remains relevant.
-- **OP-15b** (new) **Use `sharepoint_gold` contents**: primary PageView fact tables are `pbi_db_interactions_metrics` (84M), `pbi_db_pageviewed_metric` (84M), `pbi_db_pagevisited_metric` (81M). To be clarified via Q17b: join gold metric directly by TrackingId or via page_id → `sharepoint_bronze.pages.UBSGICTrackingID`.
+- **OP-15** **Partially clarified**: `__ORG__GICTrackingID` in `sharepoint_bronze.pages` only for news/event articles. Per Q17 confirmed: `sharepoint_gold` provides PageView aggregates (20 tables, 270M rows) — whether dimensioned per TrackingId or only per page is clarified by Q17b. Coverage analysis Q15/Q15b remains relevant.
+- **OP-15b** (new) **Use `sharepoint_gold` contents**: primary PageView fact tables are `pbi_db_interactions_metrics` (84M), `pbi_db_pageviewed_metric` (84M), `pbi_db_pagevisited_metric` (81M). To be clarified via Q17b: join gold metric directly by TrackingId or via page_id → `sharepoint_bronze.pages.__ORG__GICTrackingID`.
 - **OP-15c** (new) **CPLAN directly in Databricks**: `sharepoint_cplan` contains `trackingcluster_bronze` (17 clusters), `communicationspacks_bronze` (280 packs), `internalcommunicationactivities_bronze` (4,349 activities). This replaces the external CPLAN repo as the source for `silver.dim_pack`. To be clarified via Q17e: FK relationships between these tables and the link to iMEP gold.
 - **OP-15d** (new, governance) **Request `pbi_gold` access**: 60 tables, presumably the central semantic model. Currently inaccessible. File an access request with the catalog admin (Q17f).
 - **OP-16** Attribution window: how long after email send can a PageView still be attributed to the campaign when `CammsTrackingID` is missing (orphan)?
@@ -383,7 +383,7 @@ FROM TBL_ANALYTICS_LINK a
 LEFT JOIN TBL_EMAIL_RECEIVER_STATUS c ON a.EmailReceiverStatusId = c.Id      -- SentDateTime
 LEFT JOIN TBL_HR_EMPLOYEE hr          ON a.TNumber = hr.T_NUMBER             -- org unit
 LEFT JOIN TBL_HR_COSTCENTER cc        ON hr.ORGANIZATIONAL_UNIT = cc.ORGANIZATIONAL_UNIT
-LEFT JOIN TBL_HR_USER u               ON hr.T_NUMBER = u.UbsId               -- town
+LEFT JOIN TBL_HR_USER u               ON hr.T_NUMBER = u.__ORG__Id               -- town
 LEFT JOIN mdlinks hh                  ON a.Id = hh.Id                        -- multi-device
 WHERE c.EmailId IS NOT NULL AND a.EmailId IS NOT NULL AND a.IsActive = 1
 ```

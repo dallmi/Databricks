@@ -52,7 +52,7 @@ Application Insights is the upstream system. The Bronze table is a near-1:1 mirr
 | **Targeting (newer)** | `Theme`, `Topic`, `TargetOrganisation`, `TargetRegion`, `refUri` |
 | **Video sub-domain** | `Video_Action`, `Video_Id`, `Video_Type`, `Video_Duration` |
 
-> ⚠️ **`CammsTrackingID` is NOT in click_event CustomProps** (verified against the Clicks key inventory). Only `pageViews` carries it. Cross-channel attribution for clicks therefore must run through `pageId → pages.pageUUID → pages.UBSGICTrackingID`.
+> ⚠️ **`CammsTrackingID` is NOT in click_event CustomProps** (verified against the Clicks key inventory). Only `pageViews` carries it. Cross-channel attribution for clicks therefore must run through `pageId → pages.pageUUID → pages.__ORG__GICTrackingID`.
 
 ---
 
@@ -92,11 +92,11 @@ The Bronze landing tracks only the App Insights envelope — `CustomProps` is **
 ### → `pages` (N:1) — to recover the cross-channel TrackingID
 
 ```sql
-SELECT ce.timestamp, ce.user_Id, p.UBSGICTrackingID, p.PageURL, p.PageTitle
+SELECT ce.timestamp, ce.user_Id, p.__ORG__GICTrackingID, p.PageURL, p.PageTitle
 FROM   sharepoint_bronze.customevents ce
 JOIN   sharepoint_bronze.pages         p ON p.pageUUID = ce.pageId
 WHERE  ce.name = 'click_event'
-  AND  p.UBSGICTrackingID IS NOT NULL
+  AND  p.__ORG__GICTrackingID IS NOT NULL
 ```
 
 ### → iMEP HR (N:1) — GPN to TNumber
@@ -167,7 +167,7 @@ Raw export path for ad-hoc analysis: see [`kql/customevents_clicks.kql`](../../.
 
 ## Related cards
 
-- [pages.md](pages.md) — the dimension to attach `UBSGICTrackingID`
+- [pages.md](pages.md) — the dimension to attach `__ORG__GICTrackingID`
 - `pageviews.md` *(pending)* — sister fact (173M, has `GICTrackingID` directly)
 - `pbi_db_ctalabel_intr_fact_gold.md` *(pending)* — gold CTA aggregate, lineage unverified
 
@@ -175,11 +175,11 @@ Raw export path for ad-hoc analysis: see [`kql/customevents_clicks.kql`](../../.
 
 ## External references (sister projects)
 
-- [/Users/micha/Documents/Arbeit/Clicks/clicks_query.kql](../../../../Clicks/clicks_query.kql) — master flattener for ALL intranet clicks
-- [/Users/micha/Documents/Arbeit/Clicks/clicks_explorer.kql](../../../../Clicks/clicks_explorer.kql) — 13 profiling queries (event names, key inventory, link type distribution, daily trend)
-- [/Users/micha/Documents/Arbeit/Clicks/docs/data-pipeline.md](../../../../Clicks/docs/data-pipeline.md) — full pipeline + CDM star-schema design (`fact_clicks`, `dim_site`, `dim_page`, `dim_link_type`, `dim_component`)
-- [/Users/micha/Documents/Arbeit/CampaignWe/campaignwe_query.kql](../../../../CampaignWe/campaignwe_query.kql) — page-filtered variant + 4-level nesting recipe for search events
-- [/Users/micha/Documents/Arbeit/ClickTracking/Click_Tracking_Requirements_Clean.md](../../../../ClickTracking/Click_Tracking_Requirements_Clean.md) — business requirements (no schema)
+- [Clicks/clicks_query.kql (sibling project)](../../../../Clicks/clicks_query.kql) — master flattener for ALL intranet clicks
+- [Clicks/clicks_explorer.kql (sibling project)](../../../../Clicks/clicks_explorer.kql) — 13 profiling queries (event names, key inventory, link type distribution, daily trend)
+- [Clicks/docs/data-pipeline.md (sibling project)](../../../../Clicks/docs/data-pipeline.md) — full pipeline + CDM star-schema design (`fact_clicks`, `dim_site`, `dim_page`, `dim_link_type`, `dim_component`)
+- [CampaignWe/campaignwe_query.kql (sibling project)](../../../../CampaignWe/campaignwe_query.kql) — page-filtered variant + 4-level nesting recipe for search events
+- [ClickTracking/Click_Tracking_Requirements_Clean.md (sibling project)](../../../../ClickTracking/Click_Tracking_Requirements_Clean.md) — business requirements (no schema)
 
 ---
 

@@ -1,6 +1,6 @@
 # ER Diagram — Cross-Channel Bridge
 
-> The **only bridge** between iMEP (Email) and SharePoint (Intranet). Runs via **TrackingId ↔ UBSGICTrackingID** at the dimensional level (`tbl_email` ↔ `pages`), **never** through engagement facts directly. Plus the Employee bridge via `tbl_hr_employee.WORKER_ID`.
+> The **only bridge** between iMEP (Email) and SharePoint (Intranet). Runs via **TrackingId ↔ __ORG__GICTrackingID** at the dimensional level (`tbl_email` ↔ `pages`), **never** through engagement facts directly. Plus the Employee bridge via `tbl_hr_employee.WORKER_ID`.
 
 ---
 
@@ -8,7 +8,7 @@
 
 ```mermaid
 erDiagram
-    tbl_email                 ||..|| pages                         : "TrackingId ↔ UBSGICTrackingID (Pack / SEG1-2)"
+    tbl_email                 ||..|| pages                         : "TrackingId ↔ __ORG__GICTrackingID (Pack / SEG1-2)"
     tbl_email                 ||--o{ tbl_email_receiver_status     : "Id = EmailId"
     tbl_email_receiver_status ||--o{ tbl_analytics_link            : "Id = EmailReceiverStatusId"
     tbl_email_receiver_status }o--|| tbl_hr_employee               : "TNumber = T_NUMBER"
@@ -41,7 +41,7 @@ erDiagram
     }
     pages {
         string pageUUID PK "48K"
-        string UBSGICTrackingID "4% populated ⚠️"
+        string __ORG__GICTrackingID "4% populated ⚠️"
         string SiteId FK
     }
     pageviews {
@@ -66,7 +66,7 @@ erDiagram
 
 ### Bridge 1: TrackingID (campaign-level)
 
-**Where?**: `tbl_email.TrackingId` ↔ `sharepoint_bronze.pages.UBSGICTrackingID`
+**Where?**: `tbl_email.TrackingId` ↔ `sharepoint_bronze.pages.__ORG__GICTrackingID`
 
 **Grain**: **Pack (SEG1-2 = Cluster + Pack number)**. The pack bundles all activities of a campaign — email, intranet page, newsletter, etc. — regardless of their individual dates and channel codes.
 
@@ -74,7 +74,7 @@ erDiagram
 ```sql
 -- Match on pack level (SEG1-2); ignore everything after (date/activity/channel)
 ON  array_join(slice(split(UPPER(email.TrackingId),         '-'), 1, 2), '-')
-  = array_join(slice(split(UPPER(pages.UBSGICTrackingID),  '-'), 1, 2), '-')
+  = array_join(slice(split(UPPER(pages.__ORG__GICTrackingID),  '-'), 1, 2), '-')
 ```
 
 **Why not match more narrowly?** Email and intranet page of the same pack typically run on different days (SEG3), with different activity sequencing (SEG4), and on a different channel (SEG5). Only pack-level finds the activities that belong together semantically.
@@ -115,7 +115,7 @@ tbl_hr_employee.WORKER_ID  (= GPN)
 pageviews.pageId
         │ JOIN sharepoint_bronze.pages.pageUUID
         ▼
-pages.UBSGICTrackingID  (if present)
+pages.__ORG__GICTrackingID  (if present)
         │ SEG1-2 (pack) compare
         ▼
 tbl_email.TrackingId

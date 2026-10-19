@@ -23,7 +23,7 @@ hide circle
 entity "pages" as pages {
   * pageUUID : string <<PK>>
   --
-  UBSGICTrackingID : string
+  __ORG__GICTrackingID : string
   PageURL : string
   ..
   '''48K — THE DIMENSION'''
@@ -109,7 +109,7 @@ dw    }o--|| pages : "marketingPageId = pageUUID"
 ninety }o--|| pages : "marketingPageId = pageUUID"
 pvkv  ||..|| im    : "visit-key filter"
 ec    }o..o{ im    : "contactId = viewingcontactid (bridge)"
-pages }o--|| email : "UBSGICTrackingID ↔ TrackingId (Pack / SEG1-2)"
+pages }o--|| email : "__ORG__GICTrackingID ↔ TrackingId (Pack / SEG1-2)"
 
 !enduml
 
@@ -135,11 +135,11 @@ Plus sharepoint_clicks_gold.pbi_db_ctalabel_intr_fact_gold (3M) for CTA click at
 SELECT SUM(views) FROM sharepoint_gold.pbi_db_interactions_metrics;
 
 -- RIGHT — attribution via TrackingID
-SELECT p.UBSGICTrackingID, SUM(m.views) AS views
+SELECT p.__ORG__GICTrackingID, SUM(m.views) AS views
 FROM   sharepoint_gold.pbi_db_interactions_metrics m
 JOIN   sharepoint_bronze.pages p ON p.pageUUID = m.marketingPageId
-WHERE  p.UBSGICTrackingID IS NOT NULL
-GROUP BY p.UBSGICTrackingID
+WHERE  p.__ORG__GICTrackingID IS NOT NULL
+GROUP BY p.__ORG__GICTrackingID
 }}}
 
 !3 Rule 2 — ~96% of rows are "untracked"
@@ -180,7 +180,7 @@ Usable for "Which CTA button on which page was clicked how often".
 
 !2 All Paths Lead Through pages
 
-'''None of the Gold metric tables carry GICTrackingID or UBSGICTrackingID directly.''' Deliberate normalization — the TrackingID lives only on the dimension.
+'''None of the Gold metric tables carry GICTrackingID or __ORG__GICTrackingID directly.''' Deliberate normalization — the TrackingID lives only on the dimension.
 
 {{{
 Any sharepoint_gold.pbi_db_* metric
@@ -189,7 +189,7 @@ Any sharepoint_gold.pbi_db_* metric
               v
 sharepoint_bronze.pages
               |
-              |  UBSGICTrackingID (if populated)
+              |  __ORG__GICTrackingID (if populated)
               v
 Cross-channel match to imep_bronze.tbl_email.TrackingId (Pack / SEG1-2)
 }}}
